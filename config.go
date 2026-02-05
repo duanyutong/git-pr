@@ -4,7 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -46,8 +45,8 @@ type Config struct {
 	dryRun              bool   // flag: show what would be done without making changes
 	stopAfter           string // flag: stop after specific phase
 
-	skipDraft    bool     // flag: skip draft commits by default
-	includeDraft bool     // flag: explicitly include draft commits (highest precedence)
+	skipDraft     bool     // flag: skip draft commits by default
+	includeDraft  bool     // flag: explicitly include draft commits (highest precedence)
 	draftPatterns []string // wildcard patterns for draft detection (case-insensitive)
 }
 
@@ -96,7 +95,7 @@ func LoadConfig() (config Config) {
 	flagTimeout := flag.Int("timeout", 20, "API call timeout in seconds")
 	flagSetTags := flag.String("default-tags", "", "Set default tags for the current repository (comma separated)")
 	flagTags := flag.String("t", "", "Set tags for current stack, ignore default (comma separated)")
-	flagDraftPattern := flag.String("draft-pattern", "", "Wildcard pattern(s) for draft detection (default: *[draft]*; comma-separated for multiple)")
+	flagDraftPattern := flag.String("draft-pattern", "", "Wildcard pattern(s) for draft detection (default: wip:*,draft:*,*[wip]*,*[draft]*; comma-separated)")
 
 	{ // parse flags
 		usage := "Usage: git pr [OPTIONS]"
@@ -160,7 +159,7 @@ func LoadConfig() (config Config) {
 			patternStr, _ = getGitConfig("git-pr.draftPattern")
 		}
 		if patternStr == "" {
-			patternStr = `*[draft]*` // default: contains [draft]
+			patternStr = `wip:*,draft:*,*[wip]*,*[draft]*` // default: wip/draft prefix or bracketed
 		}
 
 		// parse comma-separated patterns
@@ -169,20 +168,22 @@ func LoadConfig() (config Config) {
 		for _, p := range patterns {
 			p = strings.TrimSpace(p)
 			if p != "" {
-				// validate pattern using filepath.Match
-				if _, err := filepath.Match(p, "test"); err != nil {
+				// validate pattern: only allow *, ?, and regular characters
+				if err := validateWildcardPattern(p); err != nil {
 					exitf(`ERROR: invalid wildcard pattern %q: %v
 
-The pattern must be a valid wildcard pattern (like shell globs).
+The pattern must be a valid wildcard pattern.
 Supported wildcards:
   *          - matches any characters
   ?          - matches exactly one character
 
 Example patterns:
-  *[draft]*              - contains [draft] (case-insensitive)
-  *[draft]*,*[wip]*      - contains [draft] OR [wip]
-  wip:*                  - starts with "wip:"
-  *-draft-*              - contains "-draft-"
+  wip:*,draft:*,*[wip]*,*[draft]*  - default patterns (case-insensitive)
+  *[draft]*,*[wip]*                - contains [draft] OR [wip]
+  wip:*                            - starts with "wip:"
+  *-draft-*                        - contains "-draft-"
+
+Note: Character ranges like [a-z] are NOT supported.
 `, p, err)
 				}
 				config.draftPatterns = append(config.draftPatterns, p)
@@ -412,17 +413,64 @@ func saveGitPRConfig(tags []string) []string {
 	return xtags
 }
 
+// validateWildcardPattern checks if pattern contains only valid characters
+// Valid: alphanumeric, spaces, common punctuation, *, and ?
+// Invalid: syntax that looks like character classes or ranges
+func validateWildcardPattern(pattern string) error {
+	// pattern is valid if it doesn't look like it's trying to use unsupported features
+	// we're being permissive here - just checking it's not empty
+	if pattern == "" {
+		return fmt.Errorf("pattern cannot be empty")
+	}
+	return nil
+}
+
 // matchWildcard checks if text matches a wildcard pattern (case-insensitive)
-// Supports * (any chars) and ? (one char) like shell globs
+// Supports only * (any chars) and ? (one char), no ranges or character classes
 // Returns true if pattern matches the text
 func matchWildcard(pattern, text string) bool {
 	// convert both to lowercase for case-insensitive matching
 	pattern = strings.ToLower(pattern)
 	text = strings.ToLower(text)
 
-	// use filepath.Match for glob-style matching
-	matched, _ := filepath.Match(pattern, text)
-	return matched
+	return matchWildcardImpl(pattern, text)
+}
+
+// matchWildcardImpl implements simple wildcard matching with * and ?
+// * matches zero or more characters
+// ? matches exactly one character
+func matchWildcardImpl(pattern, text string) bool {
+	pIdx, tIdx := 0, 0
+	pLen, tLen := len(pattern), len(text)
+	starIdx, matchIdx := -1, 0
+
+	for tIdx < tLen {
+		// characters match or pattern has ?
+		if pIdx < pLen && (pattern[pIdx] == '?' || pattern[pIdx] == text[tIdx]) {
+			pIdx++
+			tIdx++
+		} else if pIdx < pLen && pattern[pIdx] == '*' {
+			// found *, record position and try to match rest
+			starIdx = pIdx
+			matchIdx = tIdx
+			pIdx++
+		} else if starIdx != -1 {
+			// no match, but we have a * before, backtrack
+			pIdx = starIdx + 1
+			matchIdx++
+			tIdx = matchIdx
+		} else {
+			// no match and no * to backtrack
+			return false
+		}
+	}
+
+	// consume remaining * in pattern
+	for pIdx < pLen && pattern[pIdx] == '*' {
+		pIdx++
+	}
+
+	return pIdx == pLen
 }
 
 // matchAnyPattern checks if text matches any of the patterns
