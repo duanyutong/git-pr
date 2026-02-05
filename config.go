@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -44,6 +45,10 @@ type Config struct {
 	includeOtherAuthors bool   // flag
 	dryRun              bool   // flag: show what would be done without making changes
 	stopAfter           string // flag: stop after specific phase
+
+	skipDraft    bool     // flag: skip draft commits by default
+	includeDraft bool     // flag: explicitly include draft commits (highest precedence)
+	draftPatterns []string // wildcard patterns for draft detection (case-insensitive)
 }
 
 type ConfigGit struct {
@@ -84,11 +89,14 @@ func LoadConfig() (config Config) {
 	flag.BoolVar(&config.includeOtherAuthors, "include-other-authors", false, "Create PRs for commits from other authors (default to false: skip)")
 	flag.BoolVar(&config.dryRun, "dry-run", false, "Show what would be done without making changes")
 	flag.StringVar(&config.stopAfter, "stop-after", "", "Stop after phase: validate|get-commits|rewrite|push|pr-create")
+	flag.BoolVar(&config.skipDraft, "skip-draft", false, "Skip commits with [draft] in title")
+	flag.BoolVar(&config.includeDraft, "include-draft", false, "Include draft commits (override config)")
 
 	flagGitHubHosts := flag.String("gh-hosts", "~/.config/gh/hosts.yml", "Path to config.json")
 	flagTimeout := flag.Int("timeout", 20, "API call timeout in seconds")
 	flagSetTags := flag.String("default-tags", "", "Set default tags for the current repository (comma separated)")
 	flagTags := flag.String("t", "", "Set tags for current stack, ignore default (comma separated)")
+	flagDraftPattern := flag.String("draft-pattern", "", "Wildcard pattern(s) for draft detection (default: *[draft]*; comma-separated for multiple)")
 
 	{ // parse flags
 		usage := "Usage: git pr [OPTIONS]"
@@ -111,6 +119,13 @@ func LoadConfig() (config Config) {
 		if config.stopAfter == "" && os.Getenv("GIT_PR_STOP_AFTER") != "" {
 			config.stopAfter = os.Getenv("GIT_PR_STOP_AFTER")
 		}
+		// environment variables for draft settings
+		if !config.skipDraft && os.Getenv("GIT_PR_SKIP_DRAFT") == "1" {
+			config.skipDraft = true
+		}
+		if !config.includeDraft && os.Getenv("GIT_PR_INCLUDE_DRAFT") == "1" {
+			config.includeDraft = true
+		}
 
 		// configs from flags
 		config.timeout = time.Duration(*flagTimeout) * time.Second
@@ -128,6 +143,49 @@ func LoadConfig() (config Config) {
 				if tag != "" {
 					config.tags = append(config.tags, tag)
 				}
+			}
+		}
+
+		// read git config for skipDraft setting
+		if !config.skipDraft {
+			skipDraftStr, _ := getGitConfig("git-pr.skipDraft")
+			if skipDraftStr == "true" || skipDraftStr == "1" {
+				config.skipDraft = true
+			}
+		}
+
+		// determine draft pattern (precedence: flag > git config > default)
+		patternStr := *flagDraftPattern
+		if patternStr == "" {
+			patternStr, _ = getGitConfig("git-pr.draftPattern")
+		}
+		if patternStr == "" {
+			patternStr = `*[draft]*` // default: contains [draft]
+		}
+
+		// parse comma-separated patterns
+		patterns := strings.Split(patternStr, ",")
+		config.draftPatterns = make([]string, 0, len(patterns))
+		for _, p := range patterns {
+			p = strings.TrimSpace(p)
+			if p != "" {
+				// validate pattern using filepath.Match
+				if _, err := filepath.Match(p, "test"); err != nil {
+					exitf(`ERROR: invalid wildcard pattern %q: %v
+
+The pattern must be a valid wildcard pattern (like shell globs).
+Supported wildcards:
+  *          - matches any characters
+  ?          - matches exactly one character
+
+Example patterns:
+  *[draft]*              - contains [draft] (case-insensitive)
+  *[draft]*,*[wip]*      - contains [draft] OR [wip]
+  wip:*                  - starts with "wip:"
+  *-draft-*              - contains "-draft-"
+`, p, err)
+				}
+				config.draftPatterns = append(config.draftPatterns, p)
 			}
 		}
 	}
@@ -352,4 +410,27 @@ func saveGitPRConfig(tags []string) []string {
 	_, _ = git("config", "--unset-all", gitconfigTags)
 	must(git("config", "--add", gitconfigTags, rawTags))
 	return xtags
+}
+
+// matchWildcard checks if text matches a wildcard pattern (case-insensitive)
+// Supports * (any chars) and ? (one char) like shell globs
+// Returns true if pattern matches the text
+func matchWildcard(pattern, text string) bool {
+	// convert both to lowercase for case-insensitive matching
+	pattern = strings.ToLower(pattern)
+	text = strings.ToLower(text)
+
+	// use filepath.Match for glob-style matching
+	matched, _ := filepath.Match(pattern, text)
+	return matched
+}
+
+// matchAnyPattern checks if text matches any of the patterns
+func matchAnyPattern(patterns []string, text string) bool {
+	for _, pattern := range patterns {
+		if matchWildcard(pattern, text) {
+			return true
+		}
+	}
+	return false
 }

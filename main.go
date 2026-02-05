@@ -31,8 +31,6 @@ const bodyTemplate = `
 <br><br><br><br>
 `
 
-var regexpDraft = regexp.MustCompile(`(?i)\[draft]`)
-
 func main() {
 	config = LoadConfig()
 
@@ -59,6 +57,20 @@ Hint: use "git add -A" and "git stash" to clean up the repository
 		printf("%s\n", commit)
 	}
 	printf("\n")
+
+	// filter draft commits based on configuration
+	if shouldSkipDrafts() {
+		for _, commit := range stackedCommits {
+			if commit.Skip {
+				continue // already skipped for other reasons
+			}
+			if matchAnyPattern(config.draftPatterns, commit.Title) {
+				commit.Skip = true
+				debugf("skipping draft commit %s: %s", commit.ShortHash(), shortenTitle(commit.Title))
+				printf("skip draft \"%v\" (%v)\n", shortenTitle(commit.Title), commit.ShortHash())
+			}
+		}
+	}
 
 	// checkpoint: get-commits
 	if config.stopAfter == "get-commits" {
@@ -242,7 +254,7 @@ Hint: use "git add -A" and "git stash" to clean up the repository
 					"title": commit.Title,
 					"body":  body,
 				}))
-				isDraft := regexpDraft.MatchString(commit.Title)
+				isDraft := matchAnyPattern(config.draftPatterns, commit.Title)
 				if isDraft {
 					must(gh("pr", "ready", strconv.Itoa(commit.PRNumber), "--undo"))
 				} else {
@@ -417,4 +429,15 @@ func coalesce(a, b string) string {
 		return a
 	}
 	return b
+}
+
+// shouldSkipDrafts determines if draft commits should be skipped
+// based on flags and config with proper precedence
+func shouldSkipDrafts() bool {
+	// --include-draft flag overrides everything (highest precedence)
+	if config.includeDraft {
+		return false
+	}
+	// --skip-draft flag or config setting
+	return config.skipDraft
 }
