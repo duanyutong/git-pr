@@ -229,6 +229,7 @@ Hint: use "git add -A" and "git stash" to clean up the repository
 	}
 
 	// update PRs with review link, concurrently
+	fmt.Println()
 	{
 		var wg sync.WaitGroup
 		for _, commit := range stackedCommits {
@@ -238,7 +239,7 @@ Hint: use "git add -A" and "git stash" to clean up the repository
 			wg.Add(1)
 			commit := commit
 			prURL := fmt.Sprintf("https://%v/%v/pull/%v", config.git.host, config.git.repo, commit.PRNumber)
-			printf("update pull request %v\n", prURL)
+			printf("%v\n", prURL)
 			go func() {
 				defer wg.Done()
 
