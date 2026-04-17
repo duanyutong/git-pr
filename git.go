@@ -386,8 +386,8 @@ func deleteBranch(branch string) error {
 
 // findBranchForCommit finds existing local or remote branch pointing to the given commit
 func findBranchForCommit(commit *Commit) (string, error) {
-	// Get all branches containing this commit
-	output, err := git("branch", "-a", "--contains", commit.Hash, "--format=%(refname)")
+	// Get all branches pointing exactly at this commit (not just containing it)
+	output, err := git("branch", "-a", "--points-at", commit.Hash, "--format=%(refname)")
 	if err != nil {
 		return "", nil // commit might not be pushed yet, not an error
 	}
