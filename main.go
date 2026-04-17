@@ -317,7 +317,17 @@ func generateStackInfo(stackedCommits []*Commit, currentCommit *Commit) string {
 	var stackB strings.Builder
 	sprf := func(msg string, args ...any) { fprintf(&stackB, msg, args...) }
 
-	for _, cm := range stackedCommits {
+	// reverse the stack order if configured (newest on top)
+	commits := stackedCommits
+	if config.reverse {
+		commits = make([]*Commit, len(stackedCommits))
+		copy(commits, stackedCommits)
+		for i, j := 0, len(commits)-1; i < j; i, j = i+1, j-1 {
+			commits[i], commits[j] = commits[j], commits[i]
+		}
+	}
+
+	for _, cm := range commits {
 		var cmRef string
 		cmURL := fmt.Sprintf("https://%v/%v/commit/%v", config.git.host, config.git.repo, cm.ShortHash())
 		switch {
