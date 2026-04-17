@@ -93,9 +93,24 @@ Hint: use "git add -A" and "git stash" to clean up the repository
 
 	// fill remote ref for each commit
 	for commitWithoutRemoteRef := range findCommitsWithoutRemoteRef(stackedCommits) {
-		remoteRef := fmt.Sprintf("%v/%v", config.gh.user, commitWithoutRemoteRef.ShortHash())
+		// Try to find an existing branch for this commit
+		existingBranch, err := findBranchForCommit(commitWithoutRemoteRef)
+		if err != nil {
+			debugf("warning: failed to check for existing branch: %v", err)
+		}
+		
+		var remoteRef string
+		if existingBranch != "" {
+			// Use the existing branch name
+			remoteRef = existingBranch
+			debugf("found existing branch %v for %v", remoteRef, commitWithoutRemoteRef.ShortHash())
+		} else {
+			// Generate new branch name from hash
+			remoteRef = fmt.Sprintf("%v/%v", config.gh.user, commitWithoutRemoteRef.ShortHash())
+			debugf("creating remote ref %v for %v", remoteRef, commitWithoutRemoteRef.Title)
+		}
+		
 		commitWithoutRemoteRef.SetAttr(KeyRemoteRef, remoteRef)
-		debugf("creating remote ref %v for %v", remoteRef, commitWithoutRemoteRef.Title)
 		must(rewordCommit(commitWithoutRemoteRef, commitWithoutRemoteRef.FullMessage()))
 
 		time.Sleep(time.Millisecond)
