@@ -383,3 +383,52 @@ func deleteBranch(branch string) error {
 	}
 	return err
 }
+
+// findBranchForCommit finds existing local or remote branch pointing to the given commit
+func findBranchForCommit(commit *Commit) (string, error) {
+	// Get all branches containing this commit
+	output, err := git("branch", "-a", "--contains", commit.Hash, "--format=%(refname)")
+	if err != nil {
+		return "", nil // commit might not be pushed yet, not an error
+	}
+	
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	if len(lines) == 0 || lines[0] == "" {
+		return "", nil
+	}
+	
+	var localBranch string
+	var remoteBranch string
+	
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		
+		// Skip HEAD and main/master branches
+		if strings.Contains(line, "HEAD") {
+			continue
+		}
+		if strings.HasSuffix(line, "/main") || strings.HasSuffix(line, "/master") {
+			continue
+		}
+		if line == "refs/heads/main" || line == "refs/heads/master" {
+			continue
+		}
+		
+		// Prefer local branches
+		if strings.HasPrefix(line, "refs/heads/") {
+			localBranch = strings.TrimPrefix(line, "refs/heads/")
+			break // found local branch, use it
+		}
+		
+		// Track remote branches as fallback
+		if strings.HasPrefix(line, "refs/remotes/"+config.git.remote+"/") {
+			remoteBranch = strings.TrimPrefix(line, "refs/remotes/"+config.git.remote+"/")
+		}
+	}
+	
+	// Prefer local branch, fallback to remote
+	if localBranch != "" {
+		return localBranch, nil
+	}
+	return remoteBranch, nil
+}
