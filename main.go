@@ -339,6 +339,25 @@ func generateStackInfo(stackedCommits []*Commit, currentCommit *Commit) string {
 	var stackB strings.Builder
 	sprf := func(msg string, args ...any) { fprintf(&stackB, msg, args...) }
 
+	// Calculate position based on chronological order (oldest=1, newest=N)
+	totalCount := len(stackedCommits)
+	currentPosition := 0
+	for i, cm := range stackedCommits {
+		if cm.Hash == currentCommit.Hash {
+			currentPosition = i + 1
+			break
+		}
+	}
+
+	// Add stack position header
+	if totalCount > 1 {
+		orderNote := "oldest on top"
+		if config.reverse {
+			orderNote = "newest on top"
+		}
+		sprf("This is PR **%d of %d** in a stack (%s)\n\n", currentPosition, totalCount, orderNote)
+	}
+
 	// reverse the stack order if configured (newest on top)
 	commits := stackedCommits
 	if config.reverse {
