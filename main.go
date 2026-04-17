@@ -453,8 +453,14 @@ func validateGitStatusClean() bool {
 		// would be meaningless. surface the failure instead.
 		return false
 	}
-	output := must(git("status"))
-	return strings.Contains(output, "nothing to commit, working tree clean")
+
+	// Check for uncommitted changes to tracked files (ignoring untracked files)
+	// git diff checks unstaged changes, git diff --cached checks staged changes
+	_, unstagedErr := _git("diff", "--quiet")
+	_, stagedErr := _git("diff", "--cached", "--quiet")
+	
+	// Both commands exit with 0 if clean (nil error), non-zero if there are changes
+	return unstagedErr == nil && stagedErr == nil
 }
 
 func isMyOwnCommit(commit *Commit) bool {
