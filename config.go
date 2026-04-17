@@ -40,6 +40,7 @@ type Config struct {
 	skipDraft     bool     // flag: skip draft commits by default
 	includeDraft  bool     // flag: explicitly include draft commits (highest precedence)
 	draftPatterns []string // wildcard patterns for draft detection (case-insensitive)
+	reverse       bool     // flag/config: show stack in reverse order (newest on top)
 
 	commitRange ConfigRange // positional args: optional commit selection
 }
@@ -107,6 +108,7 @@ func LoadConfig() (config Config) {
 	flag.BoolVar(&config.autoAccept, "yes", false, `Assume "yes" to prompts (for non-interactive use)`)
 	flag.BoolVar(&config.autoAccept, "y", false, `Assume "yes" to prompts (shorthand for --yes)`)
 	flag.BoolVar(&config.noStack, "no-stack", false, "Do not create/update a native GitHub stack on push")
+	flag.BoolVar(&config.reverse, "reverse", false, "Show stack in reverse order (newest on top)")
 
 	flagGitHubHosts := flag.String("gh-hosts", "~/.config/gh/hosts.yml", "Path to config.json")
 	flagTimeout := flag.Int("timeout", 20, "API call timeout in seconds")
@@ -186,6 +188,14 @@ A COMMIT may be a git ref/hash, or (in a jj repo) a jj change-id.`
 			skipDraftStr, _ := getGitConfig("git-pr.skipDraft")
 			if skipDraftStr == "true" || skipDraftStr == "1" {
 				config.skipDraft = true
+			}
+		}
+
+		// read git config for reverse setting
+		if !config.reverse {
+			reverseStr, _ := getGitConfig("git-pr.reverse")
+			if reverseStr == "true" || reverseStr == "1" {
+				config.reverse = true
 			}
 		}
 
