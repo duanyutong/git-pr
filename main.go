@@ -116,8 +116,15 @@ Hint: use "git add -A" and "git stash" to clean up the repository
 			remoteRef = existingBranch
 			debugf("found existing branch %v for %v", remoteRef, commitWithoutRemoteRef.ShortHash())
 		} else {
-			// Generate new branch name from hash
-			remoteRef = fmt.Sprintf("%v/%v", config.gh.user, commitWithoutRemoteRef.ShortHash())
+			// Generate new branch name
+			if config.branchFromTitle {
+				// Generate from commit title
+				sanitized := sanitizeBranchName(commitWithoutRemoteRef.Title)
+				remoteRef = fmt.Sprintf("%v/%v", config.gh.user, sanitized)
+			} else {
+				// Generate from hash (default behavior)
+				remoteRef = fmt.Sprintf("%v/%v", config.gh.user, commitWithoutRemoteRef.ShortHash())
+			}
 			debugf("creating remote ref %v for %v", remoteRef, commitWithoutRemoteRef.Title)
 		}
 		
@@ -479,6 +486,54 @@ func coalesce(a, b string) string {
 		return a
 	}
 	return b
+}
+
+// sanitizeBranchName converts a commit title into a valid git branch name
+// by replacing spaces and illegal characters with hyphens
+func sanitizeBranchName(title string) string {
+	// Convert to lowercase
+	s := strings.ToLower(title)
+	
+	// Remove common prefixes that are redundant in branch names
+	prefixes := []string{"feat:", "fix:", "chore:", "docs:", "style:", "refactor:", "perf:", "test:", "build:", "ci:", "revert:"}
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(s, prefix) {
+			s = strings.TrimSpace(strings.TrimPrefix(s, prefix))
+			break
+		}
+	}
+	
+	// Replace spaces and illegal characters with hyphens
+	// Git branch names can't contain: space, ~, ^, :, ?, *, [, \, .., @{, trailing dot
+	s = strings.ReplaceAll(s, " ", "-")
+	s = strings.ReplaceAll(s, "_", "-")
+	
+	// Remove or replace illegal characters
+	illegals := []string{"~", "^", ":", "?", "*", "[", "]", "\\", "..", "@{", "}", "/"}
+	for _, illegal := range illegals {
+		s = strings.ReplaceAll(s, illegal, "")
+	}
+	
+	// Replace multiple consecutive hyphens with single hyphen
+	for strings.Contains(s, "--") {
+		s = strings.ReplaceAll(s, "--", "-")
+	}
+	
+	// Trim leading/trailing hyphens and dots
+	s = strings.Trim(s, "-.")
+	
+	// Limit length to reasonable size (50 chars)
+	if len(s) > 50 {
+		s = s[:50]
+		s = strings.TrimRight(s, "-.")
+	}
+	
+	// If empty after sanitization, use a fallback
+	if s == "" {
+		s = "unnamed-branch"
+	}
+	
+	return s
 }
 
 // shouldSkipDrafts determines if draft commits should be skipped
