@@ -48,6 +48,7 @@ type Config struct {
 	skipDraft     bool     // flag: skip draft commits by default
 	includeDraft  bool     // flag: explicitly include draft commits (highest precedence)
 	draftPatterns []string // wildcard patterns for draft detection (case-insensitive)
+	reverse       bool     // flag/config: show stack in reverse order (newest on top)
 }
 
 type ConfigGit struct {
@@ -90,6 +91,7 @@ func LoadConfig() (config Config) {
 	flag.StringVar(&config.stopAfter, "stop-after", "", "Stop after phase: validate|get-commits|rewrite|push|pr-create")
 	flag.BoolVar(&config.skipDraft, "skip-draft", false, "Skip commits with [draft] in title")
 	flag.BoolVar(&config.includeDraft, "include-draft", false, "Include draft commits (override config)")
+	flag.BoolVar(&config.reverse, "reverse", false, "Show stack in reverse order (newest on top)")
 
 	flagGitHubHosts := flag.String("gh-hosts", "~/.config/gh/hosts.yml", "Path to config.json")
 	flagTimeout := flag.Int("timeout", 20, "API call timeout in seconds")
@@ -150,6 +152,14 @@ func LoadConfig() (config Config) {
 			skipDraftStr, _ := getGitConfig("git-pr.skipDraft")
 			if skipDraftStr == "true" || skipDraftStr == "1" {
 				config.skipDraft = true
+			}
+		}
+
+		// read git config for reverse setting
+		if !config.reverse {
+			reverseStr, _ := getGitConfig("git-pr.reverse")
+			if reverseStr == "true" || reverseStr == "1" {
+				config.reverse = true
 			}
 		}
 
