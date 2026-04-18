@@ -438,12 +438,8 @@ actually wrote. Re-run git-pr; if it recurs, file an issue with the output of
 			"title": commit.Title,
 			"body":  body,
 		}))
-		isDraft := matchAnyPattern(config.draftPatterns, commit.Title)
-		if isDraft {
-			must(gh("pr", "ready", strconv.Itoa(commit.PRNumber), "--undo"))
-		} else {
-			must(gh("pr", "ready", strconv.Itoa(commit.PRNumber)))
-		}
+		// Draft status is set only when a PR is created; preserve the user's
+		// subsequent draft/ready choice when updating an existing PR.
 		if tags := commit.GetTags(config.tags...); len(tags) > 0 {
 			must(gh("pr", "edit", strconv.Itoa(commit.PRNumber), "--add-label", strings.Join(tags, ",")))
 		}
@@ -941,8 +937,8 @@ func validateGitStatusClean() bool {
 
 	// Check for uncommitted changes to tracked files (ignoring untracked files)
 	// git diff checks unstaged changes, git diff --cached checks staged changes
-	_, unstagedErr := _git("diff", "--quiet")
-	_, stagedErr := _git("diff", "--cached", "--quiet")
+	_, unstagedErr := git("diff", "--quiet")
+	_, stagedErr := git("diff", "--cached", "--quiet")
 
 	// Both commands exit with 0 if clean (nil error), non-zero if there are changes
 	return unstagedErr == nil && stagedErr == nil

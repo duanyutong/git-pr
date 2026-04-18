@@ -125,10 +125,22 @@ var regexpPRURL = regexp.MustCompile(`/pull/(\d+)`)
 
 func githubCreatePRForCommit(commit *Commit, base string) error {
 	args := []string{"pr", "create", "--title", commit.Title, "--body", "", "--head", commit.GetRemoteRef(), "--base", base}
+
+	// Determine if PR should be draft based on config or commit title patterns
+	isDraft := config.draft || matchAnyPattern(config.draftPatterns, commit.Title)
+	if isDraft {
+		args = append(args, "--draft")
+	}
+
 	if tags := commit.GetTags(config.tags...); len(tags) > 0 {
 		args = append(args, "--label", strings.Join(tags, ","))
 	}
-	printf("create pull request for %q\n", commit.Title)
+	if isDraft {
+		printf("create draft pull request for %q\n", commit.Title)
+	} else {
+		printf("create pull request for %q\n", commit.Title)
+	}
+
 	out, err := gh(args...)
 	if err != nil {
 		return err
@@ -142,6 +154,7 @@ func githubCreatePRForCommit(commit *Commit, base string) error {
 		return errorf("failed to parse PR number %q: %v", m[1], err)
 	}
 	commit.PRNumber = n
+	commit.NewlyCreated = true
 	return nil
 }
 
