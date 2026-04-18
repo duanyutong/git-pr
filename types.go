@@ -20,8 +20,9 @@ type Commit struct {
 	Message     string
 	Attrs       []KeyVal
 
-	PRNumber int
-	Skip     bool // do not push this commit
+	PRNumber     int
+	Skip         bool // do not push this commit
+	NewlyCreated bool // true if PR was just created (not existing)
 }
 
 func (commit *Commit) String() string {

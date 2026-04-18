@@ -37,11 +37,12 @@ type Config struct {
 	dryRun              bool   // flag: show what would be done without making changes
 	stopAfter           string // flag: stop after specific phase
 
-	skipDraft      bool     // flag: skip draft commits by default
-	includeDraft   bool     // flag: explicitly include draft commits (highest precedence)
-	draftPatterns  []string // wildcard patterns for draft detection (case-insensitive)
-	reverse        bool     // flag/config: show stack in reverse order (newest at the top)
-	branchFromTitle bool    // flag/config: generate branch names from commit title instead of hash
+	skipDraft       bool     // flag: skip draft commits by default
+	includeDraft    bool     // flag: explicitly include draft commits (highest precedence)
+	draftPatterns   []string // wildcard patterns for draft detection (case-insensitive)
+	reverse         bool     // flag/config: show stack in reverse order (newest at the top)
+	branchFromTitle bool     // flag/config: generate branch names from commit title instead of hash
+	draft           bool     // flag/config: create PRs in draft mode by default
 }
 
 type ConfigGit struct {
@@ -86,6 +87,7 @@ func LoadConfig() (config Config) {
 	flag.BoolVar(&config.includeDraft, "include-draft", false, "Include draft commits (override config)")
 	flag.BoolVar(&config.reverse, "reverse", false, "Show stack in reverse order (newest at the top)")
 	flag.BoolVar(&config.branchFromTitle, "branch-from-title", false, "Generate branch names from commit title instead of hash")
+	flag.BoolVar(&config.draft, "draft", false, "Create PRs in draft mode by default")
 
 	flagGitHubHosts := flag.String("gh-hosts", "~/.config/gh/hosts.yml", "Path to config.json")
 	flagTimeout := flag.Int("timeout", 20, "API call timeout in seconds")
@@ -162,6 +164,14 @@ func LoadConfig() (config Config) {
 			branchFromTitleStr, _ := getGitConfig("git-pr.branch-from-title")
 			if branchFromTitleStr == "true" || branchFromTitleStr == "1" {
 				config.branchFromTitle = true
+			}
+		}
+
+		// read git config for draft setting
+		if !config.draft {
+			draftStr, _ := getGitConfig("git-pr.draft")
+			if draftStr == "true" || draftStr == "1" {
+				config.draft = true
 			}
 		}
 
