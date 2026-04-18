@@ -37,11 +37,11 @@ type Config struct {
 	autoAccept          bool   // flag: assume "yes" to interactive prompts
 	noStack             bool   // flag: skip creating/updating the native GitHub stack
 
-	skipDraft      bool     // flag: skip draft commits by default
-	includeDraft   bool     // flag: explicitly include draft commits (highest precedence)
-	draftPatterns  []string // wildcard patterns for draft detection (case-insensitive)
-	reverse        bool     // flag/config: show stack in reverse order (newest on top)
-	branchFromTitle bool    // flag/config: generate branch names from commit title instead of hash
+	skipDraft       bool     // flag: skip draft commits by default
+	includeDraft    bool     // flag: explicitly include draft commits (highest precedence)
+	draftPatterns   []string // wildcard patterns for draft detection (case-insensitive)
+	reverse         bool     // flag/config: show stack in reverse order (newest at the top)
+	branchFromTitle bool     // flag/config: generate branch names from commit title instead of hash
 
 	commitRange ConfigRange // positional args: optional commit selection
 }
@@ -109,7 +109,7 @@ func LoadConfig() (config Config) {
 	flag.BoolVar(&config.autoAccept, "yes", false, `Assume "yes" to prompts (for non-interactive use)`)
 	flag.BoolVar(&config.autoAccept, "y", false, `Assume "yes" to prompts (shorthand for --yes)`)
 	flag.BoolVar(&config.noStack, "no-stack", false, "Do not create/update a native GitHub stack on push")
-	flag.BoolVar(&config.reverse, "reverse", false, "Show stack in reverse order (newest on top)")
+	flag.BoolVar(&config.reverse, "reverse", false, "Show stack in reverse order (newest at the top)")
 	flag.BoolVar(&config.branchFromTitle, "branch-from-title", false, "Generate branch names from commit title instead of hash")
 
 	flagGitHubHosts := flag.String("gh-hosts", "~/.config/gh/hosts.yml", "Path to config.json")
