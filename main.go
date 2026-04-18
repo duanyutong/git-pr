@@ -21,6 +21,15 @@ const (
 	head         = "HEAD"
 )
 
+// Sentinel markers for identifying and replacing the git-pr stack info section
+// in PR descriptions. These HTML comments are invisible in rendered markdown
+// but allow us to reliably detect and replace our section even when other
+// tools modify the PR description.
+const (
+	stackInfoStartMarker = "<!-- git-pr-stack-start -->"
+	stackInfoEndMarker   = "<!-- git-pr-stack-end -->"
+)
+
 const bodyTemplate = `
 # Summary
 
@@ -339,6 +348,25 @@ func generateStackInfo(stackedCommits []*Commit, currentCommit *Commit) string {
 	var stackB strings.Builder
 	sprf := func(msg string, args ...any) { fprintf(&stackB, msg, args...) }
 
+	// Calculate position based on chronological order (oldest=1, newest=N)
+	totalCount := len(stackedCommits)
+	currentPosition := 0
+	for i, cm := range stackedCommits {
+		if cm.Hash == currentCommit.Hash {
+			currentPosition = i + 1
+			break
+		}
+	}
+
+	// Add stack position header
+	if totalCount > 1 {
+		orderNote := "oldest on top"
+		if config.reverse {
+			orderNote = "newest on top"
+		}
+		sprf("This is PR **%d of %d** in a stack (%s)\n\n", currentPosition, totalCount, orderNote)
+	}
+
 	// reverse the stack order if configured (newest on top)
 	commits := stackedCommits
 	if config.reverse {
@@ -380,12 +408,37 @@ func generatePRBody(commit *Commit, existingBody string, stackInfo string) strin
 	// normalize line endings from GitHub (may have \r\n)
 	existingBody = strings.ReplaceAll(existingBody, "\r\n", "\n")
 
+	// Wrap stack info with sentinel markers for reliable detection and replacement
+	wrappedStackInfo := fmt.Sprintf("%s\n%s\n%s", stackInfoStartMarker, stackInfo, stackInfoEndMarker)
+
 	if commit.Message != "" {
 		// user manages via git commits - override entire PR body
-		return fmt.Sprintf("%s\n\n---\n%s", commit.Message, stackInfo)
+		return fmt.Sprintf("%s\n\n---\n%s", commit.Message, wrappedStackInfo)
 	}
 
 	// user manages via GitHub UI - preserve their edits, only update stack info
+	// Check if we have existing git-pr section marked with sentinels
+	startIdx := strings.Index(existingBody, stackInfoStartMarker)
+	endIdx := strings.Index(existingBody, stackInfoEndMarker)
+
+	if startIdx >= 0 && endIdx >= 0 && endIdx > startIdx {
+		// Found existing git-pr section - replace it
+		// Keep everything before start marker and everything after end marker
+		before := existingBody[:startIdx]
+		after := existingBody[endIdx+len(stackInfoEndMarker):]
+		
+		// Trim trailing whitespace from before and leading whitespace from after
+		before = strings.TrimRight(before, " \t\n")
+		after = strings.TrimLeft(after, " \t\n")
+		
+		// Reconstruct: before + wrapped stack info + after (if not empty)
+		if after != "" {
+			return before + "\n\n" + wrappedStackInfo + "\n\n" + after
+		}
+		return before + "\n\n" + wrappedStackInfo
+	}
+
+	// No sentinel markers found - fall back to old detection logic for backwards compatibility
 	parts := strings.Split(existingBody, "\n---\n")
 
 	if len(parts) > 1 {
@@ -394,20 +447,20 @@ func generatePRBody(commit *Commit, existingBody string, stackInfo string) strin
 		stackInfoPattern := regexp.MustCompile(`(?m)^\* .* #\d+`)
 		if stackInfoPattern.MatchString(lastSection) {
 			// replace the stack info section
-			parts[len(parts)-1] = stackInfo
+			parts[len(parts)-1] = wrappedStackInfo
 			return strings.Join(parts, "\n---\n")
 		}
 		// no stack info found in last section, append it
-		return existingBody + "\n\n---\n" + stackInfo
+		return existingBody + "\n\n---\n" + wrappedStackInfo
 	}
 
 	// no separator found
 	if existingBody == "" || existingBody == bodyTemplate {
 		// empty or template only, use template
-		return bodyTemplate + "\n---\n" + stackInfo
+		return bodyTemplate + "\n---\n" + wrappedStackInfo
 	}
 	// has content but no separator, append stack info
-	return existingBody + "\n\n---\n" + stackInfo
+	return existingBody + "\n\n---\n" + wrappedStackInfo
 }
 
 func validateGitStatusClean() bool {
