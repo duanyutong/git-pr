@@ -277,8 +277,8 @@ Hint: use "git add -A" and "git stash" to clean up the repository
 				pr := must(githubGetPRByNumber(commit.PRNumber))
 				pullURL := fmt.Sprintf("https://api.%v/repos/%v/pulls/%v", config.git.host, config.git.repo, commit.PRNumber)
 
-				// generate the PR body with stack info
-				stackInfo := generateStackInfo(stackedCommits, commit)
+				// generate the PR body with stack info (pass existing body to preserve merged PRs)
+				stackInfo := generateStackInfo(stackedCommits, commit, pr.Body)
 				body := generatePRBody(commit, pr.Body, stackInfo)
 
 				// update the PR
@@ -339,17 +339,87 @@ After installation, try again.`)
 	return "", nil // unreachable
 }
 
+// extractPRNumbersFromStackInfo extracts PR numbers from existing stack info section
+// Returns a slice of PR numbers in the order they appear
+func extractPRNumbersFromStackInfo(existingBody string) []int {
+	if existingBody == "" {
+		return nil
+	}
+
+	var prNumbers []int
+	
+	// First try to find content within sentinel markers
+	startIdx := strings.Index(existingBody, stackInfoStartMarker)
+	endIdx := strings.Index(existingBody, stackInfoEndMarker)
+	
+	var stackSection string
+	if startIdx >= 0 && endIdx >= 0 && endIdx > startIdx {
+		// Extract content between markers
+		stackSection = existingBody[startIdx+len(stackInfoStartMarker):endIdx]
+	} else {
+		// Fall back to searching all sections for the stack info pattern
+		parts := strings.Split(existingBody, "\n---\n")
+		stackInfoPattern := regexp.MustCompile(`(?m)^\* .* #\d+`)
+		for _, part := range parts {
+			if stackInfoPattern.MatchString(part) {
+				stackSection = part
+				break
+			}
+		}
+	}
+	
+	if stackSection == "" {
+		return nil
+	}
+	
+	// Extract all PR numbers from lines like "* ✔️ #123" or "* ◻️ #456"
+	prPattern := regexp.MustCompile(`#(\d+)`)
+	matches := prPattern.FindAllStringSubmatch(stackSection, -1)
+	
+	seen := make(map[int]bool) // deduplicate
+	for _, match := range matches {
+		if len(match) > 1 {
+			prNum := must(strconv.Atoi(match[1]))
+			if !seen[prNum] {
+				prNumbers = append(prNumbers, prNum)
+				seen[prNum] = true
+			}
+		}
+	}
+	
+	return prNumbers
+}
+
 // generateStackInfo generates the stack info section showing all PRs in the stack
-func generateStackInfo(stackedCommits []*Commit, currentCommit *Commit) string {
+// Preserves merged downstack PRs from existingBody to maintain full stack context
+func generateStackInfo(stackedCommits []*Commit, currentCommit *Commit, existingBody string) string {
 	var stackB strings.Builder
 	sprf := func(msg string, args ...any) { fprintf(&stackB, msg, args...) }
 
+	// Extract old PR numbers from existing description to preserve merged downstack PRs
+	oldPRNumbers := extractPRNumbersFromStackInfo(existingBody)
+	currentPRNumbers := make(map[int]bool)
+	for _, cm := range stackedCommits {
+		if cm.PRNumber != 0 {
+			currentPRNumbers[cm.PRNumber] = true
+		}
+	}
+	
+	// Identify merged PRs: in old list but not in current stack
+	var mergedPRs []int
+	for _, prNum := range oldPRNumbers {
+		if !currentPRNumbers[prNum] {
+			mergedPRs = append(mergedPRs, prNum)
+		}
+	}
+
 	// Calculate position based on chronological order (oldest=1, newest=N)
-	totalCount := len(stackedCommits)
+	// Include merged PRs in the total count for accurate position
+	totalCount := len(stackedCommits) + len(mergedPRs)
 	currentPosition := 0
 	for i, cm := range stackedCommits {
 		if cm.Hash == currentCommit.Hash {
-			currentPosition = i + 1
+			currentPosition = i + 1 + len(mergedPRs) // offset by merged PRs
 			break
 		}
 	}
@@ -361,6 +431,19 @@ func generateStackInfo(stackedCommits []*Commit, currentCommit *Commit) string {
 			orderNote = "newest at the top"
 		}
 		sprf("This is PR **%d of %d** in a stack (%s)\n\n", currentPosition, totalCount, orderNote)
+	}
+
+	// Add merged PRs at the top (they're downstack dependencies)
+	if len(mergedPRs) > 0 {
+		if config.reverse {
+			// If reversed, merged PRs go at the bottom
+			// We'll add them after current commits
+		} else {
+			// Normal order: merged PRs at top (oldest first)
+			for _, prNum := range mergedPRs {
+				sprf("* ✔️ #%v\n", prNum)
+			}
+		}
 	}
 
 	// reverse the stack order if configured (newest at the top)
@@ -392,6 +475,13 @@ func generateStackInfo(stackedCommits []*Commit, currentCommit *Commit) string {
 			sprf("* ⬛")
 		}
 		sprf(" %v\n", cmRef)
+	}
+
+	// Add merged PRs at the bottom if reversed
+	if config.reverse && len(mergedPRs) > 0 {
+		for _, prNum := range mergedPRs {
+			sprf("* ✔️ #%v\n", prNum)
+		}
 	}
 
 	return stackB.String()
