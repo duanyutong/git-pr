@@ -84,7 +84,14 @@ func githubCreatePRForCommit(commit *Commit, prev *Commit) error {
 	if prev != nil {
 		base = prev.GetRemoteRef()
 	}
-	args := []string{"pr", "create", "--title", commit.Title, "--body", "", "--head", commit.GetRemoteRef(), "--base", base}
+	
+	// Use commit message if provided, otherwise use PR template
+	initialBody := commit.Message
+	if initialBody == "" {
+		initialBody = getPRTemplate()
+	}
+	
+	args := []string{"pr", "create", "--title", commit.Title, "--body", initialBody, "--head", commit.GetRemoteRef(), "--base", base}
 	
 	// Determine if PR should be draft based on config or commit title patterns
 	isDraft := config.draft || matchAnyPattern(config.draftPatterns, commit.Title)
