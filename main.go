@@ -554,9 +554,9 @@ func generatePRBody(commit *Commit, existingBody string, stackInfo string) strin
 	}
 
 	// no separator found
-	if existingBody == "" || existingBody == bodyTemplate {
+	if existingBody == "" || existingBody == bodyTemplate || existingBody == getPRTemplate() {
 		// empty or template only, use template
-		return bodyTemplate + "\n---\n" + wrappedStackInfo
+		return getPRTemplate() + "\n---\n" + wrappedStackInfo
 	}
 	// has content but no separator, append stack info
 	return existingBody + "\n\n---\n" + wrappedStackInfo
