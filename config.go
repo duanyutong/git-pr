@@ -51,6 +51,8 @@ type Config struct {
 	reverse         bool     // flag/config: show stack in reverse order (newest at the top)
 	branchFromTitle bool     // flag/config: generate branch names from commit title instead of hash
 	draft           bool     // flag/config: create PRs in draft mode by default
+	
+	prTemplate string // cached PR template content from repository
 }
 
 type ConfigGit struct {
@@ -441,6 +443,38 @@ func saveGitPRConfig(tags []string) []string {
 	_, _ = git("config", "--unset-all", gitconfigTags)
 	must(git("config", "--add", gitconfigTags, rawTags))
 	return xtags
+}
+
+// loadPRTemplate reads the repository's pull request template from common locations
+// Returns the template content, or the default bodyTemplate if no template is found
+func loadPRTemplate() string {
+	// Common locations for PR templates (in order of precedence)
+	templatePaths := []string{
+		".github/PULL_REQUEST_TEMPLATE.md",
+		".github/pull_request_template.md",
+		"docs/PULL_REQUEST_TEMPLATE.md",
+		"docs/pull_request_template.md",
+		"PULL_REQUEST_TEMPLATE.md",
+		"pull_request_template.md",
+	}
+	
+	for _, path := range templatePaths {
+		content, err := os.ReadFile(path)
+		if err == nil {
+			return string(content)
+		}
+	}
+	
+	// No template found, use default
+	return bodyTemplate
+}
+
+// getPRTemplate returns the PR template, loading it on first access
+func getPRTemplate() string {
+	if config.prTemplate == "" {
+		config.prTemplate = loadPRTemplate()
+	}
+	return config.prTemplate
 }
 
 // validateWildcardPattern checks if pattern contains only valid characters
