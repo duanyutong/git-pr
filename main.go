@@ -277,12 +277,8 @@ Hint: use "git add -A" and "git stash" to clean up the repository
 					"title": commit.Title,
 					"body":  body,
 				}))
-				isDraft := matchAnyPattern(config.draftPatterns, commit.Title)
-				if isDraft {
-					must(gh("pr", "ready", strconv.Itoa(commit.PRNumber), "--undo"))
-				} else {
-					must(gh("pr", "ready", strconv.Itoa(commit.PRNumber)))
-				}
+				// Note: We don't change draft status for existing PRs to preserve user's choice
+				// Draft status is only set during PR creation
 				if tags := commit.GetTags(config.tags...); len(tags) > 0 {
 					must(gh("pr", "edit", strconv.Itoa(commit.PRNumber), "--add-label", strings.Join(tags, ",")))
 				}
