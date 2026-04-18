@@ -85,12 +85,27 @@ func githubCreatePRForCommit(commit *Commit, prev *Commit) error {
 		base = prev.GetRemoteRef()
 	}
 	args := []string{"pr", "create", "--title", commit.Title, "--body", "", "--head", commit.GetRemoteRef(), "--base", base}
+	if config.draft {
+		args = append(args, "--draft")
+	}
 	if tags := commit.GetTags(config.tags...); len(tags) > 0 {
 		args = append(args, "--label", strings.Join(tags, ","))
 	}
-	printf("create pull request for %q\n", commit.Title)
-	_, err := gh(args...)
-	return err
+	if config.draft {
+		printf("create draft pull request for %q\n", commit.Title)
+	} else {
+		printf("create pull request for %q\n", commit.Title)
+	}
+	result, err := gh(args...)
+	if err != nil {
+		return err
+	}
+	// Extract PR number from output (e.g., "https://github.com/user/repo/pull/123")
+	prNumStr := regexpNumber.FindString(result)
+	if prNumStr != "" {
+		commit.PRNumber = must(strconv.Atoi(prNumStr))
+	}
+	return nil
 }
 
 func githubPRUpdateBaseForCommit(commit *Commit, prev *Commit) error {

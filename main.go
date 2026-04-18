@@ -277,7 +277,8 @@ Hint: use "git add -A" and "git stash" to clean up the repository
 					"title": commit.Title,
 					"body":  body,
 				}))
-				isDraft := matchAnyPattern(config.draftPatterns, commit.Title)
+				// Determine if PR should be draft based on config or commit title
+				isDraft := config.draft || matchAnyPattern(config.draftPatterns, commit.Title)
 				if isDraft {
 					must(gh("pr", "ready", strconv.Itoa(commit.PRNumber), "--undo"))
 				} else {
