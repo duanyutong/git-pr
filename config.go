@@ -42,6 +42,7 @@ type Config struct {
 	draftPatterns   []string // wildcard patterns for draft detection (case-insensitive)
 	reverse         bool     // flag/config: show stack in reverse order (newest at the top)
 	branchFromTitle bool     // flag/config: generate branch names from commit title instead of hash
+	draft           bool     // flag/config: create PRs in draft mode by default
 
 	commitRange ConfigRange // positional args: optional commit selection
 }
@@ -111,6 +112,7 @@ func LoadConfig() (config Config) {
 	flag.BoolVar(&config.noStack, "no-stack", false, "Do not create/update a native GitHub stack on push")
 	flag.BoolVar(&config.reverse, "reverse", false, "Show stack in reverse order (newest at the top)")
 	flag.BoolVar(&config.branchFromTitle, "branch-from-title", false, "Generate branch names from commit title instead of hash")
+	flag.BoolVar(&config.draft, "draft", false, "Create PRs in draft mode by default")
 
 	flagGitHubHosts := flag.String("gh-hosts", "~/.config/gh/hosts.yml", "Path to config.json")
 	flagTimeout := flag.Int("timeout", 20, "API call timeout in seconds")
@@ -206,6 +208,14 @@ A COMMIT may be a git ref/hash, or (in a jj repo) a jj change-id.`
 			branchFromTitleStr, _ := getGitConfig("git-pr.branch-from-title")
 			if branchFromTitleStr == "true" || branchFromTitleStr == "1" {
 				config.branchFromTitle = true
+			}
+		}
+
+		// read git config for draft setting
+		if !config.draft {
+			draftStr, _ := getGitConfig("git-pr.draft")
+			if draftStr == "true" || draftStr == "1" {
+				config.draft = true
 			}
 		}
 

@@ -20,9 +20,10 @@ type Commit struct {
 	Message     string
 	Attrs       []KeyVal
 
-	PRNumber    int
-	Skip        bool // do not push this commit
-	BaseBlocked bool // base retarget was blocked because the PR is in a GitHub native stack
+	PRNumber     int
+	Skip         bool // do not push this commit
+	NewlyCreated bool // true if PR was just created (not existing)
+	BaseBlocked  bool // base retarget was blocked because the PR is in a GitHub native stack
 }
 
 func (commit *Commit) String() string {
