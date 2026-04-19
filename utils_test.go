@@ -93,7 +93,7 @@ func TestGenerateStackInfo(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			config.reverse = tt.reverse
-			result := generateStackInfo(commits, tt.currentCommit, "")
+			result := generateStackInfo(commits, tt.currentCommit, nil)
 
 			// Check position header
 			if !strings.Contains(result, tt.wantPosition) {
@@ -130,7 +130,7 @@ func TestGenerateStackInfoSingleCommit(t *testing.T) {
 	config.git.host = "github.com"
 	config.git.repo = "user/repo"
 
-	result := generateStackInfo(commits, commits[0], "")
+	result := generateStackInfo(commits, commits[0], nil)
 
 	// Should NOT contain "This is PR"
 	if strings.Contains(result, "This is PR") {
@@ -142,19 +142,7 @@ func TestGenerateStackInfoPreservesMergedPRs(t *testing.T) {
 	config.git.host = "github.com"
 	config.git.repo = "user/repo"
 
-	// Simulate scenario: originally had 3 PRs, but PR #101 merged
-	// existingBody represents the old state with all 3 PRs
-	existingBody := `Some description
-
----
-` + stackInfoStartMarker + `
-This is PR **2 of 3** in a stack (oldest at the top)
-
-* ◻️ #101
-* 👉 #102
-* ◻️ #103
-` + stackInfoEndMarker
-
+	// Simulate scenario: originally had 3 PRs (#101, #102, #103), but PR #101 merged
 	// Current stack only has 2 commits (PR #101 merged and removed from stack)
 	commits := []*Commit{
 		{Hash: "def67890", Title: "second commit", PRNumber: 102},
@@ -190,7 +178,9 @@ This is PR **2 of 3** in a stack (oldest at the top)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			config.reverse = tt.reverse
-			result := generateStackInfo(commits, tt.currentCommit, existingBody)
+			// Pass the historical PR numbers (101, 102, 103)
+			allHistoricalPRs := []int{101, 102, 103}
+			result := generateStackInfo(commits, tt.currentCommit, allHistoricalPRs)
 
 			// Should preserve merged PR count in position header
 			if !strings.Contains(result, tt.wantPosition) {

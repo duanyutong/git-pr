@@ -262,6 +262,28 @@ Hint: use "git add -A" and "git stash" to clean up the repository
 	// update PRs with review link, concurrently
 	fmt.Println()
 	{
+		// First, collect all historical PR numbers from existing PR bodies
+		// This ensures we preserve the complete stack history even after PRs merge
+		var allHistoricalPRs []int
+		prHistoryMap := make(map[int]bool)
+		
+		// Fetch all existing PR bodies first (before concurrent updates)
+		for _, commit := range stackedCommits {
+			if commit.Skip {
+				continue
+			}
+			pr, err := githubGetPRByNumber(commit.PRNumber)
+			if err == nil && pr != nil {
+				prNums := extractPRNumbersFromStackInfo(pr.Body)
+				for _, num := range prNums {
+					if !prHistoryMap[num] {
+						prHistoryMap[num] = true
+						allHistoricalPRs = append(allHistoricalPRs, num)
+					}
+				}
+			}
+		}
+		
 		var wg sync.WaitGroup
 		for _, commit := range stackedCommits {
 			if commit.Skip {
@@ -277,8 +299,8 @@ Hint: use "git add -A" and "git stash" to clean up the repository
 				pr := must(githubGetPRByNumber(commit.PRNumber))
 				pullURL := fmt.Sprintf("https://api.%v/repos/%v/pulls/%v", config.git.host, config.git.repo, commit.PRNumber)
 
-				// generate the PR body with stack info (pass existing body to preserve merged PRs)
-				stackInfo := generateStackInfo(stackedCommits, commit, pr.Body)
+				// generate the PR body with stack info (pass accumulated history from all PRs)
+				stackInfo := generateStackInfo(stackedCommits, commit, allHistoricalPRs)
 				body := generatePRBody(commit, pr.Body, stackInfo)
 
 				// update the PR
@@ -391,13 +413,12 @@ func extractPRNumbersFromStackInfo(existingBody string) []int {
 }
 
 // generateStackInfo generates the stack info section showing all PRs in the stack
-// Preserves merged downstack PRs from existingBody to maintain full stack context
-func generateStackInfo(stackedCommits []*Commit, currentCommit *Commit, existingBody string) string {
+// Preserves merged downstack PRs from allHistoricalPRs to maintain full stack context
+func generateStackInfo(stackedCommits []*Commit, currentCommit *Commit, allHistoricalPRs []int) string {
 	var stackB strings.Builder
 	sprf := func(msg string, args ...any) { fprintf(&stackB, msg, args...) }
 
-	// Extract old PR numbers from existing description to preserve merged downstack PRs
-	oldPRNumbers := extractPRNumbersFromStackInfo(existingBody)
+	// Build map of current PR numbers
 	currentPRNumbers := make(map[int]bool)
 	for _, cm := range stackedCommits {
 		if cm.PRNumber != 0 {
@@ -405,9 +426,9 @@ func generateStackInfo(stackedCommits []*Commit, currentCommit *Commit, existing
 		}
 	}
 	
-	// Identify merged PRs: in old list but not in current stack
+	// Identify merged PRs: in historical list but not in current stack
 	var mergedPRs []int
-	for _, prNum := range oldPRNumbers {
+	for _, prNum := range allHistoricalPRs {
 		if !currentPRNumbers[prNum] {
 			mergedPRs = append(mergedPRs, prNum)
 		}
