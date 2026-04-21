@@ -106,7 +106,7 @@ func TestGenerateStackInfo(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			config.reverse = tt.reverse
-			result := generateStackInfo(commits, tt.currentCommit, "")
+			result := generateStackInfo(commits, tt.currentCommit, nil)
 
 			// Check position header
 			if !strings.Contains(result, tt.wantPosition) {
@@ -143,7 +143,7 @@ func TestGenerateStackInfoSingleCommit(t *testing.T) {
 	config.git.host = "github.com"
 	config.git.repo = "user/repo"
 
-	result := generateStackInfo(commits, commits[0], "")
+	result := generateStackInfo(commits, commits[0], nil)
 
 	// Should NOT contain "This is PR"
 	if strings.Contains(result, "This is PR") {
@@ -155,19 +155,7 @@ func TestGenerateStackInfoPreservesMergedPRs(t *testing.T) {
 	config.git.host = "github.com"
 	config.git.repo = "user/repo"
 
-	// Simulate scenario: originally had 3 PRs, but PR #101 merged
-	// existingBody represents the old state with all 3 PRs
-	existingBody := `Some description
-
----
-` + stackInfoStartMarker + `
-This is PR **2 of 3** in a stack (oldest at the top)
-
-* ◻️ #101
-* 👉 #102
-* ◻️ #103
-` + stackInfoEndMarker
-
+	// Simulate scenario: originally had 3 PRs (#101, #102, #103), but PR #101 merged
 	// Current stack only has 2 commits (PR #101 merged and removed from stack)
 	commits := []*Commit{
 		{Hash: "def67890", Title: "second commit", PRNumber: 102},
@@ -203,7 +191,13 @@ This is PR **2 of 3** in a stack (oldest at the top)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			config.reverse = tt.reverse
-			result := generateStackInfo(commits, tt.currentCommit, existingBody)
+			// Pass the historical PR entries: #101 is merged, #102 and #103 are active
+			allHistoricalPRs := []PRHistoryEntry{
+				{Number: 101, IsMerged: true},  // was merged
+				{Number: 102, IsMerged: false}, // active, in current stack
+				{Number: 103, IsMerged: false}, // active, in current stack
+			}
+			result := generateStackInfo(commits, tt.currentCommit, allHistoricalPRs)
 
 			// Should preserve merged PR count in position header
 			if !strings.Contains(result, tt.wantPosition) {
@@ -314,3 +308,51 @@ This is PR **1 of 2** in a stack
 	}
 }
 
+func TestGenerateStackInfoInsertsNewPRInMiddle(t *testing.T) {
+	// Simulate inserting a new commit/PR in the middle of an existing stack
+	// Current stack (oldest to newest): #101, #104 (NEW), #102, #103
+	commits := []*Commit{
+		{Hash: "abc12345", PRNumber: 101, Title: "First commit"},
+		{Hash: "new99999", PRNumber: 104, Title: "Inserted in middle"}, // NEW PR
+		{Hash: "def67890", PRNumber: 102, Title: "Second commit"},
+		{Hash: "ghi13579", PRNumber: 103, Title: "Third commit"},
+	}
+	
+	// Historical (from existing PRs): only has #101, #102, #103
+	allHistoricalPRs := []PRHistoryEntry{
+		{Number: 101, IsMerged: false},
+		{Number: 102, IsMerged: false},
+		{Number: 103, IsMerged: false},
+	}
+	
+	config.reverse = false
+	result := generateStackInfo(commits, commits[1], allHistoricalPRs)
+	
+	// The new PR #104 should be inserted between #101 and #102
+	// Expected order (oldest first): #101, #104, #102, #103
+	lines := strings.Split(result, "\n")
+	var prOrder []string
+	for _, line := range lines {
+		if strings.HasPrefix(line, "* ") {
+			// Extract PR number
+			if idx := strings.Index(line, "#"); idx >= 0 {
+				prNum := ""
+				for i := idx + 1; i < len(line) && line[i] >= '0' && line[i] <= '9'; i++ {
+					prNum += string(line[i])
+				}
+				prOrder = append(prOrder, prNum)
+			}
+		}
+	}
+	
+	expectedOrder := []string{"101", "104", "102", "103"}
+	if len(prOrder) != len(expectedOrder) {
+		t.Fatalf("Expected %d PRs, got %d: %v\nResult:\n%s", len(expectedOrder), len(prOrder), prOrder, result)
+	}
+	
+	for i, want := range expectedOrder {
+		if prOrder[i] != want {
+			t.Errorf("Position %d: want PR #%s, got #%s\nFull order: %v\nResult:\n%s", i, want, prOrder[i], prOrder, result)
+		}
+	}
+}

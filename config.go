@@ -40,7 +40,10 @@ type Config struct {
 	skipDraft       bool     // flag: skip draft commits by default
 	includeDraft    bool     // flag: explicitly include draft commits (highest precedence)
 	draftPatterns   []string // wildcard patterns for draft detection (case-insensitive)
-	reverse         bool     // flag/config: show stack in reverse order (newest at the top)
+	// Display order for stack in PR description:
+	//   reverse=false (default/legacy): oldest at top, newest at bottom (inverted from git log)
+	//   reverse=true: newest at top, oldest at bottom (natural git log order)
+	reverse         bool     // flag/config: show stack in natural order (newest at top)
 	branchFromTitle bool     // flag/config: generate branch names from commit title instead of hash
 	draft           bool     // flag/config: create PRs in draft mode by default
 	
@@ -87,7 +90,7 @@ func LoadConfig() (config Config) {
 	flag.StringVar(&config.stopAfter, "stop-after", "", "Stop after phase: validate|get-commits|rewrite|push|pr-create")
 	flag.BoolVar(&config.skipDraft, "skip-draft", false, "Skip commits with [draft] in title")
 	flag.BoolVar(&config.includeDraft, "include-draft", false, "Include draft commits (override config)")
-	flag.BoolVar(&config.reverse, "reverse", false, "Show stack in reverse order (newest at the top)")
+	flag.BoolVar(&config.reverse, "reverse", false, "Show stack in natural order (newest at top); default is legacy order (oldest at top)")
 	flag.BoolVar(&config.branchFromTitle, "branch-from-title", false, "Generate branch names from commit title instead of hash")
 	flag.BoolVar(&config.draft, "draft", false, "Create PRs in draft mode by default")
 

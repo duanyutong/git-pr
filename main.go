@@ -273,6 +273,40 @@ Hint: use "git add -A" and "git stash" to clean up the repository
 	// update PRs with review link, concurrently
 	printf("\n")
 	{
+		// Build set of PR numbers in current local stack
+		currentStackSet := make(map[int]bool)
+		for _, commit := range stackedCommits {
+			if commit.PRNumber != 0 {
+				currentStackSet[commit.PRNumber] = true
+			}
+		}
+		
+		// First, collect all historical PR entries from existing PR bodies
+		// This ensures we preserve the complete stack history AND detect merged PRs
+		var allHistoricalPRs []PRHistoryEntry
+		prHistoryMap := make(map[int]bool)
+		
+		// Fetch all existing PR bodies first (before concurrent updates)
+		for _, commit := range stackedCommits {
+			if commit.Skip {
+				continue
+			}
+			pr, err := githubGetPRByNumber(commit.PRNumber)
+			if err == nil && pr != nil {
+				entries := extractPRHistoryFromStackInfo(pr.Body)
+				for _, entry := range entries {
+					if !prHistoryMap[entry.Number] {
+						prHistoryMap[entry.Number] = true
+						// If this PR is not in current local stack, mark it as merged/closed
+						if !currentStackSet[entry.Number] {
+							entry.IsMerged = true
+						}
+						allHistoricalPRs = append(allHistoricalPRs, entry)
+					}
+				}
+			}
+		}
+		
 		var wg sync.WaitGroup
 		for _, commit := range stackedCommits {
 			if commit.Skip {
@@ -288,8 +322,8 @@ Hint: use "git add -A" and "git stash" to clean up the repository
 				pr := must(githubGetPRByNumber(commit.PRNumber))
 				pullURL := fmt.Sprintf("https://api.%v/repos/%v/pulls/%v", config.git.host, config.git.repo, commit.PRNumber)
 
-				// generate the PR body with stack info (pass existing body to preserve merged PRs)
-				stackInfo := generateStackInfo(stackedCommits, commit, pr.Body)
+				// generate the PR body with stack info (pass accumulated history from all PRs)
+				stackInfo := generateStackInfo(stackedCommits, commit, allHistoricalPRs)
 				body := generatePRBody(commit, pr.Body, stackInfo)
 
 				// update the PR
@@ -350,14 +384,22 @@ After installation, try again.`)
 	return "", nil // unreachable
 }
 
-// extractPRNumbersFromStackInfo extracts PR numbers from existing stack info section
-// Returns a slice of PR numbers in the order they appear
-func extractPRNumbersFromStackInfo(existingBody string) []int {
+// PRHistoryEntry represents a PR from the historical stack with its status
+type PRHistoryEntry struct {
+	Number   int
+	IsMerged bool // true if marked with ✔️, false if ⬛ or other emoji
+}
+
+// extractPRHistoryFromStackInfo extracts PR numbers and their status from existing stack info.
+// Always returns entries normalized to internal order (oldest first).
+// Note: The IsMerged status here reflects what was stored previously; it gets updated during
+// accumulation if the PR is no longer in the local stack (see: allHistoricalPRs accumulation).
+func extractPRHistoryFromStackInfo(existingBody string) []PRHistoryEntry {
 	if existingBody == "" {
 		return nil
 	}
 
-	var prNumbers []int
+	var entries []PRHistoryEntry
 	
 	// First try to find content within sentinel markers
 	startIdx := strings.Index(existingBody, stackInfoStartMarker)
@@ -383,55 +425,148 @@ func extractPRNumbersFromStackInfo(existingBody string) []int {
 		return nil
 	}
 	
-	// Extract all PR numbers from lines like "* ✔️ #123" or "* ◻️ #456"
-	prPattern := regexp.MustCompile(`#(\d+)`)
-	matches := prPattern.FindAllStringSubmatch(stackSection, -1)
+	// Detect display order from the stored section:
+	//   "newest at the top" = reverse=true (natural git order)
+	//   "oldest at the top" or absent = reverse=false (legacy/default)
+	// We need to normalize to internal order (oldest first) for consistent processing.
+	isNaturalOrder := strings.Contains(stackSection, "newest at the top")
+	
+	// Extract PR numbers with their markers
+	// Match lines like "* ✔️ #123" or "* ⬛ #456" or "* 🐻 #789"
+	linePattern := regexp.MustCompile(`(?m)^\* ([^\s]+) #(\d+)`)
+	matches := linePattern.FindAllStringSubmatch(stackSection, -1)
 	
 	seen := make(map[int]bool) // deduplicate
 	for _, match := range matches {
-		if len(match) > 1 {
-			prNum := must(strconv.Atoi(match[1]))
+		if len(match) > 2 {
+			prNum := must(strconv.Atoi(match[2]))
 			if !seen[prNum] {
-				prNumbers = append(prNumbers, prNum)
+				emoji := match[1]
+				isMerged := emoji == "✔️"
+				entries = append(entries, PRHistoryEntry{Number: prNum, IsMerged: isMerged})
 				seen[prNum] = true
 			}
 		}
 	}
 	
+	// Normalize to internal order (oldest first)
+	// If the section was displayed in natural git order (newest at top), reverse it
+	if isNaturalOrder && len(entries) > 1 {
+		slices.Reverse(entries)
+	}
+	
+	return entries
+}
+
+// extractPRNumbersFromStackInfo extracts PR numbers from existing stack info section
+// Returns a slice of PR numbers in the order they appear
+func extractPRNumbersFromStackInfo(existingBody string) []int {
+	entries := extractPRHistoryFromStackInfo(existingBody)
+	var prNumbers []int
+	for _, e := range entries {
+		prNumbers = append(prNumbers, e.Number)
+	}
 	return prNumbers
 }
 
-// generateStackInfo generates the stack info section showing all PRs in the stack
-// Preserves merged downstack PRs from existingBody to maintain full stack context
-func generateStackInfo(stackedCommits []*Commit, currentCommit *Commit, existingBody string) string {
+// generateStackInfo generates the stack info section showing all PRs in the stack.
+//
+// Internal order: always works with oldest-first order for consistency.
+// Display order: applies reverse flag at render time.
+//   - reverse=false (default/legacy): oldest at top, newest at bottom
+//   - reverse=true: newest at top, oldest at bottom (natural git log order)
+//
+// Historical PRs not in current stack are preserved with their original markers.
+func generateStackInfo(stackedCommits []*Commit, currentCommit *Commit, allHistoricalPRs []PRHistoryEntry) string {
 	var stackB strings.Builder
 	sprf := func(msg string, args ...any) { fprintf(&stackB, msg, args...) }
 
-	// Extract old PR numbers from existing description to preserve merged downstack PRs
-	oldPRNumbers := extractPRNumbersFromStackInfo(existingBody)
-	currentPRNumbers := make(map[int]bool)
-	for _, cm := range stackedCommits {
+	// Build map of current stack: PR number -> commit + index (for ordering)
+	type commitWithIndex struct {
+		commit *Commit
+		index  int
+	}
+	currentStackMap := make(map[int]commitWithIndex)
+	for i, cm := range stackedCommits {
 		if cm.PRNumber != 0 {
-			currentPRNumbers[cm.PRNumber] = true
+			currentStackMap[cm.PRNumber] = commitWithIndex{commit: cm, index: i}
 		}
 	}
 	
-	// Identify merged PRs: in old list but not in current stack
-	var mergedPRs []int
-	for _, prNum := range oldPRNumbers {
-		if !currentPRNumbers[prNum] {
-			mergedPRs = append(mergedPRs, prNum)
+	// Build set of historical PR numbers
+	historicalPRs := make(map[int]bool)
+	for _, entry := range allHistoricalPRs {
+		historicalPRs[entry.Number] = true
+	}
+	
+	// Find new PRs in current stack that aren't in history
+	var newPRs []commitWithIndex
+	for i, cm := range stackedCommits {
+		if cm.PRNumber != 0 && !historicalPRs[cm.PRNumber] {
+			newPRs = append(newPRs, commitWithIndex{commit: cm, index: i})
 		}
 	}
-
-	// Calculate position based on chronological order (oldest=1, newest=N)
-	// Include merged PRs in the total count for accurate position
-	totalCount := len(stackedCommits) + len(mergedPRs)
+	
+	// Build the final list in internal order (oldest first)
+	// We need to merge historical entries with new PRs based on stack position
+	type stackEntry struct {
+		prNumber int
+		commit   *Commit   // non-nil if in current stack
+		isMerged bool      // only used if commit is nil (historical only)
+		index    int       // position in current stack (-1 if not in current stack)
+	}
+	var entries []stackEntry
+	
+	// First, add historical entries in order (will be replaced/updated where applicable)
+	for _, hist := range allHistoricalPRs {
+		if cwi, ok := currentStackMap[hist.Number]; ok {
+			// This PR is in current stack - use the commit
+			entries = append(entries, stackEntry{prNumber: hist.Number, commit: cwi.commit, index: cwi.index})
+		} else {
+			// This PR is not in current stack - preserve historical marker
+			entries = append(entries, stackEntry{prNumber: hist.Number, isMerged: hist.IsMerged, index: -1})
+		}
+	}
+	
+	// Insert new PRs at correct positions based on their index in stackedCommits
+	// Find where each new PR should go relative to existing entries
+	for _, newPR := range newPRs {
+		// Find insertion point: after the last entry with index < newPR.index
+		insertAt := 0
+		for i, e := range entries {
+			if e.index >= 0 && e.index < newPR.index {
+				insertAt = i + 1
+			}
+		}
+		// Insert at the found position
+		newEntry := stackEntry{prNumber: newPR.commit.PRNumber, commit: newPR.commit, index: newPR.index}
+		entries = append(entries[:insertAt], append([]stackEntry{newEntry}, entries[insertAt:]...)...)
+	}
+	
+	// Calculate total count and current PR position (based on internal/chronological order)
+	totalCount := len(entries)
 	currentPosition := 0
-	for i, cm := range stackedCommits {
-		if cm.Hash == currentCommit.Hash {
-			currentPosition = i + 1 + len(mergedPRs) // offset by merged PRs
+	for i, e := range entries {
+		if e.commit != nil && e.commit.Hash == currentCommit.Hash {
+			currentPosition = i + 1 // 1-indexed, based on chronological position
 			break
+		}
+	}
+	
+	// Don't mark upstack PRs (after current) as merged - they haven't been pruned locally yet
+	// Only mark downstack PRs (before current) as merged if they're not in current stack
+	for i := currentPosition; i < len(entries); i++ {
+		entries[i].isMerged = false // Upstack PRs stay as they were
+	}
+	
+	// Create display order from internal order:
+	//   reverse=false (legacy): keep as-is (oldest at top)
+	//   reverse=true: flip to newest at top (natural git order)
+	renderEntries := entries
+	if config.reverse {
+		renderEntries = make([]stackEntry, len(entries))
+		for i, e := range entries {
+			renderEntries[len(entries)-1-i] = e
 		}
 	}
 
@@ -444,58 +579,46 @@ func generateStackInfo(stackedCommits []*Commit, currentCommit *Commit, existing
 		sprf("This is PR **%d of %d** in a stack (%s)\n\n", currentPosition, totalCount, orderNote)
 	}
 
-	// Add merged PRs at the top (they're downstack dependencies)
-	if len(mergedPRs) > 0 {
-		if config.reverse {
-			// If reversed, merged PRs go at the bottom
-			// We'll add them after current commits
+	// Render entries in display order
+	for _, e := range renderEntries {
+		if e.commit != nil {
+			// Current stack PR - render with commit info
+			renderCommit(&stackB, e.commit, currentCommit)
 		} else {
-			// Normal order: merged PRs at top (oldest first)
-			for _, prNum := range mergedPRs {
-				sprf("* ✔️ #%v\n", prNum)
+			// Historical PR not in current stack - preserve marker
+			if e.isMerged {
+				sprf("* ✔️ #%v\n", e.prNumber)
+			} else {
+				sprf("* ⬛ #%v\n", e.prNumber)
 			}
 		}
 	}
 
-	// reverse the stack order if configured (newest at the top)
-	commits := stackedCommits
-	if config.reverse {
-		commits = make([]*Commit, len(stackedCommits))
-		copy(commits, stackedCommits)
-		for i, j := 0, len(commits)-1; i < j; i, j = i+1, j-1 {
-			commits[i], commits[j] = commits[j], commits[i]
-		}
-	}
-
-	for _, cm := range commits {
-		var cmRef string
-		cmURL := fmt.Sprintf("https://%v/%v/commit/%v", config.git.host, config.git.repo, cm.ShortHash())
-		switch {
-		case cm.PRNumber != 0 && cm.Hash == currentCommit.Hash:
-			cmRef = fmt.Sprintf("#%v 👈 This PR (%v)", cm.PRNumber, cm.ShortHash())
-		case cm.PRNumber != 0:
-			cmRef = fmt.Sprintf("#%v", cm.PRNumber)
-		default:
-			first, last := splitEmail(cm.AuthorEmail)
-			formattedEmail := first + "&#x200B;" + last // zero-width space to prevent creating email link
-			cmRef = fmt.Sprintf(`&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<b>[%v (%v)](%v)</b>&nbsp;&nbsp; ${\textsf{\color{lightblue}· %v}}$`, cm.Title, cm.ShortHash(), cmURL, formattedEmail)
-		}
-		if cm.Hash == currentCommit.Hash {
-			sprf("* " + emojisx[currentCommit.PRNumber%len(emojisx)])
-		} else {
-			sprf("* ⬛")
-		}
-		sprf(" %v\n", cmRef)
-	}
-
-	// Add merged PRs at the bottom if reversed
-	if config.reverse && len(mergedPRs) > 0 {
-		for _, prNum := range mergedPRs {
-			sprf("* ✔️ #%v\n", prNum)
-		}
-	}
-
 	return stackB.String()
+}
+
+// renderCommit renders a single commit line to the stack info
+func renderCommit(stackB *strings.Builder, cm *Commit, currentCommit *Commit) {
+	sprf := func(msg string, args ...any) { fprintf(stackB, msg, args...) }
+	
+	var cmRef string
+	cmURL := fmt.Sprintf("https://%v/%v/commit/%v", config.git.host, config.git.repo, cm.ShortHash())
+	switch {
+	case cm.PRNumber != 0 && cm.Hash == currentCommit.Hash:
+		cmRef = fmt.Sprintf("#%v 👈 This PR (%v)", cm.PRNumber, cm.ShortHash())
+	case cm.PRNumber != 0:
+		cmRef = fmt.Sprintf("#%v", cm.PRNumber)
+	default:
+		first, last := splitEmail(cm.AuthorEmail)
+		formattedEmail := first + "&#x200B;" + last // zero-width space to prevent creating email link
+		cmRef = fmt.Sprintf(`&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<b>[%v (%v)](%v)</b>&nbsp;&nbsp; ${\textsf{\color{lightblue}· %v}}$`, cm.Title, cm.ShortHash(), cmURL, formattedEmail)
+	}
+	if cm.Hash == currentCommit.Hash {
+		sprf("* " + emojisx[currentCommit.PRNumber%len(emojisx)])
+	} else {
+		sprf("* ⬛")
+	}
+	sprf(" %v\n", cmRef)
 }
 
 // generatePRBody generates the PR body based on commit message and existing PR body
