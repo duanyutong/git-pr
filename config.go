@@ -37,13 +37,16 @@ type Config struct {
 	autoAccept          bool   // flag: assume "yes" to interactive prompts
 	noStack             bool   // flag: skip creating/updating the native GitHub stack
 
-	skipDraft       bool     // flag: skip draft commits by default
-	includeDraft    bool     // flag: explicitly include draft commits (highest precedence)
-	draftPatterns   []string // wildcard patterns for draft detection (case-insensitive)
-	reverse         bool     // flag/config: show stack in reverse order (newest at the top)
-	branchFromTitle bool     // flag/config: generate branch names from commit title instead of hash
-	draft           bool     // flag/config: create PRs in draft mode by default
-	prTemplate      string   // cached PR template content from repository
+	skipDraft     bool     // flag: skip draft commits by default
+	includeDraft  bool     // flag: explicitly include draft commits (highest precedence)
+	draftPatterns []string // wildcard patterns for draft detection (case-insensitive)
+	// Display order for stack in PR description:
+	//   reverse=false (default/legacy): oldest at top, newest at bottom (inverted from git log)
+	//   reverse=true: newest at top, oldest at bottom (natural git log order)
+	reverse         bool   // flag/config: show stack in natural order (newest at top)
+	branchFromTitle bool   // flag/config: generate branch names from commit title instead of hash
+	draft           bool   // flag/config: create PRs in draft mode by default
+	prTemplate      string // cached PR template content from repository
 
 	commitRange ConfigRange // positional args: optional commit selection
 }
@@ -111,7 +114,7 @@ func LoadConfig() (config Config) {
 	flag.BoolVar(&config.autoAccept, "yes", false, `Assume "yes" to prompts (for non-interactive use)`)
 	flag.BoolVar(&config.autoAccept, "y", false, `Assume "yes" to prompts (shorthand for --yes)`)
 	flag.BoolVar(&config.noStack, "no-stack", false, "Do not create/update a native GitHub stack on push")
-	flag.BoolVar(&config.reverse, "reverse", false, "Show stack in reverse order (newest at the top)")
+	flag.BoolVar(&config.reverse, "reverse", false, "Show stack in natural order (newest at top); default is legacy order (oldest at top)")
 	flag.BoolVar(&config.branchFromTitle, "branch-from-title", false, "Generate branch names from commit title instead of hash")
 	flag.BoolVar(&config.draft, "draft", false, "Create PRs in draft mode by default")
 
