@@ -356,3 +356,116 @@ func TestGenerateStackInfoInsertsNewPRInMiddle(t *testing.T) {
 		}
 	}
 }
+
+func TestExtractPRHistoryNormalizesReversedOrder(t *testing.T) {
+	// When the stored order is "newest at the top", extractPRHistoryFromStackInfo
+	// should normalize it back to internal order (oldest first)
+	
+	tests := []struct {
+		name     string
+		body     string
+		wantNums []int // Expected PR numbers in internal order (oldest first)
+	}{
+		{
+			name: "normalizes newest-at-top to oldest-first",
+			body: `---
+` + stackInfoStartMarker + `
+This is PR **2 of 3** in a stack (newest at the top)
+
+* ⬛ #103
+* 🐼 #102 👈 This PR
+* ⬛ #101
+` + stackInfoEndMarker,
+			wantNums: []int{101, 102, 103}, // Should be reversed to oldest-first
+		},
+		{
+			name: "keeps oldest-at-top as-is",
+			body: `---
+` + stackInfoStartMarker + `
+This is PR **2 of 3** in a stack (oldest at the top)
+
+* ⬛ #101
+* 🐼 #102 👈 This PR
+* ⬛ #103
+` + stackInfoEndMarker,
+			wantNums: []int{101, 102, 103}, // Already in correct order
+		},
+		{
+			name: "legacy format without order note stays as-is",
+			body: `---
+` + stackInfoStartMarker + `
+This is PR **2 of 3** in a stack
+
+* ⬛ #101
+* 🐼 #102
+* ⬛ #103
+` + stackInfoEndMarker,
+			wantNums: []int{101, 102, 103}, // Legacy = oldest-first (default)
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			entries := extractPRHistoryFromStackInfo(tt.body)
+			
+			if len(entries) != len(tt.wantNums) {
+				t.Fatalf("Got %d entries, want %d", len(entries), len(tt.wantNums))
+			}
+			
+			for i, entry := range entries {
+				if entry.Number != tt.wantNums[i] {
+					t.Errorf("Position %d: got PR #%d, want #%d", i, entry.Number, tt.wantNums[i])
+				}
+			}
+		})
+	}
+}
+
+func TestGenerateStackInfoMarksDownstackAsMerged(t *testing.T) {
+	// When a PR is not in the current local stack but appears in history,
+	// it should be marked as merged (✔️) ONLY if it's downstack (before current PR)
+	
+	// Setup: current stack has #102, #103 but history has #101, #102, #103, #104
+	// #101 is downstack (should be ✔️), #104 is upstack (should stay ⬛)
+	commits := []*Commit{
+		{Hash: "def67890", PRNumber: 102, Title: "Second commit"},
+		{Hash: "ghi13579", PRNumber: 103, Title: "Third commit"},
+	}
+	
+	// Historical PRs include #101 (not in stack anymore) and #104 (upstack, also not in stack)
+	allHistoricalPRs := []PRHistoryEntry{
+		{Number: 101, IsMerged: true},  // downstack, marked as merged during accumulation
+		{Number: 102, IsMerged: false}, // in current stack
+		{Number: 103, IsMerged: false}, // in current stack
+		{Number: 104, IsMerged: true},  // upstack - wrongly marked during accumulation, should be fixed
+	}
+	
+	// Save and restore config
+	oldReverse := config.reverse
+	oldHost := config.git.host
+	oldRepo := config.git.repo
+	defer func() {
+		config.reverse = oldReverse
+		config.git.host = oldHost
+		config.git.repo = oldRepo
+	}()
+	config.reverse = false
+	config.git.host = "github.com"
+	config.git.repo = "user/repo"
+	
+	// Current commit is #102
+	result := generateStackInfo(commits, commits[0], allHistoricalPRs)
+	
+	// #101 should have ✔️ (downstack, merged)
+	if !strings.Contains(result, "✔️ #101") {
+		t.Errorf("Downstack PR #101 should be marked as merged (✔️)\nResult:\n%s", result)
+	}
+	
+	// #104 should have ⬛ (upstack, NOT marked as merged even though not in local stack)
+	if strings.Contains(result, "✔️ #104") {
+		t.Errorf("Upstack PR #104 should NOT be marked as merged\nResult:\n%s", result)
+	}
+	if !strings.Contains(result, "⬛ #104") {
+		t.Errorf("Upstack PR #104 should have ⬛ marker\nResult:\n%s", result)
+	}
+}

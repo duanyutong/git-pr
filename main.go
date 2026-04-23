@@ -162,27 +162,38 @@ Hint: use "git add -A" and "git stash" to clean up the repository
 		}
 		panic("not found")
 	}
-	pushCommit := func(commit *Commit) (logs string, execFunc func()) {
+	pushCommit := func(commit *Commit) (logs string, execFunc func() bool) {
 		args := fmt.Sprintf("%v:refs/heads/%v", commit.ShortHash(), commit.GetAttr(KeyRemoteRef))
 		logs = fmt.Sprintf("push -f %v %v", config.git.remote, args)
 		if config.dryRun {
 			logs = "[DRY-RUN] " + logs
-			return logs, func() {} // no-op for dry-run
+			return logs, func() bool { return false } // no-op for dry-run
 		}
-		return logs, func() {
+		return logs, func() bool {
 			out := must(git("push", "-f", config.git.remote, args))
 			time.Sleep(1 * time.Second)
-			if strings.Contains(out, "remote: Create a pull request") {
-				must(0, githubCreatePRForCommit(commit, prevCommit(commit)))
-			} else {
+			// Return true if this is a new branch that needs a PR created
+			needsPR := strings.Contains(out, "remote: Create a pull request")
+			if !needsPR {
+				// Update base for existing PR
 				must(0, githubPRUpdateBaseForCommit(commit, prevCommit(commit)))
 			}
+			return needsPR
 		}
 	}
 	// push commits, concurrently
 	if config.dryRun {
 		printf("[DRY-RUN] Would push commits:\n")
 	}
+	
+	// Track which commits need PRs created (in order)
+	type pushResult struct {
+		commit  *Commit
+		needsPR bool
+	}
+	pushResults := make([]pushResult, 0, len(stackedCommits))
+	var pushResultsMu sync.Mutex
+	
 	{
 		var wg sync.WaitGroup
 		for _, commit := range stackedCommits {
@@ -198,16 +209,38 @@ Hint: use "git add -A" and "git stash" to clean up the repository
 			wg.Add(1)
 			logs, execFunc := pushCommit(commit)
 			printf("%s\n", logs)
+			commit := commit // capture for goroutine
 			if !config.dryRun {
 				go func() {
 					defer wg.Done()
-					execFunc()
+					needsPR := execFunc()
+					pushResultsMu.Lock()
+					pushResults = append(pushResults, pushResult{commit: commit, needsPR: needsPR})
+					pushResultsMu.Unlock()
 				}()
 			} else {
 				wg.Done()
 			}
 		}
 		wg.Wait()
+	}
+	
+	// Create PRs sequentially in stack order (oldest to newest) for correct PR numbering
+	if !config.dryRun {
+		// Sort results by position in stackedCommits to ensure correct order
+		commitOrder := make(map[string]int)
+		for i, cm := range stackedCommits {
+			commitOrder[cm.Hash] = i
+		}
+		slices.SortFunc(pushResults, func(a, b pushResult) int {
+			return commitOrder[a.commit.Hash] - commitOrder[b.commit.Hash]
+		})
+		
+		for _, result := range pushResults {
+			if result.needsPR {
+				must(0, githubCreatePRForCommit(result.commit, prevCommit(result.commit)))
+			}
+		}
 	}
 
 	// checkpoint: push
