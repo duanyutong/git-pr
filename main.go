@@ -278,22 +278,22 @@ Hint: use "git add -A" and "git stash" to clean up the repository
 		return resolveBaseForBottom(fullStack, commit, config.git.remoteTrunk)
 	}
 
-	pushCommit := func(commit *Commit) (logs string, execFunc func()) {
+	pushCommit := func(commit *Commit) (logs string, execFunc func() bool) {
 		args := fmt.Sprintf("%v:refs/heads/%v", commit.ShortHash(), commit.GetAttr(KeyRemoteRef))
 		logs = fmt.Sprintf("push -f %v %v", config.git.remote, args)
 		if config.dryRun {
 			logs = "[DRY-RUN] " + logs
-			return logs, func() {} // no-op for dry-run
+			return logs, func() bool { return false } // no-op for dry-run
 		}
-		return logs, func() {
+		return logs, func() bool {
 			out := must(git("push", "-f", config.git.remote, args))
 			time.Sleep(1 * time.Second)
 			base := resolveBase(commit)
-			if strings.Contains(out, "remote: Create a pull request") {
-				mustE(githubCreatePRForCommit(commit, base))
-			} else {
+			needsPR := strings.Contains(out, "remote: Create a pull request")
+			if !needsPR {
 				mustE(githubPRUpdateBaseForCommit(commit, base))
 			}
+			return needsPR
 		}
 	}
 	// mark commits we won't push (other authors, unless --include-other-authors)
@@ -322,7 +322,12 @@ actually wrote. Re-run git-pr; if it recurs, file an issue with the output of
 	if config.dryRun {
 		printf("[DRY-RUN] Would push commits:\n")
 	}
-	var pushFns []func()
+	type pushResult struct {
+		commit  *Commit
+		exec    func() bool
+		needsPR bool
+	}
+	var pushResults []*pushResult
 	for _, commit := range stackedCommits {
 		if commit.Skip {
 			continue
@@ -330,10 +335,12 @@ actually wrote. Re-run git-pr; if it recurs, file an issue with the output of
 		logs, execFn := pushCommit(commit)
 		printf("%s\n", logs)
 		if !config.dryRun {
-			pushFns = append(pushFns, execFn)
+			pushResults = append(pushResults, &pushResult{commit: commit, exec: execFn})
 		}
 	}
-	parallelForEach(pushFns, func(fn func()) { fn() })
+	parallelForEach(pushResults, func(result *pushResult) {
+		result.needsPR = result.exec()
+	})
 
 	// A base edit can be blocked because a PR is already in a native stack;
 	// githubPRUpdateBaseForCommit records that on commit.BaseBlocked instead of
@@ -341,6 +348,13 @@ actually wrote. Re-run git-pr; if it recurs, file an issue with the output of
 	// wasn't retargeted; otherwise manageNativeStack (end of push) handles it.
 	if !config.dryRun && config.noStack {
 		warnStaleBlockedBases(stackedCommits)
+	}
+
+	// Create PRs sequentially in stack order after the parallel push barrier.
+	for _, result := range pushResults {
+		if result.needsPR {
+			mustE(githubCreatePRForCommit(result.commit, resolveBase(result.commit)))
+		}
 	}
 
 	// checkpoint: push
