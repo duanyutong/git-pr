@@ -24,6 +24,7 @@ type Commit struct {
 	Skip         bool // do not push this commit
 	NewlyCreated bool // true if PR was just created (not existing)
 	BaseBlocked  bool // base retarget was blocked because the PR is in a GitHub native stack
+	BaseUpdated  bool // true if PR base was updated
 }
 
 func (commit *Commit) String() string {
