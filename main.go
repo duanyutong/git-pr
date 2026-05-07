@@ -177,39 +177,48 @@ Hint: use "git add -A" and "git stash" to clean up the repository
 			continue
 		}
 		if last, ok := mapRefs[remoteRef]; ok {
+			printf("[ERROR] DUPLICATED REMOTE REF: %q\n", remoteRef)
+			printf("  Commit 1: %v - %v\n", last.ShortHash(), last.Title)
+			printf("  Commit 2: %v - %v\n", commit.ShortHash(), commit.Title)
+			printf("  This means a previous run didn't complete properly.\n")
+			printf("  Delete the Remote-Ref from one of these commits and try again.\n")
 			exitf("duplicated remote ref %q found for %q and %q", last.GetRemoteRef(), last.ShortHash(), commit.ShortHash())
 		}
 		mapRefs[remoteRef] = commit
 	}
 
 	// fill remote ref for each commit
-	for commitWithoutRemoteRef := range findCommitsWithoutRemoteRef(stackedCommits) {
-		// Try to find an existing branch for this commit
-		existingBranch, err := findBranchForCommit(commitWithoutRemoteRef)
+	// For each commit without a remote-ref, find the local branch it's on
+	// IMPORTANT: Collect all branch mappings FIRST, before any rewords.
+	// After rewordCommit(), all hashes change and branches point to new commits.
+	branchForCommit := map[string]string{} // commit hash -> branch name
+	for _, commit := range stackedCommits {
+		if commit.Skip || commit.GetRemoteRef() != "" {
+			continue
+		}
+		localBranch, err := getLocalBranchForCommit(commit)
 		if err != nil {
-			debugf("warning: failed to check for existing branch: %v", err)
+			exitf("failed to find local branch for commit %v: %v", commit.ShortHash(), err)
+		}
+		if localBranch == "" {
+			printf("❌ ERROR: commit %v is not on any local branch\n", commit.ShortHash())
+			printf("   Title: %v\n", commit.Title)
+			printf("   Expected git-branchless to create a branch for this commit.\n")
+			exitf("commit %v is not on any local branch", commit.ShortHash())
+		}
+		branchForCommit[commit.Hash] = localBranch
+	}
+
+	// Now apply the mappings (reword in reverse order: HEAD first)
+	for i := len(stackedCommits) - 1; i >= 0; i-- {
+		commit := stackedCommits[i]
+		if commit.Skip || commit.GetRemoteRef() != "" {
+			continue
 		}
 
-		var remoteRef string
-		if existingBranch != "" {
-			// Use the existing branch name
-			remoteRef = existingBranch
-			debugf("found existing branch %v for %v", remoteRef, commitWithoutRemoteRef.ShortHash())
-		} else {
-			// Generate new branch name
-			if config.branchFromTitle {
-				// Generate from commit title
-				sanitized := sanitizeBranchName(commitWithoutRemoteRef.Title)
-				remoteRef = fmt.Sprintf("%v/%v", config.gh.user, sanitized)
-			} else {
-				// Generate from hash (default behavior)
-				remoteRef = fmt.Sprintf("%v/%v", config.gh.user, commitWithoutRemoteRef.ShortHash())
-			}
-			debugf("creating remote ref %v for %v", remoteRef, commitWithoutRemoteRef.Title)
-		}
-
-		commitWithoutRemoteRef.SetAttr(KeyRemoteRef, remoteRef)
-		must(rewordCommit(commitWithoutRemoteRef, commitWithoutRemoteRef.FullMessage()))
+		remoteRef := branchForCommit[commit.Hash]
+		commit.SetAttr(KeyRemoteRef, remoteRef)
+		must(rewordCommit(commit, commit.FullMessage()))
 
 		time.Sleep(time.Millisecond)
 	}
@@ -288,11 +297,9 @@ Hint: use "git add -A" and "git stash" to clean up the repository
 		return logs, func() bool {
 			out := must(git("push", "-f", config.git.remote, args))
 			time.Sleep(1 * time.Second)
-			base := resolveBase(commit)
 			needsPR := strings.Contains(out, "remote: Create a pull request")
-			if !needsPR {
-				mustE(githubPRUpdateBaseForCommit(commit, base))
-			}
+			// Don't do any PR operations here - handle all PR creation/updates
+			// sequentially after all pushes complete to ensure correct PR numbering
 			return needsPR
 		}
 	}
@@ -342,18 +349,82 @@ actually wrote. Re-run git-pr; if it recurs, file an issue with the output of
 		result.needsPR = result.exec()
 	})
 
-	// A base edit can be blocked because a PR is already in a native stack;
-	// githubPRUpdateBaseForCommit records that on commit.BaseBlocked instead of
-	// crashing. With --no-stack we don't manage the stack, so warn that the base
-	// wasn't retargeted; otherwise manageNativeStack (end of push) handles it.
-	if !config.dryRun && config.noStack {
-		warnStaleBlockedBases(stackedCommits)
-	}
+	// Handle PRs: look up existing PRs in parallel, create missing ones serially, update bases in parallel
+	if !config.dryRun {
+		// Phase 1: Look up existing PR numbers in parallel for commits that weren't new pushes
+		existingBranches := 0
+		for _, result := range pushResults {
+			if !result.needsPR {
+				existingBranches++
+			}
+		}
+		if existingBranches > 0 {
+			printf("\nLooking up existing PRs...\n")
+			var wg sync.WaitGroup
+			for _, result := range pushResults {
+				if result.needsPR {
+					continue // new branch, will create PR
+				}
+				wg.Add(1)
+				commit := result.commit
+				go func() {
+					defer wg.Done()
+					prNumber, _ := githubFindPRNumberForCommit(commit)
+					commit.PRNumber = prNumber
+				}()
+			}
+			wg.Wait()
+		}
 
-	// Create PRs sequentially in stack order after the parallel push barrier.
-	for _, result := range pushResults {
-		if result.needsPR {
-			mustE(githubCreatePRForCommit(result.commit, resolveBase(result.commit)))
+		// Phase 2: Create PRs serially for commits that need them (in stack order)
+		needsCreate := 0
+		for _, result := range pushResults {
+			if result.needsPR || result.commit.PRNumber == 0 {
+				needsCreate++
+			}
+		}
+		if needsCreate > 0 {
+			printf("\nCreating %d PR(s)...\n", needsCreate)
+			for _, result := range pushResults {
+				commit := result.commit
+				if result.needsPR || commit.PRNumber == 0 {
+					// New branch or existing branch without PR - create PR
+					printf("  %s\n", shortenTitle(commit.Title))
+					mustE(githubCreatePRForCommit(commit, resolveBase(commit)))
+				}
+			}
+		}
+
+		// Phase 3: Update PR bases in parallel for existing PRs
+		needsUpdate := 0
+		for _, result := range pushResults {
+			if !result.commit.NewlyCreated {
+				needsUpdate++
+			}
+		}
+		if needsUpdate > 0 {
+			printf("Updating PR(s)...\n")
+			var wg sync.WaitGroup
+			for _, result := range pushResults {
+				commit := result.commit
+				if commit.NewlyCreated {
+					continue // just created, base is already correct
+				}
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					err := githubPRUpdateBaseForCommit(commit, resolveBase(commit))
+					if err == nil {
+						commit.BaseUpdated = true
+					} else {
+						mustE(err)
+					}
+				}()
+			}
+			wg.Wait()
+		}
+		if config.noStack {
+			warnStaleBlockedBases(stackedCommits)
 		}
 	}
 
@@ -378,10 +449,10 @@ actually wrote. Re-run git-pr; if it recurs, file an issue with the output of
 		}
 	}
 
-	// wait for 5 seconds
+	// wait for GitHub API to propagate before updating PR descriptions
 	if !config.dryRun {
-		printf("waiting a bit...\n")
-		time.Sleep(5 * time.Second)
+		printf("Waiting for GitHub to sync...\n")
+		time.Sleep(3 * time.Second)
 	}
 
 	// update commits with PR numbers, concurrently
@@ -426,15 +497,46 @@ actually wrote. Re-run git-pr; if it recurs, file an issue with the output of
 		return
 	}
 
-	// update PRs with review link, concurrently
+	// Print results in stack order
 	printf("\n")
+	stackCount := 0
+	for _, commit := range stackedCommits {
+		if !commit.Skip {
+			stackCount++
+		}
+	}
+	orderHint := "oldest at the top"
+	if config.reverse {
+		orderHint = "newest at the top"
+	}
+	printf("Stack of %d (%s):\n\n", stackCount, orderHint)
+	first := true
+	for _, commit := range stackedCommits {
+		if commit.Skip {
+			continue
+		}
+		if !first {
+			printf("\n")
+		}
+		first = false
+		prURL := fmt.Sprintf("https://%v/%v/pull/%v", config.git.host, config.git.repo, commit.PRNumber)
+		status := ""
+		if commit.NewlyCreated {
+			status = " (created)"
+		} else if commit.BaseUpdated {
+			status = " (updated)"
+		}
+		printf("%s\n", commit.Title)
+		printf("%s%s\n", prURL, status)
+	}
+
+	// Collect PR body update targets. Results were already printed above in the
+	// user's configured stack order, so this phase must not emit a second list.
 	var prBodyTargets []*Commit
 	for _, commit := range stackedCommits {
 		if commit.Skip {
 			continue
 		}
-		prURL := ghWebURL("pull/%v", commit.PRNumber)
-		printf("%v\n", prURL)
 		prBodyTargets = append(prBodyTargets, commit)
 	}
 

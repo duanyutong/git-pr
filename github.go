@@ -35,7 +35,8 @@ type PR struct {
 	UpdatedAt *time.Time
 }
 
-func githubGetPRNumberForCommit(commit *Commit, base string) (int, error) {
+// githubFindPRNumberForCommit finds the PR number for a commit, returns 0 if not found
+func githubFindPRNumberForCommit(commit *Commit) (int, error) {
 	if commit.PRNumber != 0 {
 		return commit.PRNumber, nil
 	}
@@ -62,8 +63,22 @@ func githubGetPRNumberForCommit(commit *Commit, base string) (int, error) {
 			}
 		}
 	}
+
+	// Try searching by title
+	return githubSearchPRNumberForCommit(commit)
+}
+
+func githubGetPRNumberForCommit(commit *Commit, base string) (int, error) {
+	prNumber, err := githubFindPRNumberForCommit(commit)
+	if err != nil {
+		return 0, err
+	}
+	if prNumber != 0 {
+		return prNumber, nil
+	}
+
 	if commit.Skip {
-		return githubSearchPRNumberForCommit(commit)
+		return 0, nil
 	}
 
 	// the commit was pushed and got "Everything up-to-date", try creating new pr
