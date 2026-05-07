@@ -106,7 +106,7 @@ func TestGenerateStackInfo(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			config.reverse = tt.reverse
-			result := generateStackInfo(commits, tt.currentCommit, nil)
+			result := generateStackInfo(commits, tt.currentCommit, nil, nil)
 
 			// Check position header
 			if !strings.Contains(result, tt.wantPosition) {
@@ -143,7 +143,7 @@ func TestGenerateStackInfoSingleCommit(t *testing.T) {
 	config.git.host = "github.com"
 	config.git.repo = "user/repo"
 
-	result := generateStackInfo(commits, commits[0], nil)
+	result := generateStackInfo(commits, commits[0], nil, nil)
 
 	// Should NOT contain "This is PR"
 	if strings.Contains(result, "This is PR") {
@@ -197,7 +197,7 @@ func TestGenerateStackInfoPreservesMergedPRs(t *testing.T) {
 				{Number: 102, IsMerged: false}, // active, in current stack
 				{Number: 103, IsMerged: false}, // active, in current stack
 			}
-			result := generateStackInfo(commits, tt.currentCommit, allHistoricalPRs)
+			result := generateStackInfo(commits, tt.currentCommit, allHistoricalPRs, nil)
 
 			// Should preserve merged PR count in position header
 			if !strings.Contains(result, tt.wantPosition) {
@@ -326,7 +326,7 @@ func TestGenerateStackInfoInsertsNewPRInMiddle(t *testing.T) {
 	}
 	
 	config.reverse = false
-	result := generateStackInfo(commits, commits[1], allHistoricalPRs)
+	result := generateStackInfo(commits, commits[1], allHistoricalPRs, nil)
 	
 	// The new PR #104 should be inserted between #101 and #102
 	// Expected order (oldest first): #101, #104, #102, #103
@@ -454,7 +454,7 @@ func TestGenerateStackInfoMarksDownstackAsMerged(t *testing.T) {
 	config.git.repo = "user/repo"
 	
 	// Current commit is #102
-	result := generateStackInfo(commits, commits[0], allHistoricalPRs)
+	result := generateStackInfo(commits, commits[0], allHistoricalPRs, nil)
 	
 	// #101 should have ✔️ (downstack, merged)
 	if !strings.Contains(result, "✔️ #101") {
@@ -467,5 +467,42 @@ func TestGenerateStackInfoMarksDownstackAsMerged(t *testing.T) {
 	}
 	if !strings.Contains(result, "⬛ #104") {
 		t.Errorf("Upstack PR #104 should have ⬛ marker\nResult:\n%s", result)
+	}
+}
+
+func TestGenerateStackInfoMarksMergedInLocalStack(t *testing.T) {
+	// When a PR is still in the current local stack but already merged on GitHub
+	// (e.g. user hasn't pulled/rebased since merge), it should render as ✔️ rather than ⬛.
+	commits := []*Commit{
+		{Hash: "aaa11111", PRNumber: 101, Title: "First"},
+		{Hash: "bbb22222", PRNumber: 102, Title: "Second (merged on GitHub)"},
+		{Hash: "ccc33333", PRNumber: 103, Title: "Third (current)"},
+	}
+	allHistoricalPRs := []PRHistoryEntry{
+		{Number: 101, IsMerged: false},
+		{Number: 102, IsMerged: false},
+		{Number: 103, IsMerged: false},
+	}
+	mergedPRs := map[int]bool{102: true}
+
+	oldReverse := config.reverse
+	oldHost := config.git.host
+	oldRepo := config.git.repo
+	defer func() {
+		config.reverse = oldReverse
+		config.git.host = oldHost
+		config.git.repo = oldRepo
+	}()
+	config.reverse = false
+	config.git.host = "github.com"
+	config.git.repo = "user/repo"
+
+	result := generateStackInfo(commits, commits[2], allHistoricalPRs, mergedPRs)
+
+	if !strings.Contains(result, "✔️ #102") {
+		t.Errorf("Merged PR #102 in local stack should be marked ✔️\nResult:\n%s", result)
+	}
+	if strings.Contains(result, "⬛ #102") {
+		t.Errorf("Merged PR #102 should not have ⬛ marker\nResult:\n%s", result)
 	}
 }
