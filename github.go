@@ -24,7 +24,8 @@ type PR struct {
 	UpdatedAt *time.Time
 }
 
-func githubGetPRNumberForCommit(commit, prev *Commit) (int, error) {
+// githubFindPRNumberForCommit finds the PR number for a commit, returns 0 if not found
+func githubFindPRNumberForCommit(commit *Commit) (int, error) {
 	if commit.PRNumber != 0 {
 		return commit.PRNumber, nil
 	}
@@ -51,8 +52,22 @@ func githubGetPRNumberForCommit(commit, prev *Commit) (int, error) {
 			}
 		}
 	}
+	
+	// Try searching by title
+	return githubSearchPRNumberForCommit(commit)
+}
+
+func githubGetPRNumberForCommit(commit, prev *Commit) (int, error) {
+	prNumber, err := githubFindPRNumberForCommit(commit)
+	if err != nil {
+		return 0, err
+	}
+	if prNumber != 0 {
+		return prNumber, nil
+	}
+	
 	if commit.Skip {
-		return githubSearchPRNumberForCommit(commit)
+		return 0, nil
 	}
 
 	// the commit was pushed and got "Everything up-to-date", try creating new pr
@@ -124,6 +139,36 @@ func githubCreatePRForCommit(commit *Commit, prev *Commit) error {
 	}
 	commit.PRNumber = n
 	commit.NewlyCreated = true
+	return nil
+}
+
+// githubEnsurePRForCommit ensures a PR exists for the commit and updates its base
+// This is called for commits where the branch already existed (not a new push)
+func githubEnsurePRForCommit(commit *Commit, prev *Commit) error {
+	base := xif(prev != nil, prev.GetRemoteRef(), config.git.remoteTrunk)
+	
+	// First, check if PR already exists
+	prNumber, err := githubFindPRNumberForCommit(commit)
+	if err != nil {
+		return err
+	}
+	
+	if prNumber == 0 {
+		// No PR exists, create one
+		err = githubCreatePRForCommit(commit, prev)
+		if err != nil {
+			return err
+		}
+		prNumber = commit.PRNumber
+	} else {
+		commit.PRNumber = prNumber
+		// Update the base branch
+		_, err = gh("pr", "edit", strconv.Itoa(prNumber), "--base", base)
+		if err != nil {
+			return err
+		}
+	}
+	
 	return nil
 }
 

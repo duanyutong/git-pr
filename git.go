@@ -384,12 +384,13 @@ func deleteBranch(branch string) error {
 	return err
 }
 
-// findBranchForCommit finds existing local or remote branch pointing to the given commit
+// findBranchForCommit finds existing local or remote branch that POINTS TO the given commit
+// (not just contains it in history)
 func findBranchForCommit(commit *Commit) (string, error) {
-	// Get all branches containing this commit
-	output, err := git("branch", "-a", "--contains", commit.Hash, "--format=%(refname)")
+	// Get all branches with their HEAD commit
+	output, err := git("branch", "-a", "--format=%(refname)|%(objectname)")
 	if err != nil {
-		return "", nil // commit might not be pushed yet, not an error
+		return "", nil // error listing branches, not a fatal error
 	}
 	
 	lines := strings.Split(strings.TrimSpace(output), "\n")
@@ -402,27 +403,43 @@ func findBranchForCommit(commit *Commit) (string, error) {
 	
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		
+		parts := strings.Split(line, "|")
+		if len(parts) != 2 {
+			continue
+		}
+		
+		refName := parts[0]
+		commitHash := parts[1]
+		
+		// Only match if branch points EXACTLY to this commit
+		if commitHash != commit.Hash {
+			continue
+		}
 		
 		// Skip HEAD and main/master branches
-		if strings.Contains(line, "HEAD") {
+		if strings.Contains(refName, "HEAD") {
 			continue
 		}
-		if strings.HasSuffix(line, "/main") || strings.HasSuffix(line, "/master") {
+		if strings.HasSuffix(refName, "/main") || strings.HasSuffix(refName, "/master") {
 			continue
 		}
-		if line == "refs/heads/main" || line == "refs/heads/master" {
+		if refName == "refs/heads/main" || refName == "refs/heads/master" {
 			continue
 		}
 		
 		// Prefer local branches
-		if strings.HasPrefix(line, "refs/heads/") {
-			localBranch = strings.TrimPrefix(line, "refs/heads/")
+		if strings.HasPrefix(refName, "refs/heads/") {
+			localBranch = strings.TrimPrefix(refName, "refs/heads/")
 			break // found local branch, use it
 		}
 		
 		// Track remote branches as fallback
-		if strings.HasPrefix(line, "refs/remotes/"+config.git.remote+"/") {
-			remoteBranch = strings.TrimPrefix(line, "refs/remotes/"+config.git.remote+"/")
+		if strings.HasPrefix(refName, "refs/remotes/"+config.git.remote+"/") {
+			remoteBranch = strings.TrimPrefix(refName, "refs/remotes/"+config.git.remote+"/")
 		}
 	}
 	
@@ -431,4 +448,58 @@ func findBranchForCommit(commit *Commit) (string, error) {
 		return localBranch, nil
 	}
 	return remoteBranch, nil
+}
+
+// getLocalBranchForCommit returns the local branch that points to this commit
+// Used when branches are pre-created (e.g., by git-branchless)
+func getLocalBranchForCommit(commit *Commit) (string, error) {
+	// Get all local branches with their HEAD commit
+	output, err := git("branch", "--format=%(refname:short)|%(objectname)")
+	if err != nil {
+		return "", err
+	}
+	
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	
+	debugf("[getLocalBranchForCommit] looking for commit %v", commit.Hash)
+	
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		
+		parts := strings.Split(line, "|")
+		if len(parts) != 2 {
+			continue
+		}
+		
+		branchName := parts[0]
+		commitHash := parts[1]
+		
+		// Skip main/master
+		if branchName == "main" || branchName == "master" {
+			continue
+		}
+		
+		debugf("  checking %v -> %v (match: %v)", branchName, commitHash[:8], commitHash == commit.Hash)
+		
+		// Check for exact match
+		if commitHash == commit.Hash {
+			debugf("  FOUND: %v", branchName)
+			return branchName, nil
+		}
+	}
+	
+	// No branch found - log debug info
+	printf("[BRANCH-NOT-FOUND] commit %v not on any local branch\n", commit.Hash[:8])
+	printf("  Commit title: %v\n", commit.Title)
+	printf("  Available local branches:\n")
+	for _, line := range lines {
+		parts := strings.Split(line, "|")
+		if len(parts) == 2 && parts[0] != "main" && parts[0] != "master" {
+			printf("    %v -> %v\n", parts[0], parts[1][:8])
+		}
+	}
+	return "", nil
 }

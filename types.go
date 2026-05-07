@@ -23,6 +23,7 @@ type Commit struct {
 	PRNumber     int
 	Skip         bool // do not push this commit
 	NewlyCreated bool // true if PR was just created (not existing)
+	BaseUpdated  bool // true if PR base was updated
 }
 
 func (commit *Commit) String() string {
