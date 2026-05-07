@@ -548,10 +548,17 @@ actually wrote. Re-run git-pr; if it recurs, file an issue with the output of
 	}
 	var allHistoricalPRs []PRHistoryEntry
 	prHistoryMap := make(map[int]bool)
-	for _, commit := range prBodyTargets {
+	mergedPRs := make(map[int]bool)
+	for _, commit := range fullStack {
+		if commit.PRNumber == 0 {
+			continue
+		}
 		pr, err := githubGetPRByNumber(commit.PRNumber)
 		if err != nil || pr == nil {
 			continue
+		}
+		if pr.Merged {
+			mergedPRs[commit.PRNumber] = true
 		}
 		for _, entry := range extractPRHistoryFromStackInfo(pr.Body) {
 			if prHistoryMap[entry.Number] {
@@ -571,7 +578,7 @@ actually wrote. Re-run git-pr; if it recurs, file an issue with the output of
 		// generate the PR body with stack info — render the full chain from
 		// trunk up to the selected tip, so PR bodies of selected commits show
 		// their position in the broader stack (not just the selected range).
-		stackInfo := generateStackInfo(fullStack, commit, allHistoricalPRs)
+		stackInfo := generateStackInfo(fullStack, commit, allHistoricalPRs, mergedPRs)
 		body := generatePRBody(commit, pr.Body, stackInfo)
 
 		// update the PR
@@ -996,7 +1003,7 @@ func extractPRNumbersFromStackInfo(existingBody string) []int {
 //   - reverse=true: newest at top, oldest at bottom (natural git log order)
 //
 // Historical PRs not in current stack are preserved with their original markers.
-func generateStackInfo(stackedCommits []*Commit, currentCommit *Commit, allHistoricalPRs []PRHistoryEntry) string {
+func generateStackInfo(stackedCommits []*Commit, currentCommit *Commit, allHistoricalPRs []PRHistoryEntry, mergedPRs map[int]bool) string {
 	var stackB strings.Builder
 	sprf := func(msg string, args ...any) { fprintf(&stackB, msg, args...) }
 
@@ -1039,8 +1046,8 @@ func generateStackInfo(stackedCommits []*Commit, currentCommit *Commit, allHisto
 	// First, add historical entries in order (will be replaced/updated where applicable)
 	for _, hist := range allHistoricalPRs {
 		if cwi, ok := currentStackMap[hist.Number]; ok {
-			// This PR is in current stack - use the commit
-			entries = append(entries, stackEntry{prNumber: hist.Number, commit: cwi.commit, index: cwi.index})
+			// This PR is in current stack - use the commit, but still flag merged if it was merged on GitHub
+			entries = append(entries, stackEntry{prNumber: hist.Number, commit: cwi.commit, isMerged: mergedPRs[hist.Number], index: cwi.index})
 		} else {
 			// This PR is not in current stack - preserve historical marker
 			entries = append(entries, stackEntry{prNumber: hist.Number, isMerged: hist.IsMerged, index: -1})
@@ -1058,7 +1065,7 @@ func generateStackInfo(stackedCommits []*Commit, currentCommit *Commit, allHisto
 			}
 		}
 		// Insert at the found position
-		newEntry := stackEntry{prNumber: newPR.commit.PRNumber, commit: newPR.commit, index: newPR.index}
+		newEntry := stackEntry{prNumber: newPR.commit.PRNumber, commit: newPR.commit, isMerged: mergedPRs[newPR.commit.PRNumber], index: newPR.index}
 		entries = append(entries[:insertAt], append([]stackEntry{newEntry}, entries[insertAt:]...)...)
 	}
 
@@ -1102,7 +1109,7 @@ func generateStackInfo(stackedCommits []*Commit, currentCommit *Commit, allHisto
 	for _, e := range renderEntries {
 		if e.commit != nil {
 			// Current stack PR - render with commit info
-			renderCommit(&stackB, e.commit, currentCommit)
+			renderCommit(&stackB, e.commit, currentCommit, e.isMerged)
 		} else {
 			// Historical PR not in current stack - preserve marker
 			if e.isMerged {
@@ -1117,7 +1124,7 @@ func generateStackInfo(stackedCommits []*Commit, currentCommit *Commit, allHisto
 }
 
 // renderCommit renders a single commit line to the stack info
-func renderCommit(stackB *strings.Builder, cm *Commit, currentCommit *Commit) {
+func renderCommit(stackB *strings.Builder, cm *Commit, currentCommit *Commit, isMerged bool) {
 	sprf := func(msg string, args ...any) { fprintf(stackB, msg, args...) }
 
 	var cmRef string
@@ -1132,9 +1139,12 @@ func renderCommit(stackB *strings.Builder, cm *Commit, currentCommit *Commit) {
 		formattedEmail := first + "&#x200B;" + last // zero-width space to prevent creating email link
 		cmRef = fmt.Sprintf(`&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<b>[%v (%v)](%v)</b>&nbsp;&nbsp; ${\textsf{\color{lightblue}· %v}}$`, cm.Title, cm.ShortHash(), cmURL, formattedEmail)
 	}
-	if cm.Hash == currentCommit.Hash {
+	switch {
+	case cm.Hash == currentCommit.Hash:
 		sprf("* " + emojisx[currentCommit.PRNumber%len(emojisx)])
-	} else {
+	case isMerged:
+		sprf("* ✔️")
+	default:
 		sprf("* ⬛")
 	}
 	sprf(" %v\n", cmRef)

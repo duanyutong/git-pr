@@ -18,6 +18,8 @@ type NewPRBody struct {
 type PR struct {
 	Number int    `json:"number"`
 	Body   string `json:"body"`
+	State  string `json:"state"`
+	Merged bool   `json:"merged"`
 	Head   struct {
 		Ref string `json:"ref"`
 	} `json:"head"`
