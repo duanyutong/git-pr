@@ -743,8 +743,13 @@ func renderCommit(stackB *strings.Builder, cm *Commit, currentCommit *Commit, is
 }
 
 // generatePRBody generates the PR body based on commit message and existing PR body
-// If commit has a message, it overrides the entire PR body
-// If commit has no message (GitHub UI user), it preserves existing content and only updates stack info
+// If the existing PR body already has sentinel markers, only the section between
+// them is replaced — the rest of the description is preserved verbatim. This lets
+// users edit the PR description on GitHub (or have other tools/templates fill it
+// in) without git-pr clobbering their work.
+// Otherwise, if the commit has a message, it overrides the entire PR body.
+// If the commit has no message (GitHub UI user), existing content is preserved
+// and stack info is appended.
 func generatePRBody(commit *Commit, existingBody string, stackInfo string) string {
 	// normalize line endings from GitHub (may have \r\n)
 	existingBody = strings.ReplaceAll(existingBody, "\r\n", "\n")
@@ -752,31 +757,29 @@ func generatePRBody(commit *Commit, existingBody string, stackInfo string) strin
 	// Wrap stack info with sentinel markers for reliable detection and replacement
 	wrappedStackInfo := fmt.Sprintf("%s\n%s\n%s", stackInfoStartMarker, stackInfo, stackInfoEndMarker)
 
-	if commit.Message != "" {
-		// user manages via git commits - override entire PR body
-		return fmt.Sprintf("%s\n\n---\n%s", commit.Message, wrappedStackInfo)
-	}
-
-	// user manages via GitHub UI - preserve their edits, only update stack info
-	// Check if we have existing git-pr section marked with sentinels
+	// If the existing body already has sentinels, only update the section between
+	// them and preserve the surrounding content — regardless of whether this commit
+	// has a message body. The remote description is the source of truth once it's
+	// been set up with markers.
 	startIdx := strings.Index(existingBody, stackInfoStartMarker)
 	endIdx := strings.Index(existingBody, stackInfoEndMarker)
 
 	if startIdx >= 0 && endIdx >= 0 && endIdx > startIdx {
-		// Found existing git-pr section - replace it
-		// Keep everything before start marker and everything after end marker
 		before := existingBody[:startIdx]
 		after := existingBody[endIdx+len(stackInfoEndMarker):]
-		
-		// Trim trailing whitespace from before and leading whitespace from after
+
 		before = strings.TrimRight(before, " \t\n")
 		after = strings.TrimLeft(after, " \t\n")
-		
-		// Reconstruct: before + wrapped stack info + after (if not empty)
+
 		if after != "" {
 			return before + "\n\n" + wrappedStackInfo + "\n\n" + after
 		}
 		return before + "\n\n" + wrappedStackInfo
+	}
+
+	if commit.Message != "" {
+		// user manages via git commits - override entire PR body
+		return fmt.Sprintf("%s\n\n---\n%s", commit.Message, wrappedStackInfo)
 	}
 
 	// No sentinel markers found - fall back to old detection logic for backwards compatibility
