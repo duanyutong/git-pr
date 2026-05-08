@@ -389,8 +389,15 @@ Hint: use "git add -A" and "git stash" to clean up the repository
 		orderHint = "newest at the top"
 	}
 	printf("Stack of %d (%s):\n\n", stackCount, orderHint)
+	printOrder := stackedCommits
+	if config.reverse {
+		printOrder = make([]*Commit, len(stackedCommits))
+		for i, c := range stackedCommits {
+			printOrder[len(stackedCommits)-1-i] = c
+		}
+	}
 	first := true
-	for _, commit := range stackedCommits {
+	for _, commit := range printOrder {
 		if commit.Skip {
 			continue
 		}
@@ -622,66 +629,42 @@ func generateStackInfo(stackedCommits []*Commit, currentCommit *Commit, allHisto
 	var stackB strings.Builder
 	sprf := func(msg string, args ...any) { fprintf(&stackB, msg, args...) }
 
-	// Build map of current stack: PR number -> commit + index (for ordering)
-	type commitWithIndex struct {
-		commit *Commit
-		index  int
-	}
-	currentStackMap := make(map[int]commitWithIndex)
-	for i, cm := range stackedCommits {
+	// Build set of current stack PR numbers for fast lookup
+	currentStackSet := make(map[int]bool)
+	for _, cm := range stackedCommits {
 		if cm.PRNumber != 0 {
-			currentStackMap[cm.PRNumber] = commitWithIndex{commit: cm, index: i}
+			currentStackSet[cm.PRNumber] = true
 		}
 	}
-	
-	// Build set of historical PR numbers
-	historicalPRs := make(map[int]bool)
-	for _, entry := range allHistoricalPRs {
-		historicalPRs[entry.Number] = true
-	}
-	
-	// Find new PRs in current stack that aren't in history
-	var newPRs []commitWithIndex
-	for i, cm := range stackedCommits {
-		if cm.PRNumber != 0 && !historicalPRs[cm.PRNumber] {
-			newPRs = append(newPRs, commitWithIndex{commit: cm, index: i})
-		}
-	}
-	
-	// Build the final list in internal order (oldest first)
-	// We need to merge historical entries with new PRs based on stack position
+
+	// Build the final list in internal order (oldest first):
+	//   1. Historical-only PRs (merged/closed, not in current stack) first — these are the
+	//      older PRs that have already landed. Preserve their relative order from history.
+	//   2. Current stack PRs in chronological order from stackedCommits.
+	// Reversing this for newest-at-top display puts the current stack on top
+	// (newest first) with merged history at the bottom — a continuous stack.
 	type stackEntry struct {
 		prNumber int
-		commit   *Commit   // non-nil if in current stack
-		isMerged bool      // only used if commit is nil (historical only)
-		index    int       // position in current stack (-1 if not in current stack)
+		commit   *Commit // non-nil if in current stack
+		isMerged bool    // only used if commit is nil (historical only)
+		index    int     // position in current stack (-1 if not in current stack)
 	}
 	var entries []stackEntry
-	
-	// First, add historical entries in order (will be replaced/updated where applicable)
+
+	seen := make(map[int]bool)
 	for _, hist := range allHistoricalPRs {
-		if cwi, ok := currentStackMap[hist.Number]; ok {
-			// This PR is in current stack - use the commit, but still flag merged if it was merged on GitHub
-			entries = append(entries, stackEntry{prNumber: hist.Number, commit: cwi.commit, isMerged: mergedPRs[hist.Number], index: cwi.index})
-		} else {
-			// This PR is not in current stack - preserve historical marker
-			entries = append(entries, stackEntry{prNumber: hist.Number, isMerged: hist.IsMerged, index: -1})
+		if currentStackSet[hist.Number] || seen[hist.Number] {
+			continue
 		}
+		seen[hist.Number] = true
+		entries = append(entries, stackEntry{prNumber: hist.Number, isMerged: hist.IsMerged, index: -1})
 	}
-	
-	// Insert new PRs at correct positions based on their index in stackedCommits
-	// Find where each new PR should go relative to existing entries
-	for _, newPR := range newPRs {
-		// Find insertion point: after the last entry with index < newPR.index
-		insertAt := 0
-		for i, e := range entries {
-			if e.index >= 0 && e.index < newPR.index {
-				insertAt = i + 1
-			}
+	for i, cm := range stackedCommits {
+		if cm.PRNumber == 0 || seen[cm.PRNumber] {
+			continue
 		}
-		// Insert at the found position
-		newEntry := stackEntry{prNumber: newPR.commit.PRNumber, commit: newPR.commit, isMerged: mergedPRs[newPR.commit.PRNumber], index: newPR.index}
-		entries = append(entries[:insertAt], append([]stackEntry{newEntry}, entries[insertAt:]...)...)
+		seen[cm.PRNumber] = true
+		entries = append(entries, stackEntry{prNumber: cm.PRNumber, commit: cm, isMerged: mergedPRs[cm.PRNumber], index: i})
 	}
 	
 	// Calculate total count and current PR position (based on internal/chronological order)
@@ -692,12 +675,6 @@ func generateStackInfo(stackedCommits []*Commit, currentCommit *Commit, allHisto
 			currentPosition = i + 1 // 1-indexed, based on chronological position
 			break
 		}
-	}
-	
-	// Don't mark upstack PRs (after current) as merged - they haven't been pruned locally yet
-	// Only mark downstack PRs (before current) as merged if they're not in current stack
-	for i := currentPosition; i < len(entries); i++ {
-		entries[i].isMerged = false // Upstack PRs stay as they were
 	}
 	
 	// Create display order from internal order:

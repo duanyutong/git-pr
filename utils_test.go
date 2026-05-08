@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -421,26 +422,22 @@ This is PR **2 of 3** in a stack
 	}
 }
 
-func TestGenerateStackInfoMarksDownstackAsMerged(t *testing.T) {
-	// When a PR is not in the current local stack but appears in history,
-	// it should be marked as merged (✔️) ONLY if it's downstack (before current PR)
-	
-	// Setup: current stack has #102, #103 but history has #101, #102, #103, #104
-	// #101 is downstack (should be ✔️), #104 is upstack (should stay ⬛)
+func TestGenerateStackInfoHistoricalPRsAreMerged(t *testing.T) {
+	// Historical PRs that are not in the current local stack are treated as
+	// merged history and rendered with ✔️. They're placed before the current
+	// stack in internal order so newest-at-top display puts them at the bottom,
+	// keeping the current stack continuous on top.
 	commits := []*Commit{
 		{Hash: "def67890", PRNumber: 102, Title: "Second commit"},
 		{Hash: "ghi13579", PRNumber: 103, Title: "Third commit"},
 	}
-	
-	// Historical PRs include #101 (not in stack anymore) and #104 (upstack, also not in stack)
 	allHistoricalPRs := []PRHistoryEntry{
-		{Number: 101, IsMerged: true},  // downstack, marked as merged during accumulation
-		{Number: 102, IsMerged: false}, // in current stack
-		{Number: 103, IsMerged: false}, // in current stack
-		{Number: 104, IsMerged: true},  // upstack - wrongly marked during accumulation, should be fixed
+		{Number: 101, IsMerged: true}, // not in current stack -> merged history
+		{Number: 102, IsMerged: false},
+		{Number: 103, IsMerged: false},
+		{Number: 104, IsMerged: true}, // not in current stack -> merged history
 	}
-	
-	// Save and restore config
+
 	oldReverse := config.reverse
 	oldHost := config.git.host
 	oldRepo := config.git.repo
@@ -452,21 +449,26 @@ func TestGenerateStackInfoMarksDownstackAsMerged(t *testing.T) {
 	config.reverse = false
 	config.git.host = "github.com"
 	config.git.repo = "user/repo"
-	
-	// Current commit is #102
+
 	result := generateStackInfo(commits, commits[0], allHistoricalPRs, nil)
-	
-	// #101 should have ✔️ (downstack, merged)
-	if !strings.Contains(result, "✔️ #101") {
-		t.Errorf("Downstack PR #101 should be marked as merged (✔️)\nResult:\n%s", result)
+
+	for _, pr := range []int{101, 104} {
+		if !strings.Contains(result, fmt.Sprintf("✔️ #%d", pr)) {
+			t.Errorf("Historical PR #%d should be marked as merged (✔️)\nResult:\n%s", pr, result)
+		}
 	}
-	
-	// #104 should have ⬛ (upstack, NOT marked as merged even though not in local stack)
-	if strings.Contains(result, "✔️ #104") {
-		t.Errorf("Upstack PR #104 should NOT be marked as merged\nResult:\n%s", result)
+
+	// Historical entries must come before any current stack entry in internal order.
+	idx101 := strings.Index(result, "#101")
+	idx104 := strings.Index(result, "#104")
+	idx102 := strings.Index(result, "#102")
+	idx103 := strings.Index(result, "#103")
+	if idx101 < 0 || idx104 < 0 || idx102 < 0 || idx103 < 0 {
+		t.Fatalf("missing PR ref in result:\n%s", result)
 	}
-	if !strings.Contains(result, "⬛ #104") {
-		t.Errorf("Upstack PR #104 should have ⬛ marker\nResult:\n%s", result)
+	if !(idx101 < idx102 && idx104 < idx102 && idx102 < idx103) {
+		t.Errorf("expected history PRs before current stack, got order 101=%d 104=%d 102=%d 103=%d\n%s",
+			idx101, idx104, idx102, idx103, result)
 	}
 }
 
