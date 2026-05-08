@@ -191,6 +191,52 @@ func TestGeneratePRBodyWithCommitMessage(t *testing.T) {
 	t.Log("✓ Commit message correctly overrides PR body with wrapped stack info")
 }
 
+// TestGeneratePRBodyPreservesExistingWhenSentinelsPresent verifies that when the
+// remote PR description already has sentinel markers, only the section between
+// them is updated — even if the commit has a message body. The remote
+// description (which the user may have filled out via GitHub UI, a PR template,
+// or another tool) is the source of truth once it has markers.
+func TestGeneratePRBodyPreservesExistingWhenSentinelsPresent(t *testing.T) {
+	commit := &Commit{
+		Hash:    "abc12345",
+		Message: "Stale commit body that should NOT replace the rich PR description",
+	}
+
+	stackInfo := "* ◻️ #101\n* ◻️ #102"
+	existingBody := "## Motivation\n\nDetailed rationale a human wrote.\n\n## Test plan\n\n- [x] Unit tests\n\n---\n" +
+		stackInfoStartMarker + "\nOld stack\n* ◻️ #999\n" + stackInfoEndMarker
+
+	result := generatePRBody(commit, existingBody, stackInfo)
+
+	// Rich existing description must be preserved verbatim.
+	for _, want := range []string{"## Motivation", "Detailed rationale a human wrote.", "## Test plan", "- [x] Unit tests"} {
+		if !strings.Contains(result, want) {
+			t.Errorf("Existing description content %q was not preserved.\nResult:\n%s", want, result)
+		}
+	}
+
+	// Commit message body must NOT replace the existing description.
+	if strings.Contains(result, "Stale commit body") {
+		t.Errorf("Commit message body should not override existing PR body when sentinels are present.\nResult:\n%s", result)
+	}
+
+	// Stack info between markers must be updated.
+	if !strings.Contains(result, "#101") || !strings.Contains(result, "#102") {
+		t.Errorf("New stack info missing.\nResult:\n%s", result)
+	}
+	if strings.Contains(result, "#999") || strings.Contains(result, "Old stack") {
+		t.Errorf("Old stack info still present.\nResult:\n%s", result)
+	}
+
+	// Exactly one pair of sentinels.
+	if got := strings.Count(result, stackInfoStartMarker); got != 1 {
+		t.Errorf("Expected exactly 1 start marker, got %d", got)
+	}
+	if got := strings.Count(result, stackInfoEndMarker); got != 1 {
+		t.Errorf("Expected exactly 1 end marker, got %d", got)
+	}
+}
+
 // TestSentinelMarkerStructure tests the sentinel marker format and positioning.
 func TestSentinelMarkerStructure(t *testing.T) {
 	commit := &Commit{Hash: "abc12345", Message: ""}
