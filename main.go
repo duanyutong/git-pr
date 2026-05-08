@@ -69,7 +69,18 @@ Hint: use "git add -A" and "git stash" to clean up the repository
 		head = strings.TrimSpace(out)
 		debugf("resolved jj @- to %v", head)
 	}
-	stackedCommits := must(getStackedCommits(originMain, head))
+
+	// Capture the user's starting position so we can return them here after the
+	// run. We expand the stack tip below to include descendants of HEAD, which
+	// would otherwise leave them checked out at the top of the stack instead of
+	// where they invoked git-pr.
+	originalBranch, _ := git("branch", "--show-current")
+	originalBranch = strings.TrimSpace(originalBranch)
+
+	// Operate on the full stack — including descendants of HEAD — so users who
+	// run git-pr from a middle commit still see every PR in the stack.
+	stackTip := resolveStackTip(head)
+	stackedCommits := must(getStackedCommits(originMain, stackTip))
 	if len(stackedCommits) == 0 {
 		exitf("no commits to submit")
 	}
@@ -151,7 +162,10 @@ Hint: use "git add -A" and "git stash" to clean up the repository
 
 		time.Sleep(time.Millisecond)
 	}
-	stackedCommits = must(getStackedCommits(originMain, head))
+	// Re-resolve the tip after rewords — branchless moves the branches forward
+	// to the rewritten commits, so the descendant chain may have new hashes.
+	stackTip = resolveStackTip(head)
+	stackedCommits = must(getStackedCommits(originMain, stackTip))
 
 	// checkpoint: rewrite
 	if config.stopAfter == "rewrite" {
@@ -322,10 +336,16 @@ Hint: use "git add -A" and "git stash" to clean up the repository
 		return
 	}
 
-	// checkout the latest stacked commit
+	// Return the user to where they started. With the stack-tip expansion above,
+	// we may have rewritten descendant commits the user wasn't even on; checking
+	// out the tip would silently move them. If we captured a starting branch,
+	// land them back on it (branchless follows rewrites, so the branch points
+	// at the rewritten commit). Otherwise, fall back to the tip.
 	if !config.dryRun {
 		if config.jj.enabled {
 			debugf("skipping git checkout in jj repo (jj manages working copy)")
+		} else if originalBranch != "" {
+			must(git("checkout", originalBranch))
 		} else {
 			must(git("checkout", stackedCommits[len(stackedCommits)-1].Hash))
 		}

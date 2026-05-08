@@ -256,6 +256,82 @@ func jjGetWorkingCopy() (*Commit, error) {
 	return parseJJWorkingCopy(checkOutput, infoOutput)
 }
 
+// resolveStackTip walks descendants of `target` (typically HEAD) along local
+// branch refs and returns the topmost commit reachable through them. This lets
+// git-pr operate on the full stack even when the user has checked out a middle
+// commit of the stack. Returns `target` unchanged if there are no descendants
+// on local branches, or if the descendants diverge into multiple unrelated
+// chains — in which case we can't unambiguously pick a single tip.
+func resolveStackTip(target string) string {
+	targetHash, err := git("rev-parse", target)
+	if err != nil {
+		return target
+	}
+	targetHash = strings.TrimSpace(targetHash)
+
+	output, err := git("for-each-ref", "--contains", target,
+		"--format=%(objectname)", "refs/heads/")
+	if err != nil {
+		return target
+	}
+
+	var tips []string
+	seen := map[string]bool{}
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		h := strings.TrimSpace(line)
+		if h == "" || h == targetHash || seen[h] {
+			continue
+		}
+		seen[h] = true
+		tips = append(tips, h)
+	}
+
+	leaf, ok := pickStackLeaf(tips, isAncestorCommit)
+	if !ok {
+		debugf("warning: %v has multiple unrelated descendant branches; operating on %v..HEAD only", target, target)
+		return target
+	}
+	if leaf == "" {
+		return target
+	}
+	return leaf
+}
+
+// pickStackLeaf returns the unique tip in `tips` that has every other tip as
+// an ancestor (i.e. the leaf of a linear stack of descendants). Returns
+// (leaf, true) on success. Returns ("", true) when `tips` is empty (no
+// descendants — caller should keep their target). Returns ("", false) when
+// descendants diverge into multiple unrelated chains. The `isAncestor`
+// argument lets tests substitute a fake without invoking git.
+func pickStackLeaf(tips []string, isAncestor func(ancestor, descendant string) bool) (string, bool) {
+	if len(tips) == 0 {
+		return "", true
+	}
+	for _, candidate := range tips {
+		isLeaf := true
+		for _, other := range tips {
+			if candidate == other {
+				continue
+			}
+			if !isAncestor(other, candidate) {
+				isLeaf = false
+				break
+			}
+		}
+		if isLeaf {
+			return candidate, true
+		}
+	}
+	return "", false
+}
+
+// isAncestorCommit reports whether `ancestor` is an ancestor of `descendant`.
+// Uses `git merge-base --is-ancestor`, which exits 0 for true and 1 for false.
+func isAncestorCommit(ancestor, descendant string) bool {
+	_, err := git("merge-base", "--is-ancestor", ancestor, descendant)
+	return err == nil
+}
+
 func getStackedCommits(base, target string) ([]*Commit, error) {
 	logs, err := gitLogs(100, fmt.Sprintf("%v..%v", base, target))
 	if err != nil {

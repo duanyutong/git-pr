@@ -346,3 +346,100 @@ func TestShortenTitle(t *testing.T) {
 		assert(t, strings.HasSuffix(result, "...")).Errorf("should end with '...': %q", result)
 	})
 }
+
+// TestPickStackLeaf covers the descendant-resolution logic that lets git-pr
+// operate on the full stack even when the user has checked out a middle commit.
+// Each test builds an in-memory ancestor relation and asserts which tip is
+// chosen as the leaf.
+func TestPickStackLeaf(t *testing.T) {
+	// makeIsAncestor builds an isAncestor function from a parent->child map of
+	// the form parents[child] = []parent. The relation is the transitive closure
+	// of these direct edges, plus reflexivity (a commit is an ancestor of
+	// itself). This mirrors how git would answer the same query.
+	makeIsAncestor := func(parents map[string][]string) func(ancestor, descendant string) bool {
+		return func(ancestor, descendant string) bool {
+			if ancestor == descendant {
+				return true
+			}
+			// BFS up from `descendant` toward roots, looking for `ancestor`.
+			stack := []string{descendant}
+			visited := map[string]bool{descendant: true}
+			for len(stack) > 0 {
+				cur := stack[len(stack)-1]
+				stack = stack[:len(stack)-1]
+				for _, p := range parents[cur] {
+					if p == ancestor {
+						return true
+					}
+					if !visited[p] {
+						visited[p] = true
+						stack = append(stack, p)
+					}
+				}
+			}
+			return false
+		}
+	}
+
+	t.Run("no descendants returns empty leaf and ok", func(t *testing.T) {
+		leaf, ok := pickStackLeaf(nil, makeIsAncestor(nil))
+		assert(t, ok).Errorf("expected ok=true for empty tips")
+		assert(t, leaf == "").Errorf("expected empty leaf, got %q", leaf)
+	})
+
+	t.Run("single descendant tip is the leaf", func(t *testing.T) {
+		// HEAD -> A
+		leaf, ok := pickStackLeaf([]string{"A"}, makeIsAncestor(map[string][]string{
+			"A": {"HEAD"},
+		}))
+		assert(t, ok).Errorf("expected ok=true")
+		assert(t, leaf == "A").Errorf("expected leaf=A, got %q", leaf)
+	})
+
+	t.Run("linear chain of descendants picks the topmost", func(t *testing.T) {
+		// HEAD -> A -> B -> C, all on branches. Leaf must be C.
+		isAncestor := makeIsAncestor(map[string][]string{
+			"A": {"HEAD"},
+			"B": {"A"},
+			"C": {"B"},
+		})
+		leaf, ok := pickStackLeaf([]string{"A", "B", "C"}, isAncestor)
+		assert(t, ok).Errorf("expected ok=true")
+		assert(t, leaf == "C").Errorf("expected leaf=C, got %q", leaf)
+	})
+
+	t.Run("linear chain regardless of input order", func(t *testing.T) {
+		// Same relation as above, but tips listed in a different order.
+		isAncestor := makeIsAncestor(map[string][]string{
+			"A": {"HEAD"},
+			"B": {"A"},
+			"C": {"B"},
+		})
+		leaf, ok := pickStackLeaf([]string{"C", "A", "B"}, isAncestor)
+		assert(t, ok).Errorf("expected ok=true")
+		assert(t, leaf == "C").Errorf("expected leaf=C, got %q", leaf)
+	})
+
+	t.Run("diverged stacks return ok=false", func(t *testing.T) {
+		// HEAD -> A,  HEAD -> B (two unrelated descendants). No single leaf.
+		isAncestor := makeIsAncestor(map[string][]string{
+			"A": {"HEAD"},
+			"B": {"HEAD"},
+		})
+		_, ok := pickStackLeaf([]string{"A", "B"}, isAncestor)
+		assert(t, !ok).Errorf("expected ok=false for diverged tips")
+	})
+
+	t.Run("diverged stack with sub-chains still returns ok=false", func(t *testing.T) {
+		// HEAD -> A -> B,  HEAD -> X -> Y. Two independent chains, no leaf
+		// dominates the other.
+		isAncestor := makeIsAncestor(map[string][]string{
+			"A": {"HEAD"},
+			"B": {"A"},
+			"X": {"HEAD"},
+			"Y": {"X"},
+		})
+		_, ok := pickStackLeaf([]string{"A", "B", "X", "Y"}, isAncestor)
+		assert(t, !ok).Errorf("expected ok=false for two independent chains")
+	})
+}
