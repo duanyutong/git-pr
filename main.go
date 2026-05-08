@@ -102,6 +102,11 @@ Hint: use "git add -A" and "git stash" to clean up the repository
 		}
 	}
 
+	// Capture the user's starting branch before any rewords or descendant-tip
+	// expansion so a non-range run can return to the invocation point.
+	originalBranch, _ := git("branch", "--show-current")
+	originalBranch = strings.TrimSpace(originalBranch)
+
 	var selectedBase, fullTip string
 	var rangeBaseDepth, rangeTipDepth int // depths from HEAD (non-jj), used to recover after rewrite
 	var rangeTipChangeID string           // jj change-id of the selected tip (jj), used to recover after rewrite
@@ -122,7 +127,7 @@ Hint: use "git add -A" and "git stash" to clean up the repository
 		}
 	} else {
 		selectedBase = originMain
-		fullTip = resolveStackHead()
+		fullTip = resolveStackTip(resolveStackHead())
 	}
 
 	fullStack := must(getStackedCommits(originMain, fullTip, !config.commitRange.HasArg))
@@ -242,7 +247,7 @@ Hint: use "git add -A" and "git stash" to clean up the repository
 			selectedBase = must(depthResolver(postRewriteHead, rangeBaseDepth))
 		}
 	} else {
-		fullTip = postRewriteHead
+		fullTip = resolveStackTip(postRewriteHead)
 	}
 	fullStack = must(getStackedCommits(originMain, fullTip, !config.commitRange.HasArg))
 	stackedCommits = fullStack
@@ -434,7 +439,11 @@ actually wrote. Re-run git-pr; if it recurs, file an issue with the output of
 		return
 	}
 
-	// checkout the latest stacked commit
+	// Return the user to where they started. With the stack-tip expansion above,
+	// we may have rewritten descendant commits the user wasn't even on; checking
+	// out the tip would silently move them. If we captured a starting branch,
+	// land them back on it (branchless follows rewrites, so the branch points
+	// at the rewritten commit). Otherwise, fall back to the tip.
 	if !config.dryRun {
 		switch {
 		case config.jj.enabled:
@@ -444,6 +453,8 @@ actually wrote. Re-run git-pr; if it recurs, file an issue with the output of
 			// we don't silently move HEAD below the original tip when the
 			// selected tip is not at HEAD.
 			debugf("skipping git checkout in range mode (preserving HEAD)")
+		case originalBranch != "":
+			must(git("checkout", originalBranch))
 		default:
 			must(git("checkout", stackedCommits[len(stackedCommits)-1].Hash))
 		}
