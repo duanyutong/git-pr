@@ -127,6 +127,11 @@ Hint: use "git add -A" and "git stash" to clean up the repository
 		mapRefs[remoteRef] = commit
 	}
 
+	// warn about merged PRs still present in the local stack — these usually
+	// indicate the user hasn't rebased onto remote trunk after the PR landed,
+	// and trying to push/update them downstream rarely does what you want.
+	warnMergedPRsInStack(stackedCommits)
+
 	// fill remote ref for each commit
 	// For each commit without a remote-ref, find the local branch it's on
 	// IMPORTANT: Collect all branch mappings FIRST, before any rewords.
@@ -186,7 +191,16 @@ Hint: use "git add -A" and "git stash" to clean up the repository
 		panic("not found")
 	}
 	pushCommit := func(commit *Commit) (logs string, execFunc func() bool) {
-		args := fmt.Sprintf("%v:refs/heads/%v", commit.ShortHash(), commit.GetAttr(KeyRemoteRef))
+		remoteRef := commit.GetAttr(KeyRemoteRef)
+		if remoteRef == "" {
+			exitf(`commit %v has no Remote-Ref after rewrite — refusing to push to empty branch
+
+Title: %v
+Hint: this usually means the local branch lookup or the reword silently dropped the
+Remote-Ref trailer. Rerun with -verbose to see the branch lookup output, or add a
+"Remote-Ref: <branch>" trailer to this commit's message manually.`, commit.ShortHash(), commit.Title)
+		}
+		args := fmt.Sprintf("%v:refs/heads/%v", commit.ShortHash(), remoteRef)
 		logs = fmt.Sprintf("push -f %v %v", config.git.remote, args)
 		if config.dryRun {
 			logs = "[DRY-RUN] " + logs
@@ -507,6 +521,61 @@ Hint: use "git add -A" and "git stash" to clean up the repository
 			}()
 		}
 		wg.Wait()
+	}
+}
+
+// warnMergedPRsInStack looks up the PR state for each commit that already has
+// a Remote-Ref and prints a warning if any of them are merged. Merged PRs in
+// the local stack typically mean the user hasn't synced with remote trunk, and
+// continuing the push will recreate deleted branches and confuse later steps.
+// We warn but don't exit — the user may have a reason to keep pushing.
+func warnMergedPRsInStack(stackedCommits []*Commit) {
+	if config.dryRun {
+		return
+	}
+
+	type result struct {
+		commit *Commit
+		prNum  int
+		merged bool
+	}
+	results := make([]result, len(stackedCommits))
+
+	var wg sync.WaitGroup
+	for i, commit := range stackedCommits {
+		if commit.Skip || commit.GetRemoteRef() == "" {
+			continue
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			prNum, err := githubFindPRNumberForCommit(commit)
+			if err != nil || prNum == 0 {
+				return
+			}
+			pr, err := githubGetPRByNumber(prNum)
+			if err != nil || pr == nil {
+				return
+			}
+			results[i] = result{commit: commit, prNum: prNum, merged: pr.Merged}
+		}()
+	}
+	wg.Wait()
+
+	hasMerged := false
+	for _, r := range results {
+		if !r.merged {
+			continue
+		}
+		if !hasMerged {
+			printf("⚠️  merged PR(s) found in your local stack:\n")
+			hasMerged = true
+		}
+		printf("  #%v (%v) %v\n", r.prNum, r.commit.ShortHash(), shortenTitle(r.commit.Title))
+	}
+	if hasMerged {
+		printf("  Hint: run \"git fetch %v && git rebase %v/%v\" to drop merged commits from your local stack.\n\n",
+			config.git.remote, config.git.remote, config.git.remoteTrunk)
 	}
 }
 
