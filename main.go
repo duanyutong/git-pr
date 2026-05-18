@@ -102,8 +102,8 @@ Hint: use "git add -A" and "git stash" to clean up the repository
 		}
 	}
 
-	// Capture the user's starting branch before any rewords or descendant-tip
-	// expansion so a non-range run can return to the invocation point.
+	// Capture the user's starting branch before any rewords so the run can
+	// return to the invocation point.
 	originalBranch, _ := git("branch", "--show-current")
 	originalBranch = strings.TrimSpace(originalBranch)
 
@@ -127,7 +127,9 @@ Hint: use "git add -A" and "git stash" to clean up the repository
 		}
 	} else {
 		selectedBase = originMain
-		fullTip = resolveStackTip(resolveStackHead())
+		// HEAD is the submission ceiling for an implicit run. Descendants may
+		// still be included later as description-only context.
+		fullTip = resolveStackHead()
 	}
 
 	fullStack := must(getStackedCommits(originMain, fullTip, !config.commitRange.HasArg))
@@ -252,7 +254,7 @@ Hint: use "git add -A" and "git stash" to clean up the repository
 			selectedBase = must(depthResolver(postRewriteHead, rangeBaseDepth))
 		}
 	} else {
-		fullTip = resolveStackTip(postRewriteHead)
+		fullTip = postRewriteHead
 	}
 	fullStack = must(getStackedCommits(originMain, fullTip, !config.commitRange.HasArg))
 	stackedCommits = fullStack
