@@ -70,17 +70,14 @@ Hint: use "git add -A" and "git stash" to clean up the repository
 		debugf("resolved jj @- to %v", head)
 	}
 
-	// Capture the user's starting position so we can return them here after the
-	// run. We expand the stack tip below to include descendants of HEAD, which
-	// would otherwise leave them checked out at the top of the stack instead of
-	// where they invoked git-pr.
+	// Capture the user's starting position so we can return them here after the run.
 	originalBranch, _ := git("branch", "--show-current")
 	originalBranch = strings.TrimSpace(originalBranch)
 
-	// Operate on the full stack — including descendants of HEAD — so users who
-	// run git-pr from a middle commit still see every PR in the stack.
-	stackTip := resolveStackTip(head)
-	stackedCommits := must(getStackedCommits(originMain, stackTip))
+	// Submit only commits from trunk up to HEAD. Running git-pr at b2 in a stack
+	// b1→b2→b3→b4 opens/updates PRs for b1 and b2 only — the user controls the
+	// submission boundary by choosing where to check out.
+	stackedCommits := must(getStackedCommits(originMain, head))
 	if len(stackedCommits) == 0 {
 		exitf("no commits to submit")
 	}
@@ -167,10 +164,9 @@ Hint: use "git add -A" and "git stash" to clean up the repository
 
 		time.Sleep(time.Millisecond)
 	}
-	// Re-resolve the tip after rewords — branchless moves the branches forward
-	// to the rewritten commits, so the descendant chain may have new hashes.
-	stackTip = resolveStackTip(head)
-	stackedCommits = must(getStackedCommits(originMain, stackTip))
+	// Re-fetch commits after rewords. Branchless moves the current branch pointer
+	// to the rewritten commit, so HEAD still resolves to the right place.
+	stackedCommits = must(getStackedCommits(originMain, head))
 
 	// checkpoint: rewrite
 	if config.stopAfter == "rewrite" {
