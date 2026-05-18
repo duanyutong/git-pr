@@ -350,6 +350,8 @@ actually wrote. Re-run git-pr; if it recurs, file an issue with the output of
 	if config.dryRun {
 		printf("[DRY-RUN] Would push commits:\n")
 	}
+
+	// Track which commits need PRs created (in order)
 	type pushResult struct {
 		commit  *Commit
 		exec    func() bool
@@ -564,6 +566,12 @@ actually wrote. Re-run git-pr; if it recurs, file an issue with the output of
 		printf("%s%s\n", prURL, status)
 	}
 
+	descriptionStack := fullStack
+	if !config.commitRange.HasArg {
+		descendants := fetchDescendantCommits(fullStack, originMain, fullTip)
+		descriptionStack = append(slices.Clone(fullStack), descendants...)
+	}
+
 	// Collect PR body update targets. Results were already printed above in the
 	// user's configured stack order, so this phase must not emit a second list.
 	var prBodyTargets []*Commit
@@ -575,7 +583,7 @@ actually wrote. Re-run git-pr; if it recurs, file an issue with the output of
 	}
 
 	currentStackSet := make(map[int]bool)
-	for _, commit := range fullStack {
+	for _, commit := range descriptionStack {
 		if commit.PRNumber != 0 {
 			currentStackSet[commit.PRNumber] = true
 		}
@@ -583,7 +591,7 @@ actually wrote. Re-run git-pr; if it recurs, file an issue with the output of
 	var allHistoricalPRs []PRHistoryEntry
 	prHistoryMap := make(map[int]bool)
 	mergedPRs := make(map[int]bool)
-	for _, commit := range fullStack {
+	for _, commit := range descriptionStack {
 		if commit.PRNumber == 0 {
 			continue
 		}
@@ -612,7 +620,7 @@ actually wrote. Re-run git-pr; if it recurs, file an issue with the output of
 		// generate the PR body with stack info — render the full chain from
 		// trunk up to the selected tip, so PR bodies of selected commits show
 		// their position in the broader stack (not just the selected range).
-		stackInfo := generateStackInfo(fullStack, commit, allHistoricalPRs, mergedPRs)
+		stackInfo := generateStackInfo(descriptionStack, commit, allHistoricalPRs, mergedPRs)
 		body := generatePRBody(commit, pr.Body, stackInfo)
 
 		// update the PR
@@ -685,6 +693,54 @@ func manageNativeStack(commits []*Commit) {
 	default:
 		exitf("ERROR: gh stack link failed: %v\n%s", err, out)
 	}
+}
+
+// fetchDescendantCommits returns commits that exist above HEAD in the local DAG
+// but were not submitted in this run (i.e. the user ran git-pr from a middle
+// branch). Their PR numbers are looked up concurrently so the caller can
+// include them in the stack description without pushing them.
+func fetchDescendantCommits(stackedCommits []*Commit, originMain string, head string) []*Commit {
+	tip := resolveStackTip(head)
+	if tip == head {
+		return nil // HEAD is already the tip; no descendants
+	}
+	fullStack, err := getStackedCommits(originMain, tip, false)
+	if err != nil {
+		debugf("warning: failed to get full stack for descendant lookup: %v", err)
+		return nil
+	}
+
+	submittedHashes := make(map[string]bool, len(stackedCommits))
+	for _, cm := range stackedCommits {
+		submittedHashes[cm.Hash] = true
+	}
+
+	var descs []*Commit
+	for _, cm := range fullStack {
+		if !submittedHashes[cm.Hash] {
+			descs = append(descs, cm)
+		}
+	}
+	if len(descs) == 0 {
+		return nil
+	}
+
+	var wg sync.WaitGroup
+	for _, cm := range descs {
+		if cm.GetRemoteRef() == "" {
+			continue
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			prNum, err := githubFindPRNumberForCommit(cm)
+			if err == nil && prNum != 0 {
+				cm.PRNumber = prNum
+			}
+		}()
+	}
+	wg.Wait()
+	return descs
 }
 
 // warnMergedPRsInStack looks up the PR state for each commit that already has
@@ -1016,6 +1072,7 @@ func extractPRHistoryFromStackInfo(existingBody string) []PRHistoryEntry {
 	}
 
 	var entries []PRHistoryEntry
+
 	// First try to find content within sentinel markers
 	startIdx := strings.Index(existingBody, stackInfoStartMarker)
 	endIdx := strings.Index(existingBody, stackInfoEndMarker)
