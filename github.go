@@ -55,7 +55,7 @@ func githubGetPRNumberForCommit(commit, prev *Commit) (int, error) {
 		return githubSearchPRNumberForCommit(commit)
 	}
 
-	// The commit was pushed and got "Everything up-to-date", try creating new pr
+	// the commit was pushed and got "Everything up-to-date", try creating new pr
 	err = githubCreatePRForCommit(commit, prev)
 	if err != nil {
 		return 0, err
@@ -79,6 +79,8 @@ func githubGetPRByNumber(number int) (*PR, error) {
 	return &out, nil
 }
 
+var regexpPRURL = regexp.MustCompile(`/pull/(\d+)`)
+
 func githubCreatePRForCommit(commit *Commit, prev *Commit) error {
 	base := config.git.remoteTrunk
 	if prev != nil {
@@ -89,14 +91,29 @@ func githubCreatePRForCommit(commit *Commit, prev *Commit) error {
 		args = append(args, "--label", strings.Join(tags, ","))
 	}
 	printf("create pull request for %q\n", commit.Title)
-	_, err := gh(args...)
-	return err
+	out, err := gh(args...)
+	if err != nil {
+		return err
+	}
+	m := regexpPRURL.FindStringSubmatch(out)
+	if m == nil {
+		return errorf("failed to parse PR number from gh pr create output: %v", out)
+	}
+	n, err := strconv.Atoi(m[1])
+	if err != nil {
+		return errorf("failed to parse PR number %q: %v", m[1], err)
+	}
+	commit.PRNumber = n
+	return nil
 }
 
 func githubPRUpdateBaseForCommit(commit *Commit, prev *Commit) error {
 	base := xif(prev != nil, prev.GetRemoteRef(), config.git.remoteTrunk)
-	prNumber := must(githubGetPRNumberForCommit(commit, prev))
-	_, err := gh("pr", "edit", strconv.Itoa(prNumber), "--base", base)
+	prNumber, err := githubGetPRNumberForCommit(commit, prev)
+	if err != nil {
+		return err
+	}
+	_, err = gh("pr", "edit", strconv.Itoa(prNumber), "--base", base)
 	return err
 }
 
@@ -113,5 +130,9 @@ func githubSearchPRNumberForCommit(commit *Commit) (int, error) {
 	if s == "" {
 		return 0, nil
 	}
-	return must(strconv.Atoi(s)), nil
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return 0, errorf("failed to parse PR number %q: %v", s, err)
+	}
+	return n, nil
 }

@@ -82,7 +82,7 @@ func parseLogsCommit(lines []string) (*Commit, error) {
 				}
 			}
 			if err != nil {
-				panicf(nil, "failed to parse time from %q", m[1])
+				return nil, errorf("failed to parse time from %q", m[1])
 			}
 			out.Date = date.UTC()
 		}
@@ -100,7 +100,7 @@ func parseLogsCommit(lines []string) (*Commit, error) {
 	}
 	// validate (allow empty title for jujutsu commits like "jj new")
 	if out.Hash == "" || out.AuthorName == "" || out.AuthorEmail == "" {
-		panicf(nil, "failed to parse commit with log:\n%v", strings.Join(backup, "\n"))
+		return nil, errorf("failed to parse commit with log:\n%v", strings.Join(backup, "\n"))
 	}
 	return out, nil
 }

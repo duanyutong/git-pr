@@ -66,19 +66,19 @@ func (commit *Commit) GetRemoteRef() string {
 }
 
 func (commit *Commit) GetTags(defaultTags ...string) (tags []string) {
-	tags = append(tags, defaultTags...)
-	rawTags := commit.GetAttr(KeyTags)
-	for _, tag := range strings.Split(rawTags, ",") {
-		tag = strings.TrimSpace(tag)
-		if tag == "" {
-			continue
+	seen := make(map[string]bool)
+	add := func(tag string) {
+		if tag == "" || seen[tag] {
+			return
 		}
-		for _, t := range tags {
-			if t == tag {
-				continue
-			}
-		}
+		seen[tag] = true
 		tags = append(tags, tag)
+	}
+	for _, tag := range defaultTags {
+		add(strings.TrimSpace(tag))
+	}
+	for _, tag := range strings.Split(commit.GetAttr(KeyTags), ",") {
+		add(strings.TrimSpace(tag))
 	}
 	return tags
 }

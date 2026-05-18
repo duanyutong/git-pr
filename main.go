@@ -229,7 +229,7 @@ Hint: use "git add -A" and "git stash" to clean up the repository
 	}
 
 	// update PRs with review link, concurrently
-	fmt.Println()
+	printf("\n")
 	{
 		var wg sync.WaitGroup
 		for _, commit := range stackedCommits {

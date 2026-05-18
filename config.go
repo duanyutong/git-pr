@@ -12,20 +12,11 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-var (
-	emojis0 = []string{"♈️", "♉️", "♊️", "♋️", "♌️", "♍️", "♎️", "♏️", "♐️", "♑️", "♒️", "♓️"}
-	emojis1 = []string{"🐹", "🐮", "🐯", "🦊", "🐲", "🐼", "🦁", "🐰", "🐵", "🐻", "🐶", "🐷"}
-	emojis2 = []string{"🏠", "🏡", "🏘️", "🏚️", "🏢", "🏬", "🏣", "🏤", "🏥", "🏦", "🏨", "🏩", "🏪", "🏫", "🏭", "🏯", "🏰", "🏟️", "🏛️", "🏗️", "🌇", "🌆", "🌃", "🏙️"}
-	emojis3 = []string{"🚗", "🚕", "🚆", "🚄", "🚅", "🚈", "🚇", "🚝", "🚋", "🚌", "🚎", "🏎️", "🚓", "🚑", "🚒", "🚚", "🚛", "🚜", "🏍️", "🛵", "🚲", "🛴"}
-	emojis4 = []string{"🍏", "🍎", "🍐", "🍊", "🍋", "🍌", "🍉", "🍇", "🍓", "🍈", "🍒", "🍑", "🥭", "🍍", "🥥", "🥝", "🍅", "🍆", "🥑", "🥦", "🥬", "🥒", "🌶️", "🌽", "🥕", "🧄", "🧅", "🥔", "🍠", "🥐", "🥯", "🍞", "🥖", "🥨", "🧀", "🥚", "🍳", "🧈", "🥞", "🧇", "🥓", "🥩", "🍗", "🍖", "🦴", "🌭", "🍔", "🍟", "🍕", "🥪", "🥙", "🧆", "🌮", "🌯", "🥗", "🥘", "🥫", "🍝", "🍜", "🍲", "🍛", "🍣", "🍱", "🥟", "🦪", "🍤", "🍙", "🍚", "🍘", "🍥", "🥮", "🥠", "🍢", "🍡", "🍧", "🍨", "🍦", "🥧", "🧁", "🍰", "🎂", "🍮", "🍭", "🍬", "🍫", "🍿", "🍩", "🍪", "🌰", "🥜", "🍯", "🥛", "🍼", "☕", "🍵", "🧃", "🥤", "🍶", "🍺", "🍻"}
-)
+var emojisx = []string{"🐹", "🐮", "🐯", "🦊", "🐲", "🐼", "🦁", "🐰", "🐵", "🐻", "🐶", "🐷"}
 
 const version = "1.2.0"
 
-var (
-	emojisx = emojis1 // config emojis
-	config  Config
-)
+var config Config
 
 const gitconfigTags = "git-pr.tags"
 
@@ -253,7 +244,7 @@ For more information, see "git-pr --help".`
 			regexpURL = regexp.MustCompile(`(\w+)\s+(https://(github\.com)/([^/\s]+)\/([^.\s]+)(\.git)?)`)
 			matches = regexpURL.FindStringSubmatch(line)
 			if len(matches) > 0 {
-				config.git.protocol = "ssh"
+				config.git.protocol = "https"
 				config.git.remote = matches[1]
 				config.git.remoteUrl = matches[2]
 				config.git.host = matches[3]

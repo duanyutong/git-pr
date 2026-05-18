@@ -76,22 +76,30 @@ Add `[draft]` to the commit title to mark it as draft.
 
 ```sh
 $ git-pr --help
-Usage: git pr [options]
+Usage: git pr [OPTIONS]
   -default-tags string
     	Set default tags for the current repository (comma separated)
+  -draft-pattern string
+    	Wildcard pattern(s) for draft detection (default: wip:*,draft:*,*[wip]*,*[draft]*; comma-separated)
+  -dry-run
+    	Show what would be done without making changes
   -gh-hosts string
     	Path to config.json (default "~/.config/gh/hosts.yml")
+  -include-draft
+    	Include draft commits (override config)
   -include-other-authors
     	Create PRs for commits from other authors (default to false: skip)
-  -main string
-    	Main branch name (default "main")
-  -remote string
-    	Remote name (default "origin")
+  -skip-draft
+    	Skip commits with [draft] in title
+  -stop-after string
+    	Stop after phase: validate|get-commits|rewrite|push|pr-create
   -t string
     	Set tags for current stack, ignore default (comma separated)
   -timeout int
     	API call timeout in seconds (default 20)
   -v	Verbose output
+  -version
+    	Show version information
 ```
 
 ### Tags/Labels
