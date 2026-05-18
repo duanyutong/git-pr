@@ -150,14 +150,14 @@ Hint: use "git add -A" and "git stash" to clean up the repository
 		}
 		branchForCommit[commit.Hash] = localBranch
 	}
-	
+
 	// Now apply the mappings (reword in reverse order: HEAD first)
 	for i := len(stackedCommits) - 1; i >= 0; i-- {
 		commit := stackedCommits[i]
 		if commit.Skip || commit.GetRemoteRef() != "" {
 			continue
 		}
-		
+
 		remoteRef := branchForCommit[commit.Hash]
 		commit.SetAttr(KeyRemoteRef, remoteRef)
 		must(rewordCommit(commit, commit.FullMessage()))
@@ -216,7 +216,7 @@ Remote-Ref trailer. Rerun with -verbose to see the branch lookup output, or add 
 	if config.dryRun {
 		printf("[DRY-RUN] Would push commits:\n")
 	}
-	
+
 	// Track which commits need PRs created (in order)
 	type pushResult struct {
 		commit  *Commit
@@ -224,7 +224,7 @@ Remote-Ref trailer. Rerun with -verbose to see the branch lookup output, or add 
 	}
 	pushResults := make([]pushResult, 0, len(stackedCommits))
 	var pushResultsMu sync.Mutex
-	
+
 	{
 		var wg sync.WaitGroup
 		for _, commit := range stackedCommits {
@@ -255,7 +255,7 @@ Remote-Ref trailer. Rerun with -verbose to see the branch lookup output, or add 
 		}
 		wg.Wait()
 	}
-	
+
 	// Handle PRs: look up existing PRs in parallel, create missing ones serially, update bases in parallel
 	if !config.dryRun {
 		// Sort results by position in stackedCommits to ensure correct order
@@ -445,18 +445,30 @@ Remote-Ref trailer. Rerun with -verbose to see the branch lookup output, or add 
 		printf("%s\n", commit.Title)
 		printf("%s%s\n", prURL, status)
 	}
-	
+
+	// Fetch descendant commits — branches above HEAD in the local DAG that were
+	// not submitted in this run. We need them so the stack descriptions in
+	// submitted PRs correctly show descendants as open (⬛) rather than merged
+	// (✔️), which happens when they're absent from currentStackSet.
+	descendantCommits := fetchDescendantCommits(stackedCommits, originMain, head)
+
+	// fullStackCommits is used for PR description generation only (not for pushing).
+	fullStackCommits := make([]*Commit, 0, len(stackedCommits)+len(descendantCommits))
+	fullStackCommits = append(fullStackCommits, stackedCommits...)
+	fullStackCommits = append(fullStackCommits, descendantCommits...)
+
 	// update PRs with review link, concurrently
 	printf("\n")
 	{
-		// Build set of PR numbers in current local stack
+		// Build set of PR numbers in current local stack (including descendants
+		// not submitted in this run, so they are not falsely marked as merged).
 		currentStackSet := make(map[int]bool)
-		for _, commit := range stackedCommits {
+		for _, commit := range fullStackCommits {
 			if commit.PRNumber != 0 {
 				currentStackSet[commit.PRNumber] = true
 			}
 		}
-		
+
 		// First, collect all historical PR entries from existing PR bodies
 		// This ensures we preserve the complete stack history AND detect merged PRs
 		var allHistoricalPRs []PRHistoryEntry
@@ -486,7 +498,7 @@ Remote-Ref trailer. Rerun with -verbose to see the branch lookup output, or add 
 				}
 			}
 		}
-		
+
 		var wg sync.WaitGroup
 		for _, commit := range stackedCommits {
 			if commit.Skip {
@@ -501,7 +513,7 @@ Remote-Ref trailer. Rerun with -verbose to see the branch lookup output, or add 
 				pullURL := fmt.Sprintf("https://api.%v/repos/%v/pulls/%v", config.git.host, config.git.repo, commit.PRNumber)
 
 				// generate the PR body with stack info (pass accumulated history from all PRs)
-				stackInfo := generateStackInfo(stackedCommits, commit, allHistoricalPRs, mergedPRs)
+				stackInfo := generateStackInfo(fullStackCommits, commit, allHistoricalPRs, mergedPRs)
 				body := generatePRBody(commit, pr.Body, stackInfo)
 
 				// update the PR
@@ -518,6 +530,54 @@ Remote-Ref trailer. Rerun with -verbose to see the branch lookup output, or add 
 		}
 		wg.Wait()
 	}
+}
+
+// fetchDescendantCommits returns commits that exist above HEAD in the local DAG
+// but were not submitted in this run (i.e. the user ran git-pr from a middle
+// branch). Their PR numbers are looked up concurrently so the caller can
+// include them in the stack description without pushing them.
+func fetchDescendantCommits(stackedCommits []*Commit, originMain string, head string) []*Commit {
+	tip := resolveStackTip(head)
+	if tip == head {
+		return nil // HEAD is already the tip; no descendants
+	}
+	fullStack, err := getStackedCommits(originMain, tip)
+	if err != nil {
+		debugf("warning: failed to get full stack for descendant lookup: %v", err)
+		return nil
+	}
+
+	submittedHashes := make(map[string]bool, len(stackedCommits))
+	for _, cm := range stackedCommits {
+		submittedHashes[cm.Hash] = true
+	}
+
+	var descs []*Commit
+	for _, cm := range fullStack {
+		if !submittedHashes[cm.Hash] {
+			descs = append(descs, cm)
+		}
+	}
+	if len(descs) == 0 {
+		return nil
+	}
+
+	var wg sync.WaitGroup
+	for _, cm := range descs {
+		if cm.GetRemoteRef() == "" {
+			continue
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			prNum, err := githubFindPRNumberForCommit(cm)
+			if err == nil && prNum != 0 {
+				cm.PRNumber = prNum
+			}
+		}()
+	}
+	wg.Wait()
+	return descs
 }
 
 // warnMergedPRsInStack looks up the PR state for each commit that already has
@@ -633,15 +693,15 @@ func extractPRHistoryFromStackInfo(existingBody string) []PRHistoryEntry {
 	}
 
 	var entries []PRHistoryEntry
-	
+
 	// First try to find content within sentinel markers
 	startIdx := strings.Index(existingBody, stackInfoStartMarker)
 	endIdx := strings.Index(existingBody, stackInfoEndMarker)
-	
+
 	var stackSection string
 	if startIdx >= 0 && endIdx >= 0 && endIdx > startIdx {
 		// Extract content between markers
-		stackSection = existingBody[startIdx+len(stackInfoStartMarker):endIdx]
+		stackSection = existingBody[startIdx+len(stackInfoStartMarker) : endIdx]
 	} else {
 		// Fall back to searching all sections for the stack info pattern
 		parts := strings.Split(existingBody, "\n---\n")
@@ -653,22 +713,22 @@ func extractPRHistoryFromStackInfo(existingBody string) []PRHistoryEntry {
 			}
 		}
 	}
-	
+
 	if stackSection == "" {
 		return nil
 	}
-	
+
 	// Detect display order from the stored section:
 	//   "newest at the top" = reverse=true (natural git order)
 	//   "oldest at the top" or absent = reverse=false (legacy/default)
 	// We need to normalize to internal order (oldest first) for consistent processing.
 	isNaturalOrder := strings.Contains(stackSection, "newest at the top")
-	
+
 	// Extract PR numbers with their markers
 	// Match lines like "* ✔️ #123" or "* ⬛ #456" or "* 🐻 #789"
 	linePattern := regexp.MustCompile(`(?m)^\* ([^\s]+) #(\d+)`)
 	matches := linePattern.FindAllStringSubmatch(stackSection, -1)
-	
+
 	seen := make(map[int]bool) // deduplicate
 	for _, match := range matches {
 		if len(match) > 2 {
@@ -681,13 +741,13 @@ func extractPRHistoryFromStackInfo(existingBody string) []PRHistoryEntry {
 			}
 		}
 	}
-	
+
 	// Normalize to internal order (oldest first)
 	// If the section was displayed in natural git order (newest at top), reverse it
 	if isNaturalOrder && len(entries) > 1 {
 		slices.Reverse(entries)
 	}
-	
+
 	return entries
 }
 
@@ -751,7 +811,7 @@ func generateStackInfo(stackedCommits []*Commit, currentCommit *Commit, allHisto
 		seen[cm.PRNumber] = true
 		entries = append(entries, stackEntry{prNumber: cm.PRNumber, commit: cm, isMerged: mergedPRs[cm.PRNumber], index: i})
 	}
-	
+
 	// Calculate total count and current PR position (based on internal/chronological order)
 	totalCount := len(entries)
 	currentPosition := 0
@@ -761,7 +821,7 @@ func generateStackInfo(stackedCommits []*Commit, currentCommit *Commit, allHisto
 			break
 		}
 	}
-	
+
 	// Create display order from internal order:
 	//   reverse=false (legacy): keep as-is (oldest at top)
 	//   reverse=true: flip to newest at top (natural git order)
@@ -876,7 +936,7 @@ func generatePRBody(commit *Commit, existingBody string, stackInfo string) strin
 		// This handles cases where other bots added content after the old git-pr section
 		stackInfoPattern := regexp.MustCompile(`(?m)^\* .* #\d+`)
 		foundStackInfoIndex := -1
-		
+
 		// Search through all parts to find the git-pr section
 		for i, part := range parts {
 			if stackInfoPattern.MatchString(part) {
@@ -884,13 +944,13 @@ func generatePRBody(commit *Commit, existingBody string, stackInfo string) strin
 				break
 			}
 		}
-		
+
 		if foundStackInfoIndex >= 0 {
 			// Replace the old stack info section with sentinels
 			parts[foundStackInfoIndex] = wrappedStackInfo
 			return strings.Join(parts, "\n---\n")
 		}
-		
+
 		// no stack info found in any section, append it
 		return existingBody + "\n\n---\n" + wrappedStackInfo
 	}
@@ -948,7 +1008,7 @@ func validateGitStatusClean() bool {
 	// git diff checks unstaged changes, git diff --cached checks staged changes
 	_, unstagedErr := _git("diff", "--quiet")
 	_, stagedErr := _git("diff", "--cached", "--quiet")
-	
+
 	// Both commands exit with 0 if clean (nil error), non-zero if there are changes
 	return unstagedErr == nil && stagedErr == nil
 }
@@ -976,7 +1036,7 @@ func coalesce(a, b string) string {
 func sanitizeBranchName(title string) string {
 	// Convert to lowercase
 	s := strings.ToLower(title)
-	
+
 	// Remove common prefixes that are redundant in branch names
 	prefixes := []string{"feat:", "fix:", "chore:", "docs:", "style:", "refactor:", "perf:", "test:", "build:", "ci:", "revert:"}
 	for _, prefix := range prefixes {
@@ -985,37 +1045,37 @@ func sanitizeBranchName(title string) string {
 			break
 		}
 	}
-	
+
 	// Replace spaces and illegal characters with hyphens
 	// Git branch names can't contain: space, ~, ^, :, ?, *, [, \, .., @{, trailing dot
 	s = strings.ReplaceAll(s, " ", "-")
 	s = strings.ReplaceAll(s, "_", "-")
-	
+
 	// Remove or replace illegal characters
 	illegals := []string{"~", "^", ":", "?", "*", "[", "]", "\\", "..", "@{", "}", "/"}
 	for _, illegal := range illegals {
 		s = strings.ReplaceAll(s, illegal, "")
 	}
-	
+
 	// Replace multiple consecutive hyphens with single hyphen
 	for strings.Contains(s, "--") {
 		s = strings.ReplaceAll(s, "--", "-")
 	}
-	
+
 	// Trim leading/trailing hyphens and dots
 	s = strings.Trim(s, "-.")
-	
+
 	// Limit length to reasonable size (50 chars)
 	if len(s) > 50 {
 		s = s[:50]
 		s = strings.TrimRight(s, "-.")
 	}
-	
+
 	// If empty after sanitization, use a fallback
 	if s == "" {
 		s = "unnamed-branch"
 	}
-	
+
 	return s
 }
 
