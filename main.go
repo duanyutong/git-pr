@@ -410,6 +410,13 @@ func validateGitStatusClean() bool {
 	}
 
 	// for git repos or jj fallback
+	if config.jj.enabled {
+		// in jj mode the jj-path above returned earlier on success; getting here
+		// means the jj template failed. don't silently swap to `git status` —
+		// in a jj workspace GIT_DIR points outside the worktree and the output
+		// would be meaningless. surface the failure instead.
+		return false
+	}
 	output := must(git("status"))
 	return strings.Contains(output, "nothing to commit, working tree clean")
 }

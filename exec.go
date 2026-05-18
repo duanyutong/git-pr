@@ -44,6 +44,9 @@ func execCmd(name string, args ...string) (string, error) {
 		}
 		debugf(b.String())
 	}
+	// jj-workspace mode: GIT_DIR is exported in LoadConfig via os.Setenv so every
+	// git subprocess picks up the backing .git path. GIT_WORK_TREE is left unset
+	// on purpose so a stray checkout/reset can't clobber jj's working copy.
 	output, err := exec.Command(name, args...).CombinedOutput()
 	if err != nil {
 		var exitErr *exec.ExitError

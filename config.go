@@ -30,7 +30,8 @@ var (
 const gitconfigTags = "git-pr.tags"
 
 type Config struct {
-	repoDir string // git
+	repoDir string // jj-workspace root when running inside a jj workspace; git toplevel otherwise
+	gitDir  string // explicit GIT_DIR when running inside a jj workspace; empty otherwise
 
 	git ConfigGit
 	gh  ConfigGh
@@ -190,7 +191,7 @@ Note: Character ranges like [a-z] are NOT supported.
 			}
 		}
 	}
-	{ // detect repository by git
+	{ // detect repository by git, with jj-workspace fallback
 		errMsg := `
 git-pr is a tool for submitting git commits as GitHub stacked pull requests (stacked PRs).
 
@@ -198,12 +199,28 @@ ERROR: You need to run it in a git repository with remote configured.
 
 For more information, see "git-pr --help".`
 
-		output, err := _git("rev-parse", "--show-toplevel")
-		if err != nil {
+		if output, err := _git("rev-parse", "--show-toplevel"); err == nil {
+			config.repoDir = strings.TrimSpace(output)
+		} else if root, jerr := _jj("git", "root"); jerr == nil {
+			// jj workspace: no .git here, but jj knows where the backing one is
+			config.gitDir = strings.TrimSpace(root)
+			wsRoot, werr := _jj("workspace", "root")
+			if werr != nil {
+				exitf("ERROR: detected jj workspace but failed to resolve workspace root: %v", werr)
+			}
+			config.repoDir = strings.TrimSpace(wsRoot)
+			// export GIT_DIR so every subsequent git subprocess picks it up.
+			// the named-return `config` here shadows the package-level var, so
+			// per-command env injection in execCmd wouldn't see this field until
+			// LoadConfig returns. process-env propagation avoids that ordering trap.
+			if err := os.Setenv("GIT_DIR", config.gitDir); err != nil {
+				exitf("ERROR: failed to set GIT_DIR: %v", err)
+			}
+			debugf("detected jj workspace: repoDir=%s gitDir=%s", config.repoDir, config.gitDir)
+		} else {
 			exitf(errMsg)
 		}
 		config.git.enabled = true
-		config.repoDir = strings.TrimSpace(output)
 
 		// find remote url (push)
 		// TODO: support multiple remotes
