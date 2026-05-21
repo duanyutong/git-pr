@@ -18,7 +18,6 @@ import (
 const (
 	KeyTags      = "tags"
 	KeyRemoteRef = "remote-ref"
-	head         = "HEAD"
 )
 
 const bodyTemplate = `
@@ -49,6 +48,18 @@ Hint: use "git add -A" and "git stash" to clean up the repository
 	}
 
 	originMain := fmt.Sprintf("%v/%v", config.git.remote, config.git.remoteTrunk)
+	// in jj multi-workspace setups, the shared backing git repo's HEAD does not
+	// follow the current workspace. resolve @- via jj instead so we walk the
+	// stack of the workspace the user is actually in.
+	head := "HEAD"
+	if config.jj.enabled {
+		out, err := jj("log", "-r", "@-", "--no-graph", "-T", "commit_id")
+		if err != nil {
+			exitf("ERROR: failed to resolve jj @-: %v", err)
+		}
+		head = strings.TrimSpace(out)
+		debugf("resolved jj @- to %v", head)
+	}
 	stackedCommits := must(getStackedCommits(originMain, head))
 	if len(stackedCommits) == 0 {
 		exitf("no commits to submit")
