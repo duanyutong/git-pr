@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -37,11 +38,63 @@ type PR struct {
 	UpdatedAt *time.Time
 }
 
+func githubRepoOwner() string {
+	owner, _, _ := strings.Cut(config.git.repo, "/")
+	return owner
+}
+
+func selectPRNumberForHeadRef(prs []PR, remoteRef string) int {
+	var fallback int
+	for _, pr := range prs {
+		if pr.Head.Ref != remoteRef {
+			continue
+		}
+		if pr.State == "open" {
+			return pr.Number
+		}
+		if fallback == 0 {
+			fallback = pr.Number
+		}
+	}
+	return fallback
+}
+
+func githubFindPRNumberForHeadRef(remoteRef string, state string) (int, error) {
+	if remoteRef == "" {
+		return 0, nil
+	}
+	if state == "" {
+		state = "open"
+	}
+
+	values := url.Values{}
+	values.Set("head", githubRepoOwner()+":"+remoteRef)
+	values.Set("per_page", "100")
+	values.Set("state", state)
+	ghURL := fmt.Sprintf("https://api.%v/repos/%v/pulls?%s", config.git.host, config.git.repo, values.Encode())
+	jsonBody, err := httpGET(ghURL)
+	if err != nil {
+		return 0, err
+	}
+
+	var out []PR
+	err = json.Unmarshal(jsonBody, &out)
+	if err != nil {
+		return 0, errorf("failed to parse request body: %v", err)
+	}
+	return selectPRNumberForHeadRef(out, remoteRef), nil
+}
+
 // githubFindPRNumberForCommit finds the PR number for a commit, returns 0 if not found
 func githubFindPRNumberForCommit(commit *Commit) (int, error) {
 	if commit.PRNumber != 0 {
 		return commit.PRNumber, nil
 	}
+	remoteRef := commit.GetRemoteRef()
+	if remoteRef != "" {
+		return githubFindPRNumberForHeadRef(remoteRef, "open")
+	}
+
 	ghURL := ghAPIURL("commits/%v/pulls?per_page=100", commit.Hash)
 	jsonBody, err := httpGET(ghURL)
 	switch {
@@ -55,15 +108,6 @@ func githubFindPRNumberForCommit(commit *Commit) (int, error) {
 	err = json.Unmarshal(jsonBody, &out)
 	if err != nil {
 		return 0, errorf("failed to parse request body: %v", err)
-	}
-
-	remoteRef := commit.GetRemoteRef()
-	if remoteRef != "" {
-		for _, pr := range out {
-			if pr.Head.Ref == remoteRef {
-				return pr.Number, nil
-			}
-		}
 	}
 
 	// Try searching by title

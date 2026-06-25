@@ -741,7 +741,7 @@ func fetchDescendantCommits(stackedCommits []*Commit, originMain string, head st
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			prNum, err := githubFindPRNumberForCommit(cm)
+			prNum, err := githubFindPRNumberForHeadRef(cm.GetRemoteRef(), "open")
 			if err == nil && prNum != 0 {
 				cm.PRNumber = prNum
 			}
@@ -776,7 +776,7 @@ func warnMergedPRsInStack(stackedCommits []*Commit) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			prNum, err := githubFindPRNumberForCommit(commit)
+			prNum, err := githubFindPRNumberForHeadRef(commit.GetRemoteRef(), "all")
 			if err != nil || prNum == 0 {
 				return
 			}
