@@ -575,6 +575,38 @@ func TestShortenTitle(t *testing.T) {
 	})
 }
 
+func TestSelectLocalBranchForCommitSkipsDetachedHeadPlaceholder(t *testing.T) {
+	hash := "058d1dda72376d825cef7a1e0bea1c092b7816c5"
+	commit := &Commit{Hash: hash, Title: "test commit"}
+
+	branch := selectLocalBranchForCommit([]string{
+		"(HEAD detached at 058d1dd)|" + hash,
+		"feature/split-profile-utils|" + hash,
+		"master|" + hash,
+	}, commit)
+
+	assert(t, branch == "feature/split-profile-utils").Errorf("branch = %q", branch)
+}
+
+func TestSelectLocalBranchForCommitRejectsDetachedOnly(t *testing.T) {
+	hash := "058d1dda72376d825cef7a1e0bea1c092b7816c5"
+	commit := &Commit{Hash: hash, Title: "test commit"}
+
+	branch := selectLocalBranchForCommit([]string{
+		"(HEAD detached at 058d1dd)|" + hash,
+		"master|" + hash,
+	}, commit)
+
+	assert(t, branch == "").Errorf("branch = %q", branch)
+}
+
+func TestValidateRemoteRefRejectsDetachedHeadPlaceholder(t *testing.T) {
+	err := validateRemoteRef("(HEAD detached at 058d1dd)")
+
+	assert(t, err != nil).Errorf("expected invalid detached HEAD placeholder")
+	assert(t, strings.Contains(err.Error(), "detached-HEAD")).Errorf("error = %v", err)
+}
+
 // TestPickStackLeaf covers the descendant-resolution logic that lets git-pr
 // operate on the full stack even when the user has checked out a middle commit.
 // Each test builds an in-memory ancestor relation and asserts which tip is
