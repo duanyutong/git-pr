@@ -515,7 +515,7 @@ func findBranchForCommit(commit *Commit) (string, error) {
 		}
 
 		// Skip HEAD and main/master branches
-		if strings.Contains(refName, "HEAD") {
+		if isDetachedHeadBranchPlaceholder(refName) || strings.Contains(refName, "HEAD") {
 			continue
 		}
 		if strings.HasSuffix(refName, "/main") || strings.HasSuffix(refName, "/master") {
@@ -544,6 +544,69 @@ func findBranchForCommit(commit *Commit) (string, error) {
 	return remoteBranch, nil
 }
 
+func isDetachedHeadBranchPlaceholder(branchName string) bool {
+	return strings.HasPrefix(branchName, "(HEAD detached ")
+}
+
+func isIgnoredLocalBranchName(branchName string) bool {
+	return branchName == "main" || branchName == "master" || isDetachedHeadBranchPlaceholder(branchName)
+}
+
+func parseFormattedBranchLine(line string) (branchName string, commitHash string, ok bool) {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return "", "", false
+	}
+
+	parts := strings.Split(line, "|")
+	if len(parts) != 2 {
+		return "", "", false
+	}
+	return parts[0], parts[1], true
+}
+
+func selectLocalBranchForCommit(lines []string, commit *Commit) string {
+	for _, line := range lines {
+		branchName, commitHash, ok := parseFormattedBranchLine(line)
+		if !ok {
+			continue
+		}
+
+		// Skip main/master and Git's synthetic detached-HEAD row. In detached
+		// checkouts, `git branch --format` emits a first row such as
+		// "(HEAD detached at abc1234)|<hash>", which is display text, not a ref.
+		if isIgnoredLocalBranchName(branchName) {
+			continue
+		}
+
+		shortHash := commitHash
+		if len(shortHash) > 8 {
+			shortHash = shortHash[:8]
+		}
+		debugf("  checking %v -> %v (match: %v)", branchName, shortHash, commitHash == commit.Hash)
+
+		// Check for exact match
+		if commitHash == commit.Hash {
+			debugf("  FOUND: %v", branchName)
+			return branchName
+		}
+	}
+	return ""
+}
+
+func validateRemoteRef(remoteRef string) error {
+	if strings.TrimSpace(remoteRef) != remoteRef {
+		return errorf("remote ref has leading or trailing whitespace")
+	}
+	if isDetachedHeadBranchPlaceholder(remoteRef) {
+		return errorf("remote ref is Git's detached-HEAD display placeholder, not a branch")
+	}
+	if _, err := git("check-ref-format", "--branch", remoteRef); err != nil {
+		return wrapf(err, "invalid branch name %q", remoteRef)
+	}
+	return nil
+}
+
 // getLocalBranchForCommit returns the local branch that points to this commit
 // Used when branches are pre-created (e.g., by git-branchless)
 func getLocalBranchForCommit(commit *Commit) (string, error) {
@@ -557,32 +620,8 @@ func getLocalBranchForCommit(commit *Commit) (string, error) {
 
 	debugf("[getLocalBranchForCommit] looking for commit %v", commit.Hash)
 
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-
-		parts := strings.Split(line, "|")
-		if len(parts) != 2 {
-			continue
-		}
-
-		branchName := parts[0]
-		commitHash := parts[1]
-
-		// Skip main/master
-		if branchName == "main" || branchName == "master" {
-			continue
-		}
-
-		debugf("  checking %v -> %v (match: %v)", branchName, commitHash[:8], commitHash == commit.Hash)
-
-		// Check for exact match
-		if commitHash == commit.Hash {
-			debugf("  FOUND: %v", branchName)
-			return branchName, nil
-		}
+	if branchName := selectLocalBranchForCommit(lines, commit); branchName != "" {
+		return branchName, nil
 	}
 
 	// No branch found - log debug info
@@ -590,9 +629,13 @@ func getLocalBranchForCommit(commit *Commit) (string, error) {
 	printf("  Commit title: %v\n", commit.Title)
 	printf("  Available local branches:\n")
 	for _, line := range lines {
-		parts := strings.Split(line, "|")
-		if len(parts) == 2 && parts[0] != "main" && parts[0] != "master" {
-			printf("    %v -> %v\n", parts[0], parts[1][:8])
+		branchName, commitHash, ok := parseFormattedBranchLine(line)
+		if ok && !isIgnoredLocalBranchName(branchName) {
+			shortHash := commitHash
+			if len(shortHash) > 8 {
+				shortHash = shortHash[:8]
+			}
+			printf("    %v -> %v\n", branchName, shortHash)
 		}
 	}
 	return "", nil

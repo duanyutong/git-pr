@@ -309,6 +309,14 @@ Hint: this usually means the local branch lookup or the reword silently dropped 
 Remote-Ref trailer. Rerun with -verbose to see the branch lookup output, or add a
 "Remote-Ref: <branch>" trailer to this commit's message manually.`, commit.ShortHash(), commit.Title)
 		}
+		if err := validateRemoteRef(remoteRef); err != nil {
+			exitf(`commit %v has invalid Remote-Ref %q — refusing to push
+
+Title: %v
+Cause: %v
+Hint: remove the bad Remote-Ref trailer from this commit and rerun git-pr, or
+replace it with the intended local branch name.`, commit.ShortHash(), remoteRef, commit.Title, err)
+		}
 		args := fmt.Sprintf("%v:refs/heads/%v", commit.ShortHash(), remoteRef)
 		logs = fmt.Sprintf("push -f %v %v", config.git.remote, args)
 		if config.dryRun {
