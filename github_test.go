@@ -192,6 +192,62 @@ func TestPRNumberExtraction(t *testing.T) {
 	}
 }
 
+func TestGithubRepoOwner(t *testing.T) {
+	oldRepo := config.git.repo
+	defer func() {
+		config.git.repo = oldRepo
+	}()
+
+	config.git.repo = "calendly/caf-switchboard"
+
+	if owner := githubRepoOwner(); owner != "calendly" {
+		t.Errorf("githubRepoOwner() = %q, want %q", owner, "calendly")
+	}
+}
+
+func TestSelectPRNumberForHeadRefPrefersOpenPR(t *testing.T) {
+	prs := []PR{
+		{
+			Number: 41,
+			State:  "closed",
+			Head: struct {
+				Ref string `json:"ref"`
+			}{Ref: "dyt/split-profile-utils"},
+		},
+		{
+			Number: 42,
+			State:  "open",
+			Head: struct {
+				Ref string `json:"ref"`
+			}{Ref: "dyt/split-profile-utils"},
+		},
+	}
+
+	prNumber := selectPRNumberForHeadRef(prs, "dyt/split-profile-utils")
+
+	if prNumber != 42 {
+		t.Errorf("selectPRNumberForHeadRef() = %d, want 42", prNumber)
+	}
+}
+
+func TestSelectPRNumberForHeadRefFallsBackToClosedPR(t *testing.T) {
+	prs := []PR{
+		{
+			Number: 41,
+			State:  "closed",
+			Head: struct {
+				Ref string `json:"ref"`
+			}{Ref: "dyt/split-profile-utils"},
+		},
+	}
+
+	prNumber := selectPRNumberForHeadRef(prs, "dyt/split-profile-utils")
+
+	if prNumber != 41 {
+		t.Errorf("selectPRNumberForHeadRef() = %d, want 41", prNumber)
+	}
+}
+
 // TestCommitNewlyCreatedFlag tests that the NewlyCreated flag is properly
 // managed to distinguish new PRs from existing ones.
 func TestCommitNewlyCreatedFlag(t *testing.T) {
