@@ -299,7 +299,7 @@ Hint: use "git add -A" and "git stash" to clean up the repository
 		return resolveBaseForBottom(fullStack, commit, config.git.remoteTrunk)
 	}
 
-	pushCommit := func(commit *Commit) (logs string, execFunc func() bool) {
+	pushCommit := func(commit *Commit) (logs string, execFunc func() (bool, error)) {
 		remoteRef := commit.GetAttr(KeyRemoteRef)
 		if remoteRef == "" {
 			exitf(`commit %v has no Remote-Ref after rewrite — refusing to push to empty branch
@@ -321,15 +321,18 @@ replace it with the intended local branch name.`, commit.ShortHash(), remoteRef,
 		logs = fmt.Sprintf("push -f %v %v", config.git.remote, args)
 		if config.dryRun {
 			logs = "[DRY-RUN] " + logs
-			return logs, func() bool { return false } // no-op for dry-run
+			return logs, func() (bool, error) { return false, nil } // no-op for dry-run
 		}
-		return logs, func() bool {
-			out := must(git("push", "-f", config.git.remote, args))
+		return logs, func() (bool, error) {
+			out, err := pushRemoteRef(git, config.git.remote, commit.ShortHash(), commit.Hash, remoteRef)
+			if err != nil {
+				return false, err
+			}
 			time.Sleep(1 * time.Second)
 			needsPR := strings.Contains(out, "remote: Create a pull request")
 			// Don't do any PR operations here - handle all PR creation/updates
 			// sequentially after all pushes complete to ensure correct PR numbering
-			return needsPR
+			return needsPR, nil
 		}
 	}
 	// mark commits we won't push (other authors, unless --include-other-authors)
@@ -362,8 +365,9 @@ actually wrote. Re-run git-pr; if it recurs, file an issue with the output of
 	// Track which commits need PRs created (in order)
 	type pushResult struct {
 		commit  *Commit
-		exec    func() bool
+		exec    func() (bool, error)
 		needsPR bool
+		err     error
 	}
 	var pushResults []*pushResult
 	for _, commit := range stackedCommits {
@@ -377,11 +381,22 @@ actually wrote. Re-run git-pr; if it recurs, file an issue with the output of
 		}
 	}
 	parallelForEach(pushResults, func(result *pushResult) {
-		result.needsPR = result.exec()
+		result.needsPR, result.err = result.exec()
 	})
 
 	// Handle PRs: look up existing PRs in parallel, create missing ones serially, update bases in parallel
 	if !config.dryRun {
+		var pushErrors []string
+		for _, result := range pushResults {
+			if result.err != nil {
+				pushErrors = append(pushErrors, fmt.Sprintf("  %s (%s): %v",
+					result.commit.GetRemoteRef(), result.commit.ShortHash(), result.err))
+			}
+		}
+		if len(pushErrors) > 0 {
+			exitf("ERROR: failed to push %d branch(es):\n%s", len(pushErrors), strings.Join(pushErrors, "\n"))
+		}
+
 		// Phase 1: Look up existing PR numbers in parallel for commits that weren't new pushes
 		existingBranches := 0
 		for _, result := range pushResults {

@@ -8,6 +8,44 @@ import (
 	"time"
 )
 
+type gitCommand func(args ...string) (string, error)
+
+// pushRemoteRef force-pushes one commit to one remote branch. A force push can
+// lose a race after the remote advertises its current ref: another writer may
+// install the same intended commit before receive-pack locks the ref. Git then
+// exits unsuccessfully even though the requested state has been achieved.
+// Verify that exact postcondition before propagating the push error.
+func pushRemoteRef(run gitCommand, remote, sourceHash, expectedHash, remoteRef string) (string, error) {
+	fullRef := "refs/heads/" + remoteRef
+	refspec := fmt.Sprintf("%s:%s", sourceHash, fullRef)
+	out, pushErr := run("push", "-f", remote, refspec)
+	if pushErr == nil {
+		return out, nil
+	}
+
+	remoteRefs, verifyErr := run("ls-remote", "--refs", remote, fullRef)
+	if verifyErr != nil {
+		debugf("push failed and remote ref verification also failed: %v", verifyErr)
+		return "", pushErr
+	}
+	if remoteRefMatches(remoteRefs, fullRef, expectedHash) {
+		debugf("push reported an error, but %s already points to %s", fullRef, expectedHash)
+		return "", nil
+	}
+
+	return "", pushErr
+}
+
+func remoteRefMatches(output, expectedRef, expectedHash string) bool {
+	for _, line := range strings.Split(output, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 2 && fields[0] == expectedHash && fields[1] == expectedRef {
+			return true
+		}
+	}
+	return false
+}
+
 var (
 	regexpCommitHash = regexp.MustCompile(`^commit ([0-9a-f]{40})$`)
 	regexpAuthor     = regexp.MustCompile(`^Author: (.*) <(.*)>$`)
