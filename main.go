@@ -1107,7 +1107,7 @@ func extractPRHistoryFromStackInfo(existingBody string) []PRHistoryEntry {
 	} else {
 		// Fall back to searching all sections for the stack info pattern
 		parts := strings.Split(existingBody, "\n---\n")
-		stackInfoPattern := regexp.MustCompile(`(?m)^\* .* #\d+`)
+		stackInfoPattern := regexp.MustCompile(`(?m)^\* (?:[^\s#]+ )?#\d+`)
 		for _, part := range parts {
 			if stackInfoPattern.MatchString(part) {
 				stackSection = part
@@ -1122,13 +1122,14 @@ func extractPRHistoryFromStackInfo(existingBody string) []PRHistoryEntry {
 
 	// Detect display order from the stored section:
 	//   "newest at the top" = reverse=true (natural git order)
-	//   "oldest at the top" or absent = reverse=false (legacy/default)
+	//   "oldest at the top" or absent = reverse=false (legacy format)
 	// We need to normalize to internal order (oldest first) for consistent processing.
 	isNaturalOrder := strings.Contains(stackSection, "newest at the top")
 
 	// Extract PR numbers with their markers
-	// Match lines like "* ✔️ #123" or "* ⬛ #456" or "* 🐻 #789"
-	linePattern := regexp.MustCompile(`(?m)^\* ([^\s]+) #(\d+)`)
+	// Match both marked lines such as "* ✔️ #123" and marker-free lines
+	// such as "* #123".
+	linePattern := regexp.MustCompile(`(?m)^\* (?:([^\s#]+) )?#(\d+)`)
 	matches := linePattern.FindAllStringSubmatch(stackSection, -1)
 
 	seen := make(map[int]bool) // deduplicate
@@ -1168,8 +1169,8 @@ func extractPRNumbersFromStackInfo(existingBody string) []int {
 //
 // Internal order: always works with oldest-first order for consistency.
 // Display order: applies reverse flag at render time.
-//   - reverse=false (default/legacy): oldest at top, newest at bottom
-//   - reverse=true: newest at top, oldest at bottom (natural git log order)
+//   - reverse=false: oldest at top, newest at bottom
+//   - reverse=true (default): newest at top, oldest at bottom (natural git log order)
 //
 // Historical PRs not in current stack are preserved with their original markers.
 func generateStackInfo(stackedCommits []*Commit, currentCommit *Commit, allHistoricalPRs []PRHistoryEntry, mergedPRs map[int]bool) string {
@@ -1225,8 +1226,8 @@ func generateStackInfo(stackedCommits []*Commit, currentCommit *Commit, allHisto
 	}
 
 	// Create display order from internal order:
-	//   reverse=false (legacy): keep as-is (oldest at top)
-	//   reverse=true: flip to newest at top (natural git order)
+	//   reverse=false: keep as-is (oldest at top)
+	//   reverse=true (default): flip to newest at top (natural git order)
 	renderEntries := entries
 	if config.reverse {
 		renderEntries = make([]stackEntry, len(entries))
@@ -1251,7 +1252,9 @@ func generateStackInfo(stackedCommits []*Commit, currentCommit *Commit, allHisto
 			renderCommit(&stackB, e.commit, currentCommit, e.isMerged)
 		} else {
 			// Historical PR not in current stack - preserve marker
-			if e.isMerged {
+			if config.stackEmojiDisabled {
+				sprf("* #%v\n", e.prNumber)
+			} else if e.isMerged {
 				sprf("* ✔️ #%v\n", e.prNumber)
 			} else {
 				sprf("* ⬛ #%v\n", e.prNumber)
@@ -1278,13 +1281,16 @@ func renderCommit(stackB *strings.Builder, cm *Commit, currentCommit *Commit, is
 		formattedEmail := first + "&#x200B;" + last // zero-width space to prevent creating email link
 		cmRef = fmt.Sprintf(`&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<b>[%v (%v)](%v)</b>&nbsp;&nbsp; ${\textsf{\color{lightblue}· %v}}$`, cm.Title, cm.ShortHash(), cmURL, formattedEmail)
 	}
-	switch {
-	case cm.Hash == currentCommit.Hash:
-		sprf("* " + emojisx[currentCommit.PRNumber%len(emojisx)])
-	case isMerged:
-		sprf("* ✔️")
-	default:
-		sprf("* ⬛")
+	sprf("*")
+	if !config.stackEmojiDisabled {
+		switch {
+		case cm.Hash == currentCommit.Hash:
+			sprf(" " + emojisx[currentCommit.PRNumber%len(emojisx)])
+		case isMerged:
+			sprf(" ✔️")
+		default:
+			sprf(" ⬛")
+		}
 	}
 	sprf(" %v\n", cmRef)
 }

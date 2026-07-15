@@ -208,6 +208,44 @@ func TestGenerateStackInfoSingleCommit(t *testing.T) {
 		t.Errorf("generateStackInfo() with single commit should not show position header, got: %v", result)
 	}
 }
+func TestGenerateStackInfoWithoutStatusEmojis(t *testing.T) {
+	commits := []*Commit{
+		{Hash: "abc12345", Title: "first commit", PRNumber: 101},
+		{Hash: "def45678", Title: "second commit", PRNumber: 102},
+	}
+	history := []PRHistoryEntry{{Number: 100, IsMerged: true}}
+	mergedPRs := map[int]bool{101: true}
+
+	oldDisabled := config.stackEmojiDisabled
+	oldHost := config.git.host
+	oldRepo := config.git.repo
+	defer func() {
+		config.stackEmojiDisabled = oldDisabled
+		config.git.host = oldHost
+		config.git.repo = oldRepo
+	}()
+	config.stackEmojiDisabled = true
+	config.git.host = "github.com"
+	config.git.repo = "user/repo"
+
+	result := generateStackInfo(commits, commits[1], history, mergedPRs)
+	for _, line := range strings.Split(result, "\n") {
+		if strings.HasPrefix(line, "* ") && !strings.HasPrefix(line, "* #") {
+			t.Errorf("stack entry has a leading status emoji: %q\n%s", line, result)
+		}
+	}
+	for _, marker := range append([]string{"⬛", "✔️"}, emojisx...) {
+		if strings.Contains(result, marker) {
+			t.Errorf("stack contains disabled marker %q:\n%s", marker, result)
+		}
+	}
+	for _, prNumber := range []string{"#100", "#101", "#102"} {
+		if !strings.Contains(result, prNumber) {
+			t.Errorf("stack is missing %s:\n%s", prNumber, result)
+		}
+	}
+}
+
 func TestGenerateStackInfoPreservesMergedPRs(t *testing.T) {
 	config.git.host = "github.com"
 	config.git.repo = "user/repo"
@@ -332,6 +370,18 @@ This is PR **1 of 2** in a stack
 * ✔️ #50
 * ✔️ #51
 * ◻️ #52
+` + stackInfoEndMarker,
+			wantPRNums: []int{50, 51, 52},
+		},
+		{
+			name: "extract marker-free stack",
+			body: `---
+` + stackInfoStartMarker + `
+This is PR **2 of 3** in a stack
+
+* #50
+* #51 👈 This PR
+* #52
 ` + stackInfoEndMarker,
 			wantPRNums: []int{50, 51, 52},
 		},

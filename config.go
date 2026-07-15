@@ -41,12 +41,14 @@ type Config struct {
 	includeDraft  bool     // flag: explicitly include draft commits (highest precedence)
 	draftPatterns []string // wildcard patterns for draft detection (case-insensitive)
 	// Display order for stack in PR description:
-	//   reverse=false (default/legacy): oldest at top, newest at bottom (inverted from git log)
-	//   reverse=true: newest at top, oldest at bottom (natural git log order)
-	reverse         bool   // flag/config: show stack in natural order (newest at top)
-	branchFromTitle bool   // flag/config: generate branch names from commit title instead of hash
-	draft           bool   // flag/config: create PRs in draft mode by default
-	prTemplate      string // cached PR template content from repository
+	//   reverse=false: oldest at top, newest at bottom (inverted from git log)
+	//   reverse=true (default): newest at top, oldest at bottom (natural git log order)
+	reverse            bool // flag/config: show stack in natural order (newest at top)
+	branchFromTitle    bool // flag/config: generate branch names from commit title instead of hash
+	draft              bool // flag/config: create PRs in draft mode by default
+	stackEmojiDisabled bool // git config: omit status emojis from stack entries
+
+	prTemplate string // cached PR template content from repository
 
 	commitRange ConfigRange // positional args: optional commit selection
 }
@@ -103,7 +105,16 @@ type ConfigJj struct {
 	version string
 }
 
+func defaultConfig() Config {
+	return Config{
+		reverse:            true,
+		draft:              true,
+		stackEmojiDisabled: true,
+	}
+}
+
 func LoadConfig() (config Config) {
+	config = defaultConfig()
 	flagVersion := flag.Bool("version", false, "Show version information")
 	flag.BoolVar(&config.verbose, "v", false, "Verbose output")
 	flag.BoolVar(&config.includeOtherAuthors, "include-other-authors", false, "Create PRs for commits from other authors (default to false: skip)")
@@ -114,9 +125,9 @@ func LoadConfig() (config Config) {
 	flag.BoolVar(&config.autoAccept, "yes", false, `Assume "yes" to prompts (for non-interactive use)`)
 	flag.BoolVar(&config.autoAccept, "y", false, `Assume "yes" to prompts (shorthand for --yes)`)
 	flag.BoolVar(&config.noStack, "no-stack", false, "Do not create/update a native GitHub stack on push")
-	flag.BoolVar(&config.reverse, "reverse", false, "Show stack in natural order (newest at top); default is legacy order (oldest at top)")
+	flag.BoolVar(&config.reverse, "reverse", config.reverse, "Show stack newest-first; use -reverse=false for oldest-first order")
 	flag.BoolVar(&config.branchFromTitle, "branch-from-title", false, "Generate branch names from commit title instead of hash")
-	flag.BoolVar(&config.draft, "draft", false, "Create PRs in draft mode by default")
+	flag.BoolVar(&config.draft, "draft", config.draft, "Create draft PRs; use -draft=false to create ready-for-review PRs")
 
 	flagGitHubHosts := flag.String("gh-hosts", "~/.config/gh/hosts.yml", "Path to config.json")
 	flagTimeout := flag.Int("timeout", 20, "API call timeout in seconds")
@@ -140,6 +151,10 @@ A COMMIT may be a git ref/hash, or (in a jj repo) a jj change-id.`
 			flag.PrintDefaults()
 		}
 		flag.Parse()
+		setByFlag := make(map[string]bool)
+		flag.Visit(func(f *flag.Flag) {
+			setByFlag[f.Name] = true
+		})
 
 		// handle version flag
 		if *flagVersion {
@@ -199,11 +214,11 @@ A COMMIT may be a git ref/hash, or (in a jj repo) a jj change-id.`
 			}
 		}
 
-		// read git config for reverse setting
-		if !config.reverse {
-			reverseStr, _ := getGitConfig("git-pr.reverse")
-			if reverseStr == "true" || reverseStr == "1" {
-				config.reverse = true
+		// Read the Git configuration unless the command line explicitly supplied
+		// either -reverse or -reverse=false.
+		if !setByFlag["reverse"] {
+			if reverse, err := getGitConfigBool("git-pr.reverse"); err == nil {
+				config.reverse = reverse
 			}
 		}
 
@@ -215,12 +230,17 @@ A COMMIT may be a git ref/hash, or (in a jj repo) a jj change-id.`
 			}
 		}
 
-		// read git config for draft setting
-		if !config.draft {
-			draftStr, _ := getGitConfig("git-pr.draft")
-			if draftStr == "true" || draftStr == "1" {
-				config.draft = true
+		// Read the Git configuration unless the command line explicitly supplied
+		// either -draft or -draft=false.
+		if !setByFlag["draft"] {
+			if draft, err := getGitConfigBool("git-pr.draft"); err == nil {
+				config.draft = draft
 			}
+		}
+
+		// Stack emojis are disabled by default; an explicitly true value enables them.
+		if stackEmoji, err := getGitConfigBool("git-pr.stack-emoji"); err == nil {
+			config.stackEmojiDisabled = !stackEmoji
 		}
 
 		// determine draft pattern (precedence: flag > git config > default)
@@ -569,6 +589,14 @@ func getGitConfig(name string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(out), nil
+}
+
+func getGitConfigBool(name string) (bool, error) {
+	out, err := git("config", "--type=bool", "--get", name)
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(out) == "true", nil
 }
 
 func expandPath(path string) string {

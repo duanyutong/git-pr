@@ -4,6 +4,19 @@ import (
 	"testing"
 )
 
+func TestDefaultConfig(t *testing.T) {
+	config := defaultConfig()
+	if !config.reverse {
+		t.Error("reverse should default to true")
+	}
+	if !config.draft {
+		t.Error("draft should default to true")
+	}
+	if !config.stackEmojiDisabled {
+		t.Error("stack emojis should default to disabled")
+	}
+}
+
 func TestMatchWildcard(t *testing.T) {
 	t.Run("exact matches", func(t *testing.T) {
 		tests := []struct {
