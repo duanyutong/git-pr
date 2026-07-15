@@ -2,6 +2,19 @@
 
 `git-pr` is a command line tool to create and update GitHub pull requests within stacked commits.
 
+
+Example gitconfig:
+
+```gitconfig
+[git-pr]
+	reverse = true
+	draft = true
+	stack-emoji = false
+	skipDraft = false
+	draftPattern = "wip:*,draft:*,*[wip]*,*[draft]*"
+	branch-from-title = false
+```
+
 While working with stacked commits, we need to make change and push these commits to GitHub. Because a stack of commits
 has many commits, pushing them all to GitHub requires multiple invocations of `git push`, one for each commit, which is
 tedious. `git-pr` helps you to push all commits to GitHub and create stacked pull requests, one for each commit. The
