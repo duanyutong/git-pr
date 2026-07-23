@@ -15,6 +15,57 @@ func TestDefaultConfig(t *testing.T) {
 	if !config.stackEmojiDisabled {
 		t.Error("stack emojis should default to disabled")
 	}
+	if config.githubStackEnabled {
+		t.Error("GitHub Stack integration should default to disabled")
+	}
+}
+
+func TestResolveGitHubStackEnabled(t *testing.T) {
+	tests := []struct {
+		name     string
+		noStack  bool
+		settings []optionalBool
+		want     bool
+	}{
+		{name: "disabled by default", want: false},
+		{name: "enabled by Git config", settings: []optionalBool{{set: true, value: true}}, want: true},
+		{
+			name: "environment overrides Git config",
+			settings: []optionalBool{
+				{set: false},
+				{set: true, value: false},
+				{set: true, value: true},
+			},
+			want: false,
+		},
+		{
+			name: "command line overrides environment and Git config",
+			settings: []optionalBool{
+				{set: true, value: true},
+				{set: true, value: false},
+				{set: true, value: false},
+			},
+			want: true,
+		},
+		{
+			name:    "no-stack overrides every enabling source",
+			noStack: true,
+			settings: []optionalBool{
+				{set: true, value: true},
+				{set: true, value: true},
+				{set: true, value: true},
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := resolveGitHubStackEnabled(tt.noStack, tt.settings...); got != tt.want {
+				t.Fatalf("resolveGitHubStackEnabled() = %v, want %v", got, tt.want)
+			}
+		})
+	}
 }
 
 func TestMatchWildcard(t *testing.T) {

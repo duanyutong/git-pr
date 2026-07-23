@@ -35,7 +35,8 @@ type Config struct {
 	dryRun              bool   // flag: show what would be done without making changes
 	stopAfter           string // flag: stop after specific phase
 	autoAccept          bool   // flag: assume "yes" to interactive prompts
-	noStack             bool   // flag: skip creating/updating the native GitHub stack
+	githubStackEnabled  bool   // flag/config: create or update GitHub's proprietary PR stack
+	noStack             bool   // flag: compatibility override for githubStackEnabled
 
 	skipDraft     bool     // flag: skip draft commits by default
 	includeDraft  bool     // flag: explicitly include draft commits (highest precedence)
@@ -105,6 +106,26 @@ type ConfigJj struct {
 	version string
 }
 
+type optionalBool struct {
+	set   bool
+	value bool
+}
+
+// resolveGitHubStackEnabled applies the documented precedence order to the
+// opt-in GitHub Stack setting. The legacy no-stack switch remains an absolute
+// override, irrespective of which source enabled the feature.
+func resolveGitHubStackEnabled(noStack bool, settings ...optionalBool) bool {
+	if noStack {
+		return false
+	}
+	for _, setting := range settings {
+		if setting.set {
+			return setting.value
+		}
+	}
+	return false
+}
+
 func defaultConfig() Config {
 	return Config{
 		reverse:            true,
@@ -124,7 +145,8 @@ func LoadConfig() (config Config) {
 	flag.BoolVar(&config.includeDraft, "include-draft", false, "Include draft commits (override config)")
 	flag.BoolVar(&config.autoAccept, "yes", false, `Assume "yes" to prompts (for non-interactive use)`)
 	flag.BoolVar(&config.autoAccept, "y", false, `Assume "yes" to prompts (shorthand for --yes)`)
-	flag.BoolVar(&config.noStack, "no-stack", false, "Do not create/update a native GitHub stack on push")
+	flag.BoolVar(&config.githubStackEnabled, "github-stack", config.githubStackEnabled, "Create/update a GitHub Stack after pushing PRs (disabled by default)")
+	flag.BoolVar(&config.noStack, "no-stack", false, "Do not create/update a GitHub Stack (compatibility override)")
 	flag.BoolVar(&config.reverse, "reverse", config.reverse, "Show stack newest-first; use -reverse=false for oldest-first order")
 	flag.BoolVar(&config.branchFromTitle, "branch-from-title", false, "Generate branch names from commit title instead of hash")
 	flag.BoolVar(&config.draft, "draft", config.draft, "Create draft PRs; use -draft=false to create ready-for-review PRs")
@@ -172,6 +194,14 @@ A COMMIT may be a git ref/hash, or (in a jj repo) a jj change-id.`
 		if !config.noStack && os.Getenv("GIT_PR_NO_STACK") == "1" {
 			config.noStack = true
 		}
+		githubStackEnv, githubStackEnvSet := os.LookupEnv("GIT_PR_GITHUB_STACK")
+		githubStackGit, githubStackGitErr := getGitConfigBool("git-pr.github-stack")
+		config.githubStackEnabled = resolveGitHubStackEnabled(
+			config.noStack,
+			optionalBool{set: setByFlag["github-stack"], value: config.githubStackEnabled},
+			optionalBool{set: githubStackEnvSet, value: githubStackEnv == "1" || strings.EqualFold(githubStackEnv, "true")},
+			optionalBool{set: githubStackGitErr == nil, value: githubStackGit},
+		)
 		if config.stopAfter == "" && os.Getenv("GIT_PR_STOP_AFTER") != "" {
 			config.stopAfter = os.Getenv("GIT_PR_STOP_AFTER")
 		}

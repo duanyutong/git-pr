@@ -27,7 +27,7 @@ type PR struct {
 	Base struct {
 		Ref string `json:"ref"`
 	} `json:"base"`
-	// Stack is non-nil when the PR is part of a GitHub native stack. It is the
+	// Stack is non-nil when the PR is part of a GitHub Stack. It is the
 	// signal that base edits via `gh pr edit --base` are blocked, and it carries
 	// the stack Number needed to dissolve the stack (`gh stack unstack <n>`).
 	Stack *struct {
@@ -277,7 +277,7 @@ func isStackWouldRemove(out string, err error) bool {
 	return err != nil && strings.Contains(out+err.Error(), "would remove")
 }
 
-// githubStackNumberForCommits returns the native stack number that the commits'
+// githubStackNumberForCommits returns the GitHub Stack number that the commits'
 // PRs belong to (0 if none are in a stack). The number lives on each PR's stack
 // field; the first non-nil one wins.
 func githubStackNumberForCommits(commits []*Commit) int {
@@ -292,7 +292,7 @@ func githubStackNumberForCommits(commits []*Commit) int {
 	return 0
 }
 
-// githubStackRealign rebuilds the native GitHub stack numbered stackNumber so it
+// githubStackRealign rebuilds the GitHub Stack numbered stackNumber so it
 // matches the local stack `branches` (ordered bottom→top). gh-stack's `link`
 // never removes a PR from an existing stack and `modify` is interactive-only, so
 // the only scriptable way to drop the orphaned PR(s) is to dissolve the whole
