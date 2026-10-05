@@ -100,35 +100,52 @@ When you push only part of an existing stack, the bottommost selected PR is auto
 
 ```sh
 $ git-pr --help
-Usage: git pr [OPTIONS] [RANGE]
+Usage: git pr [OPTIONS] [COMMITS]
 
-RANGE may be:
+COMMITS may be:
   (omitted)        Push origin/<trunk>..HEAD as stacked PRs (default).
   BASE..TIP        Push the commits in the BASE..TIP range as stacked PRs.
   COMMIT           Push exactly that one commit as a single PR.
+  COMMIT...        Push the named commits (2+) as stacked PRs; commits between
+                   them on the stack are skipped. Args may be in any order.
+
+A COMMIT may be a git ref/hash, or (in a jj repo) a jj change-id.
+  -add-label value
+      Add a GitHub label to every PR in the stack (repeatable; overrides config add_label)
+  -add-tip-label value
+      Add a GitHub label to the tip (top) PR only (repeatable; overrides config add_tip_label)
   -default-tags string
-    	Set default tags for the current repository (comma separated)
+      Set default tags for the current repository (comma separated)
   -draft-pattern string
-    	Wildcard pattern(s) for draft detection (default: wip:*,draft:*,*[wip]*,*[draft]*; comma-separated)
+      Wildcard pattern(s) for draft detection (default: wip:*,draft:*,*[wip]*,*[draft]*; comma-separated)
   -dry-run
-    	Show what would be done without making changes
+      Show what would be done without making changes
   -gh-hosts string
-    	Path to config.json (default "~/.config/gh/hosts.yml")
+      Path to config.json (default "~/.config/gh/hosts.yml")
+  -github-stack
+      Create/update a GitHub Stack after pushing PRs (disabled by default)
   -include-draft
-    	Include draft commits (override config)
+      Include draft commits (override config)
   -include-other-authors
-    	Create PRs for commits from other authors (default to false: skip)
+      Create PRs for commits from other authors (default to false: skip)
+  -no-stack
+      Do not create/update a GitHub Stack (compatibility override)
+  -output string
+      Format of the PR list printed after push: url|url-title|markdown, or a template like '{url} {title}'
   -skip-draft
-    	Skip commits with [draft] in title
+      Skip commits with [draft] in title
   -stop-after string
-    	Stop after phase: validate|get-commits|rewrite|push|pr-create
+      Stop after phase: validate|get-commits|rewrite|push|pr-create
   -t string
-    	Set tags for current stack, ignore default (comma separated)
+      Set tags for current stack, ignore default (comma separated)
   -timeout int
-    	API call timeout in seconds (default 20)
+      API call timeout in seconds (default 20)
   -v	Verbose output
   -version
-    	Show version information
+      Show version information
+  -y	Assume "yes" to prompts (shorthand for --yes)
+  -yes
+      Assume "yes" to prompts (for non-interactive use)
 ```
 
 ### Tags/Labels
@@ -156,6 +173,83 @@ commit message body
 
 Tags: bug, p0
 ```
+
+#### Add a label to every PR, or to the tip (top) PR only:
+
+`--add-label` adds a label to every PR in the stack; `--add-tip-label` adds it
+to the tip (topmost) PR only. Both are repeatable. Labels must already exist in
+the repo.
+
+```sh
+git pr --add-label 'CI • SkipCheck' --add-tip-label 'CI • StackCheck'
+```
+
+On re-push, tip-only labels are removed from any PR that is no longer the tip.
+
+### Output format
+
+After a push, git-pr prints one entry per PR in the configured stack order.
+`--output` specifies a preset or a custom template. Created or updated PRs
+retain their corresponding status annotation:
+
+| Preset | Output |
+|---|---|
+| `url` | `https://github.com/org/repo/pull/1234` |
+| `url-title` **(default)** | `https://github.com/org/repo/pull/1234 Fix the parser` |
+| `markdown` | `[#1234](https://github.com/org/repo/pull/1234) Fix the parser` |
+
+```sh
+git pr --output markdown    # paste straight into a PR body, changelog, or Slack
+git pr --output url         # bare URLs, one per line (git-pr's pre-1.3.4 output)
+```
+
+Any value containing a `{placeholder}` is used verbatim as a template:
+
+```sh
+git pr --output '{shorthash} #{number} {title}'
+git pr --output '- [ ] {url} — {author}'
+```
+
+Available placeholders:
+
+| Placeholder | Value |
+|---|---|
+| `{url}` | full PR URL |
+| `{number}` | PR number, without the `#` |
+| `{title}` | commit/PR title |
+| `{hash}` / `{shorthash}` | full / 8-char commit hash |
+| `{repo}` / `{host}` | `org/repo` / `github.com` |
+| `{branch}` | the `Remote-Ref` branch for this PR |
+| `{author}` / `{email}` | commit author name / email |
+
+Set it once per repo in the config file (see below) or via `GIT_PR_OUTPUT`.
+Precedence is `--output` > `GIT_PR_OUTPUT` > config file > `url-title`.
+
+### Config file
+
+git-pr reads an optional config file so a repo can set these labels and the
+output format once for everyone (instead of passing flags each time). JSON is the default format; YAML
+(`.yaml`/`.yml`) is also accepted.
+
+```jsonc
+// .config/git-pr.json
+{
+  "add_label": ["CI • SkipCheck"],
+  "add_tip_label": ["CI • StackCheck"],
+  "output": "markdown"
+}
+```
+
+Discovery, highest precedence first:
+
+1. CLI flags (`--add-label`, `--add-tip-label`, `--output`)
+2. `<dir>/.config/git-pr.local.json` — per-user override (gitignore this)
+3. `<dir>/.config/git-pr.json` — project config, committed
+4. `~/.config/git-pr/config.json` — global default
+
+For (2)/(3), git-pr walks up from the current directory to the **repository
+root** and uses the nearest `.config/git-pr.*` it finds. It never ascends past
+the repo root, so a git submodule does not inherit its parent repo's config.
 
 ## How it works
 

@@ -31,9 +31,13 @@ type Config struct {
 	verbose bool          // flag
 	timeout time.Duration // flag
 
+	addLabels    []string // --add-label / config add_label: label(s) added to every non-skipped PR
+	addTipLabels []string // --add-tip-label / config add_tip_label: label(s) added to the tip PR only
+
 	includeOtherAuthors bool   // flag
 	dryRun              bool   // flag: show what would be done without making changes
 	stopAfter           string // flag: stop after specific phase
+	output              string // --output / config output: resolved template for the PR list printed after push
 	autoAccept          bool   // flag: assume "yes" to interactive prompts
 	githubStackEnabled  bool   // flag/config: create or update GitHub's proprietary PR stack
 	noStack             bool   // flag: compatibility override for githubStackEnabled
@@ -136,6 +140,8 @@ func defaultConfig() Config {
 
 func LoadConfig() (config Config) {
 	config = defaultConfig()
+
+	var addLabelFlag, addTipLabelFlag stringSliceFlag
 	flagVersion := flag.Bool("version", false, "Show version information")
 	flag.BoolVar(&config.verbose, "v", false, "Verbose output")
 	flag.BoolVar(&config.includeOtherAuthors, "include-other-authors", false, "Create PRs for commits from other authors (default to false: skip)")
@@ -155,7 +161,10 @@ func LoadConfig() (config Config) {
 	flagTimeout := flag.Int("timeout", 20, "API call timeout in seconds")
 	flagSetTags := flag.String("default-tags", "", "Set default tags for the current repository (comma separated)")
 	flagTags := flag.String("t", "", "Set tags for current stack, ignore default (comma separated)")
+	flagOutput := flag.String("output", "", "Format of the PR list printed after push: url|url-title|markdown, or a template like '{url} {title}'")
 	flagDraftPattern := flag.String("draft-pattern", "", "Wildcard pattern(s) for draft detection (default: wip:*,draft:*,*[wip]*,*[draft]*; comma-separated)")
+	flag.Var(&addLabelFlag, "add-label", "Add a GitHub label to every PR in the stack (repeatable; overrides config add_label)")
+	flag.Var(&addTipLabelFlag, "add-tip-label", "Add a GitHub label to the tip (top) PR only (repeatable; overrides config add_tip_label)")
 
 	{ // parse flags
 		usage := `Usage: git pr [OPTIONS] [COMMITS]
@@ -204,6 +213,11 @@ A COMMIT may be a git ref/hash, or (in a jj repo) a jj change-id.`
 		)
 		if config.stopAfter == "" && os.Getenv("GIT_PR_STOP_AFTER") != "" {
 			config.stopAfter = os.Getenv("GIT_PR_STOP_AFTER")
+		}
+		// --output is resolved at the end of LoadConfig, once the config file has
+		// been read; fold the env value into the flag so that chain sees it.
+		if *flagOutput == "" && os.Getenv("GIT_PR_OUTPUT") != "" {
+			*flagOutput = os.Getenv("GIT_PR_OUTPUT")
 		}
 		validStopAfter := map[string]bool{
 			"":            true,
@@ -533,6 +547,29 @@ Hint: use github cli to login to your account:
 
 	config.gh.host = config.git.host // assume github.com
 	config.gh.repo = config.git.repo // assume org/repo
+
+	// Label config: file provides defaults, CLI flags override. File discovery
+	// walks up from the cwd to config.repoDir (the repo boundary), so a submodule
+	// never inherits its parent repo's config. See configfile.go.
+	{
+		wd, _ := os.Getwd()
+		fc := loadFileConfig(wd, config.repoDir)
+		config.addLabels = fc.AddLabel
+		if len(addLabelFlag) > 0 {
+			config.addLabels = addLabelFlag
+		}
+		config.addTipLabels = fc.AddTipLabel
+		if len(addTipLabelFlag) > 0 {
+			config.addTipLabels = addTipLabelFlag
+		}
+
+		// output format precedence: flag > env > config file > default preset
+		tmpl, err := resolveOutputFormat(coalesce(*flagOutput, fc.Output))
+		if err != nil {
+			exitf("ERROR: %v", err)
+		}
+		config.output = tmpl
+	}
 	return config
 }
 
@@ -637,13 +674,6 @@ func expandPath(path string) string {
 		return os.Getenv("HOME") + path[1:]
 	}
 	return path
-}
-
-func validateConfig[T comparable](name string, value T) {
-	var zero T
-	if value == zero {
-		exitf("missing config %q", name)
-	}
 }
 
 func getGitPRConfig() []string {

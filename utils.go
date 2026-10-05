@@ -222,20 +222,6 @@ func parseCommaList(s string) []string {
 	return out
 }
 
-func panicf(err error, msg string, args ...any) {
-	if err != nil {
-		stderrf("ERROR: %v\n", err)
-	}
-	panic("ERROR: " + fmt.Sprintf(msg, args...))
-}
-
-func xif[T any](cond bool, a, b T) T {
-	if cond {
-		return a
-	}
-	return b
-}
-
 func revert[T any](list []T) []T {
 	out := make([]T, len(list))
 	for i, v := range list {
@@ -271,6 +257,15 @@ func maxAttrsLength(attrs []KeyVal) int {
 }
 
 var rePrefixNewline = regexp.MustCompile(`^\n *`)
+
+// shortHash abbreviates a git commit hash for display, tolerating a value that
+// is already short or empty.
+func shortHash(hash string) string {
+	if len(hash) > 12 {
+		return hash[:12]
+	}
+	return hash
+}
 
 func trimPrefixNewline(s string) string {
 	return rePrefixNewline.ReplaceAllString(s, "")

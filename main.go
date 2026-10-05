@@ -397,6 +397,8 @@ actually wrote. Re-run git-pr; if it recurs, file an issue with the output of
 			exitf("ERROR: failed to push %d branch(es):\n%s", len(pushErrors), strings.Join(pushErrors, "\n"))
 		}
 
+		syncLocalRefsAfterPush(stackedCommits)
+
 		// Phase 1: Look up existing PR numbers in parallel for commits that weren't new pushes
 		existingBranches := 0
 		for _, result := range pushResults {
@@ -578,15 +580,13 @@ actually wrote. Re-run git-pr; if it recurs, file an issue with the output of
 			printf("\n")
 		}
 		first = false
-		prURL := fmt.Sprintf("https://%v/%v/pull/%v", config.git.host, config.git.repo, commit.PRNumber)
 		status := ""
 		if commit.NewlyCreated {
 			status = " (created)"
 		} else if commit.BaseUpdated {
 			status = " (updated)"
 		}
-		printf("%s\n", commit.Title)
-		printf("%s%s\n", prURL, status)
+		printf("%s%s\n", formatPROutput(config.output, commit), status)
 	}
 
 	descriptionStack := fullStack
@@ -636,6 +636,12 @@ actually wrote. Re-run git-pr; if it recurs, file an issue with the output of
 			allHistoricalPRs = append(allHistoricalPRs, entry)
 		}
 	}
+
+	// The final non-skipped commit receives the tip-only labels.
+	var tipCommit *Commit
+	if len(prBodyTargets) > 0 {
+		tipCommit = prBodyTargets[len(prBodyTargets)-1]
+	}
 	parallelForEach(prBodyTargets, func(commit *Commit) {
 		pr := must(githubGetPRByNumber(commit.PRNumber))
 		pullURL := ghAPIURL("pulls/%v", commit.PRNumber)
@@ -653,8 +659,22 @@ actually wrote. Re-run git-pr; if it recurs, file an issue with the output of
 		}))
 		// Draft status is set only when a PR is created; preserve the user's
 		// subsequent draft/ready choice when updating an existing PR.
-		if tags := commit.GetTags(config.tags...); len(tags) > 0 {
-			must(gh("pr", "edit", strconv.Itoa(commit.PRNumber), "--add-label", strings.Join(tags, ",")))
+		// Labels: per-commit tags + --add-label on every PR; --add-tip-label on
+		// the tip PR only. (Which label means "run full CI" vs "skip" is decided
+		// CI-side; git-pr only applies the configured labels.)
+		labels := commit.GetTags(config.tags...)
+		labels = append(labels, config.addLabels...)
+		if commit == tipCommit {
+			labels = append(labels, config.addTipLabels...)
+		}
+		if labels = dedupStrings(labels); len(labels) > 0 {
+			must(gh("pr", "edit", strconv.Itoa(commit.PRNumber), "--add-label", strings.Join(labels, ",")))
+		}
+		// Reconcile: a non-tip PR must not keep tip-only labels left from a push
+		// where it used to be the tip. Removing a label the PR lacks is a no-op,
+		// so tolerate errors here.
+		if commit != tipCommit && len(config.addTipLabels) > 0 {
+			_, _ = gh("pr", "edit", strconv.Itoa(commit.PRNumber), "--remove-label", strings.Join(config.addTipLabels, ","))
 		}
 	})
 
@@ -668,11 +688,9 @@ actually wrote. Re-run git-pr; if it recurs, file an issue with the output of
 // manageGitHubStack creates or updates the GitHub Stack so the pushed
 // PRs (in `commits`, bottom→top) form a single stack. It prompts before doing
 // anything; --yes auto-accepts and --no-stack overrides --github-stack in
-// configuration loading. gh-stack's `link` creates a stack when none exists and
-// updates an existing one (correcting bases), but it never drops a PR — so if
-// the local stack no longer contains a PR that is still in the GitHub Stack,
-// `link` fails and we fall back to a dissolve+relink rebuild (after a second
-// confirmation).
+// configuration loading. gh-stack's link appends PRs at the top; removal or
+// insertion below the top requires a dissolve-and-relink rebuild, subject to
+// a second confirmation.
 func manageGitHubStack(commits []*Commit) {
 	var branches []string
 	for _, commit := range commits {
@@ -697,26 +715,41 @@ func manageGitHubStack(commits []*Commit) {
 		warnf("gh-stack extension not installed; skipping GitHub Stack.\n" +
 			"  install: gh extension install github/gh-stack (or pass --no-stack)")
 		warnStaleBlockedBases(commits)
-	case isStackWouldRemove(out, err):
+	case isStackNeedsRebuild(out, err):
 		stackNumber := githubStackNumberForCommits(commits)
 		if stackNumber == 0 {
-			exitf("ERROR: updating the GitHub Stack needs to drop a PR, but git-pr could not\n" +
-				"find the stack number. Fix it manually with `gh stack modify`.")
+			exitf("ERROR: the GitHub Stack must be rebuilt to match your local stack, but git-pr\n"+
+				"could not find the stack number. Fix it manually with `gh stack modify`.\n"+
+				"  gh said: %s", ghStackReason(out))
 		}
-		warnf("updating the stack would drop PR(s) no longer in your local stack (stack #%d).\n"+
-			"git-pr will dissolve and rebuild it as: %s", stackNumber, strings.Join(branches, " "))
+		warnf("the existing GitHub stack #%d cannot be updated in place.\n"+
+			"  gh said: %s\n"+
+			"git-pr will dissolve and rebuild it as: %s",
+			stackNumber, ghStackReason(out), strings.Join(branches, " "))
 		if confirm("Rebuild the GitHub stack now?") {
 			if err := githubStackRealign(stackNumber, branches); err != nil {
 				exitf("ERROR: failed to rebuild GitHub stack: %v", err)
 			}
+			printf("native stack rebuilt: %s\n", strings.Join(branches, " "))
 		} else {
 			warnf("skipped; branches were pushed but the stack is unchanged.\n"+
-				"To drop the PR, run `gh stack modify` (interactive, keeps the rest of the stack),\n"+
-				"or rebuild the whole stack with: gh stack unstack %d && gh stack link %s",
+				"To restructure it by hand, run `gh stack modify` (interactive), or rebuild\n"+
+				"the whole stack with: gh stack unstack %d && gh stack link %s",
 				stackNumber, strings.Join(branches, " "))
 		}
+	case isStackPushRejected(out, err):
+		// gh-stack pushes the local branch refs, not the commits git-pr pushed
+		exitf("ERROR: gh stack link could not push the stack branches: %v\n\n"+
+			"One of these local refs no longer descends from the remote branch of the same\n"+
+			"name, so gh-stack's (non-forced) push was rejected: %s\n"+
+			"Your commits are already on the remote — git-pr force-pushed them above — so only\n"+
+			"the stack linkage is missing. Bring the local refs up to date (in jj:\n"+
+			"`jj git import`, then `jj bookmark set <name> -r <commit>`) and re-run git-pr, or\n"+
+			"link the stack by hand with: gh stack link %s",
+			err, strings.Join(branches, " "), strings.Join(branches, " "))
 	default:
-		exitf("ERROR: gh stack link failed: %v\n%s", err, out)
+		// err already carries gh's output (see execError.Error), so don't print `out` too
+		exitf("ERROR: gh stack link failed: %v", err)
 	}
 }
 
