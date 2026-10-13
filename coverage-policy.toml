@@ -1,0 +1,52 @@
+# Unit completeness is measured from the declared unit suites alone.
+# Package line thresholds apply independently to aggregate acceptance.
+[application]
+package = "git-pr"
+source_root = "src"
+minimum_lines = 100
+target = ["--lib"]
+test_filter = "::unit::"
+test_skip = []
+unit = [
+  "src/cli/mod.rs",
+  "src/cli/output.rs",
+  "src/commands/mod.rs",
+  "src/config/batch.rs",
+  "src/config/checkpoint.rs",
+  "src/config/mod.rs",
+  "src/config/paths.rs",
+  "src/config/settings.rs",
+  "src/credentials/keychain.rs",
+  "src/credentials/mod.rs",
+  "src/diagnostics/errors.rs",
+  "src/git/mod.rs",
+  "src/git/policy.rs",
+  "src/git/publication.rs",
+  "src/git/snapshot.rs",
+  "src/github/content.rs",
+  "src/github/dispatch.rs",
+  "src/github/limits.rs",
+  "src/github/mod.rs",
+  "src/github/native.rs",
+  "src/github/observation.rs",
+  "src/github/policy.rs",
+  "src/github/recovery.rs",
+  "src/jj/mod.rs",
+  "src/jj/policy.rs",
+  "src/model/commit.rs",
+  "src/model/pull_request.rs",
+  "src/model/trailers.rs",
+  "src/stack/description.rs",
+  "src/stack/selection.rs",
+  "src/submission/mod.rs",
+  "src/submission/policy.rs",
+  "src/submission/presentation.rs",
+  "src/submission/pull_requests.rs",
+  "src/submission/recovery.rs",
+  "src/submission/rewrite.rs",
+  "src/submission/state.rs",
+]
+mixed = []
+boundary = ["src/diagnostics/mod.rs", "src/commands/cancellation.rs", "src/commands/system.rs", "src/config/files.rs", "src/credentials/system.rs", "src/github/http.rs", "src/main.rs", "src/cli/progress.rs", "src/submission/runtime.rs"]
+declarations = ["src/lib.rs", "src/model/mod.rs", "src/model/repository.rs", "src/stack/mod.rs"]
+generated = []

@@ -1,0 +1,58 @@
+[package]
+name = "git-pr-fuzz"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.99"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+# cargo-machete does not follow source inclusion outside this independent workspace.
+# chrono is used by snapshot/model; serde derives the included pull-request model.
+[package.metadata.cargo-machete]
+ignored = ["chrono", "serde"]
+
+# Compile the actual pure source files without widening the application's public API.
+[workspace]
+members = ["."]
+
+[lib]
+test = false
+doctest = false
+
+[[bin]]
+name = "replay"
+path = "src/replay.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "trailers"
+path = "fuzz_targets/trailers.rs"
+test = false
+doc = false
+required-features = ["fuzzing"]
+
+[[bin]]
+name = "snapshots"
+path = "fuzz_targets/snapshots.rs"
+test = false
+doc = false
+required-features = ["fuzzing"]
+
+[[bin]]
+name = "descriptions"
+path = "fuzz_targets/descriptions.rs"
+test = false
+doc = false
+required-features = ["fuzzing"]
+
+[features]
+fuzzing = ["dep:libfuzzer-sys"]
+
+[dependencies]
+anyhow = "1.0.104"
+chrono = { version = "0.4.45", default-features = false, features = ["std"] }
+libfuzzer-sys = { version = "=0.4.13", optional = true }
+serde = { version = "1.0.229", features = ["derive", "rc"] }

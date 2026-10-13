@@ -1,0 +1,6 @@
+[files]
+exclude = ["Cargo.toml", "Cargo.lock", "uv.lock", ".venv/**", "target/**", ".codegraph/**"]
+
+# Each tool validates its own configuration; TOML hygiene must operate offline.
+[schema]
+enabled = false

@@ -1,0 +1,264 @@
+minimum_prek_version = "0.5.5"
+default_stages = ["pre-commit"]
+default_language_version = { python = "3.15.0", rust = { request = "1.99.0", preference = "only-system" } }
+exclude = "^(LICENSE|THIRD_PARTY_NOTICES.md|tests/fixtures/|fuzz/seeds/)"
+
+[[repos]]
+repo = "builtin"
+hooks = [
+  { id = "trailing-whitespace", stages = ["pre-commit"], priority = 0 },
+  { id = "end-of-file-fixer", stages = ["pre-commit"], priority = 1 },
+  { id = "trailing-whitespace", name = "Check trailing whitespace", args = ["--check"], stages = ["pre-push"], priority = 0 },
+  { id = "end-of-file-fixer", name = "Check end of files", args = ["--check"], stages = ["pre-push"], priority = 1 },
+  { id = "check-merge-conflict", priority = 2 },
+  { id = "check-added-large-files", priority = 2 },
+  { id = "check-yaml", priority = 2 },
+  { id = "check-json", priority = 2 },
+  { id = "check-toml", priority = 2 },
+]
+
+[[repos]]
+repo = "https://github.com/astral-sh/ruff-pre-commit"
+rev = "v0.17.0"
+
+[[repos.hooks]]
+id = "ruff-format"
+name = "Python formatting"
+types = ["python"]
+priority = 3
+
+[[repos.hooks]]
+id = "ruff-check"
+name = "Python lint"
+types = ["python"]
+priority = 5
+
+[[repos]]
+repo = "https://github.com/shellcheck-py/shellcheck-py"
+rev = "v0.11.0.1"
+
+[[repos.hooks]]
+id = "shellcheck"
+name = "Shell validation"
+args = ["-x"]
+priority = 5
+
+[[repos]]
+repo = "https://github.com/crate-ci/typos"
+rev = "v1.51.1"
+
+[[repos.hooks]]
+id = "typos"
+name = "Spelling"
+args = ["--force-exclude"]
+stages = ["pre-commit"]
+priority = 5
+
+[[repos]]
+repo = "local"
+
+[[repos.hooks]]
+id = "cargo-fmt"
+name = "Rust formatting"
+language = "system"
+entry = "cargo fmt --all"
+files = "(\\.rs|rustfmt\\.toml|rust-toolchain\\.toml)$"
+pass_filenames = false
+priority = 3
+
+[[repos.hooks]]
+id = "cargo-sort"
+name = "Cargo manifest ordering"
+language = "rust"
+additional_dependencies = ["cli:cargo-sort:2.1.4"]
+# This release's prebuilt assets report a different version; compile the declared crate.
+env = { PREK_USE_CARGO_BINSTALL = "0" }
+entry = "cargo sort --workspace --grouped"
+files = "Cargo\\.toml$"
+pass_filenames = false
+priority = 3
+
+[[repos.hooks]]
+id = "tombi-format"
+name = "TOML formatting"
+language = "python"
+additional_dependencies = ["tombi==1.8.4"]
+entry = "tombi format --offline"
+types = ["toml"]
+exclude = "(^|/)(Cargo\\.toml|Cargo\\.lock|uv\\.lock)$"
+priority = 4
+
+[[repos.hooks]]
+id = "tombi-lint"
+name = "TOML validation"
+language = "python"
+additional_dependencies = ["tombi==1.8.4"]
+entry = "tombi lint --offline"
+types = ["toml"]
+exclude = "(^|/)(Cargo\\.toml|Cargo\\.lock|uv\\.lock)$"
+priority = 5
+
+[[repos.hooks]]
+id = "pyright"
+name = "Python types"
+language = "python"
+additional_dependencies = ["pyright==1.1.414"]
+entry = "pyright"
+stages = ["manual"]
+pass_filenames = false
+always_run = true
+
+[[repos.hooks]]
+id = "cargo-clippy"
+name = "Clippy"
+language = "system"
+entry = "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings"
+stages = ["manual"]
+pass_filenames = false
+always_run = true
+
+[[repos.hooks]]
+id = "cargo-deny"
+name = "Dependency policy"
+language = "rust"
+additional_dependencies = ["cli:cargo-deny:0.20.2"]
+entry = "cargo deny --all-features check advisories bans licenses sources"
+stages = ["manual"]
+pass_filenames = false
+always_run = true
+
+[[repos.hooks]]
+id = "cargo-machete"
+name = "Unused dependencies"
+language = "rust"
+additional_dependencies = ["cli:cargo-machete:0.9.2"]
+entry = "cargo machete"
+stages = ["manual"]
+pass_filenames = false
+always_run = true
+
+[[repos.hooks]]
+id = "acceptance-tests"
+name = "Workspace acceptance tests"
+language = "rust"
+additional_dependencies = ["cli:git-branchless:0.11.1", "cli:jj-cli:0.46.0"]
+entry = "uv run scripts/measure.py tests cargo test --workspace --all-targets --all-features --locked"
+stages = ["manual"]
+pass_filenames = false
+always_run = true
+
+[[repos.hooks]]
+id = "assurance"
+name = "Generated behavioural contracts"
+language = "rust"
+additional_dependencies = ["cli:git-branchless:0.11.1", "cli:jj-cli:0.46.0"]
+entry = "uv run scripts/assurance.py properties"
+stages = ["manual"]
+pass_filenames = false
+always_run = true
+
+[[repos.hooks]]
+id = "regression-sensitivity"
+name = "Known defect detection"
+language = "rust"
+additional_dependencies = ["cli:git-branchless:0.11.1", "cli:jj-cli:0.46.0"]
+entry = "uv run scripts/assurance.py sensitivity"
+stages = ["manual"]
+pass_filenames = false
+always_run = true
+
+[[repos.hooks]]
+id = "mutants"
+name = "Critical decision mutation analysis"
+language = "rust"
+additional_dependencies = ["cli:cargo-mutants:27.1.0"]
+entry = "uv run scripts/assurance.py mutants"
+stages = ["manual"]
+pass_filenames = false
+always_run = true
+
+[[repos.hooks]]
+id = "fuzz-smoke"
+name = "Retained fuzz corpus and generated replay"
+language = "system"
+entry = "uv run scripts/fuzzing.py replay"
+stages = ["manual"]
+pass_filenames = false
+always_run = true
+
+[[repos.hooks]]
+id = "fuzz"
+name = "Bounded coverage-guided fuzzing"
+language = "rust"
+additional_dependencies = ["cli:cargo-fuzz:0.13.2"]
+entry = "uv run scripts/fuzzing.py campaign"
+stages = ["manual"]
+pass_filenames = false
+always_run = true
+
+[[repos.hooks]]
+id = "coverage-unit"
+name = "Unit coverage"
+language = "rust"
+additional_dependencies = ["cli:cargo-llvm-cov:0.9.1"]
+entry = "uv run scripts/measure.py unit-coverage uv run scripts/unit_coverage.py"
+stages = ["manual"]
+pass_filenames = false
+always_run = true
+
+[[repos.hooks]]
+id = "coverage-branches"
+name = "Complete nightly unit branch coverage"
+language = "rust"
+additional_dependencies = ["cli:cargo-llvm-cov:0.9.1"]
+entry = "uv run scripts/branch_coverage.py"
+stages = ["manual"]
+pass_filenames = false
+always_run = true
+
+[[repos.hooks]]
+id = "coverage-versioning"
+name = "Versioning coverage"
+language = "system"
+entry = "just coverage-versioning"
+stages = ["manual"]
+pass_filenames = false
+always_run = true
+
+[[repos.hooks]]
+id = "coverage-application"
+name = "Application package coverage"
+language = "rust"
+additional_dependencies = ["cli:cargo-llvm-cov:0.9.1", "cli:git-branchless:0.11.1", "cli:jj-cli:0.46.0"]
+entry = "uv run scripts/measure.py coverage uv run scripts/coverage.py"
+stages = ["manual"]
+pass_filenames = false
+always_run = true
+
+[[repos.hooks]]
+id = "commit-msg"
+name = "Conventional Commit and version policy"
+language = "system"
+entry = "uv run --locked scripts/version.py commit-msg"
+stages = ["commit-msg"]
+always_run = true
+
+[[repos.hooks]]
+id = "version-pre-push"
+name = "Pushed version policy"
+language = "system"
+entry = "uv run --locked scripts/version.py pre-push"
+stages = ["pre-push"]
+pass_filenames = false
+always_run = true
+priority = 0
+
+[[repos.hooks]]
+id = "backends"
+name = "Real VCS backend acceptance"
+language = "rust"
+additional_dependencies = ["cli:git-branchless:0.11.1", "cli:jj-cli:0.46.0"]
+entry = "uv run scripts/measure.py backends uv run scripts/backends.py"
+stages = ["manual"]
+pass_filenames = false
+always_run = true

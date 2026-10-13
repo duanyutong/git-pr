@@ -1,0 +1,23 @@
+[graph]
+all-features = true
+targets = ["aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
+
+[advisories]
+ignore = []
+
+[licenses]
+allow = ["AGPL-3.0-only", "Apache-2.0", "BSD-3-Clause", "ISC", "MIT", "Unicode-3.0"]
+confidence-threshold = 0.8
+
+[bans]
+multiple-versions = "deny"
+wildcards = "deny"
+# Linux Secret Service enables zeroize_derive 1.5, whose macro API requires syn 2;
+# current serde and ICU derives require syn 3. Neither range can be consolidated.
+skip = [{ name = "syn", version = "2.0.119" }]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
