@@ -1,0 +1,6 @@
+# Preserve the established command-line help indentation exactly.
+src/cli/flags.txt whitespace=-space-before-tab
+
+# Retain exact corpus bytes, including intentional carriage returns and NULs.
+fuzz/seeds/** -text
+fuzz/seeds/**/*.bin binary

@@ -1,0 +1,3850 @@
+{
+  "revision": "132dc66ea004d03606585c9bdfe95289bd0b9dcb",
+  "function_count": 74,
+  "case_count": 301,
+  "golden_call_count": 312,
+  "superseded_configuration_functions": [
+    "TestFindNearestProjectConfigDir_NearestWins",
+    "TestFindNearestProjectConfigDir_StopsAtRepoRoot_SubmoduleBoundary",
+    "TestLoadFileConfig_NoConfigIsEmpty",
+    "TestLoadFileConfig_OutputNearestProjectWins",
+    "TestLoadFileConfig_OutputPrecedence_GlobalProjectLocal",
+    "TestLoadFileConfig_Precedence_GlobalProjectLocal",
+    "TestReadConfigFile_JSONAndYAMLParseIdentically",
+    "TestReadConfigFile_JSONPreferredOverYAML",
+    "TestReadConfigFile_MalformedTreatedAsAbsent"
+  ],
+  "functions": [
+    {
+      "suite": "config_test.go",
+      "source_sha256": "d906a55b5247bbc5e41495727c2a500c5657a14c1dc9233853d3420fd48c289f",
+      "function": "TestDefaultConfig",
+      "line": 7,
+      "assertion_sites": [
+        {
+          "line": 10,
+          "statement": "t.Error(\"reverse should default to true\")"
+        },
+        {
+          "line": 13,
+          "statement": "t.Error(\"draft should default to true\")"
+        },
+        {
+          "line": 16,
+          "statement": "t.Error(\"stack emojis should default to disabled\")"
+        },
+        {
+          "line": 19,
+          "statement": "t.Error(\"GitHub Stack integration should default to disabled\")"
+        }
+      ],
+      "cases": [
+        {
+          "case": "TestDefaultConfig",
+          "golden_lines": [],
+          "rust_tests": [
+            "src/tests/adapters.rs::github_lookup_fallback_errors_creation_and_status_diagnostics",
+            "src/tests/unit/pure.rs::cli_preserves_go_boundaries_and_boolean_values"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "config_test.go",
+      "source_sha256": "d906a55b5247bbc5e41495727c2a500c5657a14c1dc9233853d3420fd48c289f",
+      "function": "TestResolveGitHubStackEnabled",
+      "line": 23,
+      "assertion_sites": [
+        {
+          "line": 65,
+          "statement": "t.Fatalf(\"resolveGitHubStackEnabled() = %v, want %v\", got, tt.want)"
+        }
+      ],
+      "cases": [
+        {
+          "case": "TestResolveGitHubStackEnabled/command_line_overrides_environment_and_Git_config",
+          "golden_lines": [
+            280
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestResolveGitHubStackEnabled/disabled_by_default",
+          "golden_lines": [
+            281
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestResolveGitHubStackEnabled/enabled_by_Git_config",
+          "golden_lines": [
+            282
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestResolveGitHubStackEnabled/environment_overrides_Git_config",
+          "golden_lines": [
+            283
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestResolveGitHubStackEnabled/no-stack_overrides_every_enabling_source",
+          "golden_lines": [
+            284
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "config_test.go",
+      "source_sha256": "d906a55b5247bbc5e41495727c2a500c5657a14c1dc9233853d3420fd48c289f",
+      "function": "TestMatchWildcard",
+      "line": 71,
+      "assertion_sites": [],
+      "cases": [
+        {
+          "case": "TestMatchWildcard/asterisk_wildcard/asterisk_at_end",
+          "golden_lines": [
+            150
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/asterisk_wildcard/asterisk_at_end_no_match",
+          "golden_lines": [
+            151
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/asterisk_wildcard/asterisk_at_start",
+          "golden_lines": [
+            152
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/asterisk_wildcard/asterisk_at_start_no_match",
+          "golden_lines": [
+            153
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/asterisk_wildcard/asterisk_in_middle",
+          "golden_lines": [
+            154
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/asterisk_wildcard/asterisk_matches_multiple_chars",
+          "golden_lines": [
+            155
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/asterisk_wildcard/asterisk_matches_single_char",
+          "golden_lines": [
+            156
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/asterisk_wildcard/asterisk_matches_zero_chars",
+          "golden_lines": [
+            157
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/asterisk_wildcard/consecutive_asterisks",
+          "golden_lines": [
+            158
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/asterisk_wildcard/multiple_asterisks",
+          "golden_lines": [
+            159
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/asterisk_wildcard/only_asterisk_matches_anything",
+          "golden_lines": [
+            160
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/asterisk_wildcard/only_asterisk_matches_empty",
+          "golden_lines": [
+            161
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/backtracking_scenarios/complex_backtrack",
+          "golden_lines": [
+            162
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/backtracking_scenarios/greedy_then_backtrack",
+          "golden_lines": [
+            163
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/backtracking_scenarios/multiple_asterisk_backtrack",
+          "golden_lines": [
+            164
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/backtracking_scenarios/pattern_longer_than_text",
+          "golden_lines": [
+            165
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/backtracking_scenarios/simple_backtrack",
+          "golden_lines": [
+            166
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/backtracking_scenarios/simple_backtrack_no_match",
+          "golden_lines": [
+            167
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/backtracking_scenarios/text_longer_than_pattern",
+          "golden_lines": [
+            168
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/backtracking_scenarios/worst_case_backtrack",
+          "golden_lines": [
+            169
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/combined_wildcards/asterisk_and_question",
+          "golden_lines": [
+            170
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/combined_wildcards/complex_pattern_match",
+          "golden_lines": [
+            171
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/combined_wildcards/complex_pattern_no_match",
+          "golden_lines": [
+            172
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/combined_wildcards/multiple_of_each",
+          "golden_lines": [
+            173
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/combined_wildcards/question_and_asterisk",
+          "golden_lines": [
+            174
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/edge_cases/brackets_literal",
+          "golden_lines": [
+            175
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/edge_cases/brackets_not_character_class",
+          "golden_lines": [
+            176
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/edge_cases/hyphen_literal",
+          "golden_lines": [
+            177
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/edge_cases/hyphen_not_range",
+          "golden_lines": [
+            178
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/edge_cases/long_pattern",
+          "golden_lines": [
+            179
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/edge_cases/many_wildcards",
+          "golden_lines": [
+            180
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/edge_cases/parens_literal",
+          "golden_lines": [
+            181
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/edge_cases/plus_literal",
+          "golden_lines": [
+            182
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/edge_cases/special_chars_literal",
+          "golden_lines": [
+            183
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/edge_cases/special_chars_no_regex",
+          "golden_lines": [
+            184
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/exact_matches/case_insensitive_lowercase_pattern",
+          "golden_lines": [
+            185
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/exact_matches/case_insensitive_mixed_case",
+          "golden_lines": [
+            186
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/exact_matches/case_insensitive_uppercase_pattern",
+          "golden_lines": [
+            187
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/exact_matches/different_strings",
+          "golden_lines": [
+            188
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/exact_matches/empty_pattern_and_text",
+          "golden_lines": [
+            189
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/exact_matches/empty_pattern_non-empty_text",
+          "golden_lines": [
+            190
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/exact_matches/identical_strings",
+          "golden_lines": [
+            191
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/exact_matches/non-empty_pattern_empty_text",
+          "golden_lines": [
+            192
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/new_default_patterns/draft_prefix_match",
+          "golden_lines": [
+            193
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/new_default_patterns/draft_prefix_no_match",
+          "golden_lines": [
+            194
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/new_default_patterns/draft_prefix_uppercase",
+          "golden_lines": [
+            195
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/new_default_patterns/wip_bracket_at_end",
+          "golden_lines": [
+            196
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/new_default_patterns/wip_bracket_at_start",
+          "golden_lines": [
+            197
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/new_default_patterns/wip_bracket_in_middle",
+          "golden_lines": [
+            198
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/new_default_patterns/wip_bracket_uppercase",
+          "golden_lines": [
+            199
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/new_default_patterns/wip_no_brackets",
+          "golden_lines": [
+            200
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/new_default_patterns/wip_prefix_match",
+          "golden_lines": [
+            201
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/new_default_patterns/wip_prefix_no_match",
+          "golden_lines": [
+            202
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/new_default_patterns/wip_prefix_uppercase",
+          "golden_lines": [
+            203
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/production_draft_pattern/draft_at_end",
+          "golden_lines": [
+            204
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/production_draft_pattern/draft_at_start",
+          "golden_lines": [
+            205
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/production_draft_pattern/draft_in_middle",
+          "golden_lines": [
+            206
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/production_draft_pattern/draft_mixed_case",
+          "golden_lines": [
+            207
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/production_draft_pattern/draft_only",
+          "golden_lines": [
+            208
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/production_draft_pattern/draft_random_pattern",
+          "golden_lines": [
+            209
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/production_draft_pattern/draft_uppercase",
+          "golden_lines": [
+            210
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/production_draft_pattern/no_brackets",
+          "golden_lines": [
+            211
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/production_draft_pattern/no_draft_word",
+          "golden_lines": [
+            212
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/production_draft_pattern/partial_match_no_brackets",
+          "golden_lines": [
+            213
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/question_mark_wildcard/consecutive_questions",
+          "golden_lines": [
+            214
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/question_mark_wildcard/consecutive_questions_no_match",
+          "golden_lines": [
+            215
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/question_mark_wildcard/multiple_questions",
+          "golden_lines": [
+            216
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/question_mark_wildcard/multiple_questions_no_match",
+          "golden_lines": [
+            217
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/question_mark_wildcard/question_at_start",
+          "golden_lines": [
+            218
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/question_mark_wildcard/question_in_middle",
+          "golden_lines": [
+            219
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/question_mark_wildcard/question_matches_letter",
+          "golden_lines": [
+            220
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/question_mark_wildcard/question_matches_one_char",
+          "golden_lines": [
+            221
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/question_mark_wildcard/question_not_match_empty",
+          "golden_lines": [
+            222
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/question_mark_wildcard/question_not_match_multiple",
+          "golden_lines": [
+            223
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/realistic_patterns/draft_prefix",
+          "golden_lines": [
+            224
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/realistic_patterns/draft_suffix",
+          "golden_lines": [
+            225
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/realistic_patterns/emoji_in_pattern",
+          "golden_lines": [
+            226
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/realistic_patterns/emoji_in_text",
+          "golden_lines": [
+            227
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/realistic_patterns/skip_ci_pattern",
+          "golden_lines": [
+            228
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/realistic_patterns/todo_anywhere",
+          "golden_lines": [
+            229
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/realistic_patterns/wip_no_match",
+          "golden_lines": [
+            230
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/realistic_patterns/wip_prefix",
+          "golden_lines": [
+            231
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchWildcard/realistic_patterns/wip_uppercase",
+          "golden_lines": [
+            232
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "config_test.go",
+      "source_sha256": "d906a55b5247bbc5e41495727c2a500c5657a14c1dc9233853d3420fd48c289f",
+      "function": "TestMatchAnyPattern",
+      "line": 332,
+      "assertion_sites": [],
+      "cases": [
+        {
+          "case": "TestMatchAnyPattern/empty_patterns",
+          "golden_lines": [
+            131
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchAnyPattern/full_default_pattern/DRAFT_uppercase_prefix",
+          "golden_lines": [
+            132
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchAnyPattern/full_default_pattern/WIP_uppercase_prefix",
+          "golden_lines": [
+            133
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchAnyPattern/full_default_pattern/completed_feature",
+          "golden_lines": [
+            134
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchAnyPattern/full_default_pattern/draft_bracket",
+          "golden_lines": [
+            135
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchAnyPattern/full_default_pattern/draft_bracket_end",
+          "golden_lines": [
+            136
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchAnyPattern/full_default_pattern/draft_inside_word",
+          "golden_lines": [
+            137
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchAnyPattern/full_default_pattern/draft_prefix",
+          "golden_lines": [
+            138
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchAnyPattern/full_default_pattern/fix_without_markers",
+          "golden_lines": [
+            139
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchAnyPattern/full_default_pattern/wip_bracket",
+          "golden_lines": [
+            140
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchAnyPattern/full_default_pattern/wip_bracket_middle",
+          "golden_lines": [
+            141
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchAnyPattern/full_default_pattern/wip_inside_word",
+          "golden_lines": [
+            142
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchAnyPattern/full_default_pattern/wip_prefix",
+          "golden_lines": [
+            143
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchAnyPattern/multiple_patterns_OR_logic/first_pattern_matches",
+          "golden_lines": [
+            144
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchAnyPattern/multiple_patterns_OR_logic/middle_pattern_matches",
+          "golden_lines": [
+            145
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchAnyPattern/multiple_patterns_OR_logic/no_pattern_matches",
+          "golden_lines": [
+            146
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchAnyPattern/multiple_patterns_OR_logic/second_pattern_matches",
+          "golden_lines": [
+            147
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchAnyPattern/single_pattern/match",
+          "golden_lines": [
+            148
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMatchAnyPattern/single_pattern/no_match",
+          "golden_lines": [
+            149
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "configfile_test.go",
+      "source_sha256": "37882c7ac138ba1f0f8e9a3fa57f013968b3449ec7e40786f65d083da559daef",
+      "function": "TestReadConfigFile_JSONAndYAMLParseIdentically",
+      "line": 20,
+      "assertion_sites": [],
+      "cases": [
+        {
+          "case": "TestReadConfigFile_JSONAndYAMLParseIdentically",
+          "golden_lines": [],
+          "rust_tests": [
+            "src/tests/adapters.rs::git_configuration_scopes_includes_and_empty_overrides",
+            "src/tests/adapters.rs::standalone_configuration_files_are_not_application_settings"
+          ],
+          "superseded_contract": "Standalone configuration files were replaced by native Git configuration; the mapped tests verify the replacement, not the original file semantics."
+        }
+      ]
+    },
+    {
+      "suite": "configfile_test.go",
+      "source_sha256": "37882c7ac138ba1f0f8e9a3fa57f013968b3449ec7e40786f65d083da559daef",
+      "function": "TestReadConfigFile_JSONPreferredOverYAML",
+      "line": 34,
+      "assertion_sites": [],
+      "cases": [
+        {
+          "case": "TestReadConfigFile_JSONPreferredOverYAML",
+          "golden_lines": [],
+          "rust_tests": [
+            "src/tests/adapters.rs::git_configuration_scopes_includes_and_empty_overrides",
+            "src/tests/adapters.rs::standalone_configuration_files_are_not_application_settings"
+          ],
+          "superseded_contract": "Standalone configuration files were replaced by native Git configuration; the mapped tests verify the replacement, not the original file semantics."
+        }
+      ]
+    },
+    {
+      "suite": "configfile_test.go",
+      "source_sha256": "37882c7ac138ba1f0f8e9a3fa57f013968b3449ec7e40786f65d083da559daef",
+      "function": "TestReadConfigFile_MalformedTreatedAsAbsent",
+      "line": 43,
+      "assertion_sites": [],
+      "cases": [
+        {
+          "case": "TestReadConfigFile_MalformedTreatedAsAbsent",
+          "golden_lines": [],
+          "rust_tests": [
+            "src/tests/adapters.rs::git_configuration_scopes_includes_and_empty_overrides",
+            "src/tests/adapters.rs::standalone_configuration_files_are_not_application_settings"
+          ],
+          "superseded_contract": "Standalone configuration files were replaced by native Git configuration; the mapped tests verify the replacement, not the original file semantics."
+        }
+      ]
+    },
+    {
+      "suite": "configfile_test.go",
+      "source_sha256": "37882c7ac138ba1f0f8e9a3fa57f013968b3449ec7e40786f65d083da559daef",
+      "function": "TestFindNearestProjectConfigDir_NearestWins",
+      "line": 50,
+      "assertion_sites": [],
+      "cases": [
+        {
+          "case": "TestFindNearestProjectConfigDir_NearestWins",
+          "golden_lines": [],
+          "rust_tests": [
+            "src/tests/adapters.rs::git_configuration_scopes_includes_and_empty_overrides",
+            "src/tests/adapters.rs::standalone_configuration_files_are_not_application_settings"
+          ],
+          "superseded_contract": "Standalone configuration files were replaced by native Git configuration; the mapped tests verify the replacement, not the original file semantics."
+        }
+      ]
+    },
+    {
+      "suite": "configfile_test.go",
+      "source_sha256": "37882c7ac138ba1f0f8e9a3fa57f013968b3449ec7e40786f65d083da559daef",
+      "function": "TestFindNearestProjectConfigDir_StopsAtRepoRoot_SubmoduleBoundary",
+      "line": 60,
+      "assertion_sites": [
+        {
+          "line": 67,
+          "statement": "t.Fatal(err)"
+        }
+      ],
+      "cases": [
+        {
+          "case": "TestFindNearestProjectConfigDir_StopsAtRepoRoot_SubmoduleBoundary",
+          "golden_lines": [],
+          "rust_tests": [
+            "src/tests/adapters.rs::git_configuration_scopes_includes_and_empty_overrides",
+            "src/tests/adapters.rs::standalone_configuration_files_are_not_application_settings"
+          ],
+          "superseded_contract": "Standalone configuration files were replaced by native Git configuration; the mapped tests verify the replacement, not the original file semantics."
+        }
+      ]
+    },
+    {
+      "suite": "configfile_test.go",
+      "source_sha256": "37882c7ac138ba1f0f8e9a3fa57f013968b3449ec7e40786f65d083da559daef",
+      "function": "TestLoadFileConfig_Precedence_GlobalProjectLocal",
+      "line": 74,
+      "assertion_sites": [],
+      "cases": [
+        {
+          "case": "TestLoadFileConfig_Precedence_GlobalProjectLocal",
+          "golden_lines": [],
+          "rust_tests": [
+            "src/tests/adapters.rs::git_configuration_scopes_includes_and_empty_overrides",
+            "src/tests/adapters.rs::standalone_configuration_files_are_not_application_settings"
+          ],
+          "superseded_contract": "Standalone configuration files were replaced by native Git configuration; the mapped tests verify the replacement, not the original file semantics."
+        }
+      ]
+    },
+    {
+      "suite": "configfile_test.go",
+      "source_sha256": "37882c7ac138ba1f0f8e9a3fa57f013968b3449ec7e40786f65d083da559daef",
+      "function": "TestLoadFileConfig_NoConfigIsEmpty",
+      "line": 93,
+      "assertion_sites": [],
+      "cases": [
+        {
+          "case": "TestLoadFileConfig_NoConfigIsEmpty",
+          "golden_lines": [],
+          "rust_tests": [
+            "src/tests/adapters.rs::git_configuration_scopes_includes_and_empty_overrides",
+            "src/tests/adapters.rs::standalone_configuration_files_are_not_application_settings"
+          ],
+          "superseded_contract": "Standalone configuration files were replaced by native Git configuration; the mapped tests verify the replacement, not the original file semantics."
+        }
+      ]
+    },
+    {
+      "suite": "configfile_test.go",
+      "source_sha256": "37882c7ac138ba1f0f8e9a3fa57f013968b3449ec7e40786f65d083da559daef",
+      "function": "TestLoadFileConfig_OutputPrecedence_GlobalProjectLocal",
+      "line": 104,
+      "assertion_sites": [],
+      "cases": [
+        {
+          "case": "TestLoadFileConfig_OutputPrecedence_GlobalProjectLocal",
+          "golden_lines": [
+            128
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens",
+            "src/tests/adapters.rs::git_configuration_scopes_includes_and_empty_overrides",
+            "src/tests/adapters.rs::standalone_configuration_files_are_not_application_settings"
+          ],
+          "superseded_contract": "Standalone configuration files were replaced by native Git configuration; the mapped tests verify the replacement, not the original file semantics."
+        }
+      ]
+    },
+    {
+      "suite": "configfile_test.go",
+      "source_sha256": "37882c7ac138ba1f0f8e9a3fa57f013968b3449ec7e40786f65d083da559daef",
+      "function": "TestLoadFileConfig_OutputNearestProjectWins",
+      "line": 128,
+      "assertion_sites": [],
+      "cases": [
+        {
+          "case": "TestLoadFileConfig_OutputNearestProjectWins",
+          "golden_lines": [],
+          "rust_tests": [
+            "src/tests/adapters.rs::git_configuration_scopes_includes_and_empty_overrides",
+            "src/tests/adapters.rs::standalone_configuration_files_are_not_application_settings"
+          ],
+          "superseded_contract": "Standalone configuration files were replaced by native Git configuration; the mapped tests verify the replacement, not the original file semantics."
+        }
+      ]
+    },
+    {
+      "suite": "configfile_test.go",
+      "source_sha256": "37882c7ac138ba1f0f8e9a3fa57f013968b3449ec7e40786f65d083da559daef",
+      "function": "TestDedupStrings",
+      "line": 140,
+      "assertion_sites": [],
+      "cases": [
+        {
+          "case": "TestDedupStrings",
+          "golden_lines": [
+            6
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "git_test.go",
+      "source_sha256": "1f68277ea9afec24c4bd855025011422856c0d582b5e676421d3f81c6da27d21",
+      "function": "TestParseLogs",
+      "line": 9,
+      "assertion_sites": [],
+      "cases": [
+        {
+          "case": "TestParseLogs/ParseLogsAlternativeDateFormat",
+          "golden_lines": [
+            254
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestParseLogs/ParseLogsEmpty",
+          "golden_lines": [
+            255,
+            256
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestParseLogs/ParseLogsMultipleFooters",
+          "golden_lines": [
+            257
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestParseLogs/ParseLogsNoBody",
+          "golden_lines": [
+            258
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestParseLogs/ParseLogsSingleCommit",
+          "golden_lines": [
+            259
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestParseLogs/ParseLogsTitleEmptyBodyWithFooter",
+          "golden_lines": [
+            260
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestParseLogs/parse_logs",
+          "golden_lines": [
+            261
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "git_test.go",
+      "source_sha256": "1f68277ea9afec24c4bd855025011422856c0d582b5e676421d3f81c6da27d21",
+      "function": "TestParseJJWorkingCopy",
+      "line": 239,
+      "assertion_sites": [],
+      "cases": [
+        {
+          "case": "TestParseJJWorkingCopy/description_with_footers",
+          "golden_lines": [
+            246
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestParseJJWorkingCopy/empty_with_description",
+          "golden_lines": [
+            247
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestParseJJWorkingCopy/empty_without_description",
+          "golden_lines": [
+            248
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestParseJJWorkingCopy/invalid_checkOutput_format",
+          "golden_lines": [
+            249
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestParseJJWorkingCopy/invalid_format_-_wrong_parts_count",
+          "golden_lines": [
+            250
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestParseJJWorkingCopy/multi-line_description_with_body",
+          "golden_lines": [
+            251
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestParseJJWorkingCopy/nonempty_with_description",
+          "golden_lines": [
+            252
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestParseJJWorkingCopy/nonempty_without_description",
+          "golden_lines": [
+            253
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "git_test.go",
+      "source_sha256": "1f68277ea9afec24c4bd855025011422856c0d582b5e676421d3f81c6da27d21",
+      "function": "TestFindPrevNonSkipped",
+      "line": 323,
+      "assertion_sites": [],
+      "cases": [
+        {
+          "case": "TestFindPrevNonSkipped/all_predecessors_skipped",
+          "golden_lines": [
+            24
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestFindPrevNonSkipped/empty_stack",
+          "golden_lines": [
+            25
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestFindPrevNonSkipped/immediate_non-skipped_predecessor",
+          "golden_lines": [
+            26
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestFindPrevNonSkipped/intermediate_skip_is_hopped_over",
+          "golden_lines": [
+            27
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestFindPrevNonSkipped/regression:_skip-non-skip-skip-non-skip-target_picks_the_latest_non-skip",
+          "golden_lines": [
+            28
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestFindPrevNonSkipped/single_commit,_no_predecessor",
+          "golden_lines": [
+            29
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestFindPrevNonSkipped/target_not_in_stack",
+          "golden_lines": [
+            30
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "git_test.go",
+      "source_sha256": "1f68277ea9afec24c4bd855025011422856c0d582b5e676421d3f81c6da27d21",
+      "function": "TestRecoverRangeTip",
+      "line": 382,
+      "assertion_sites": [
+        {
+          "line": 394,
+          "statement": "t.Fatalf(\"depth resolver must not be called in jj mode (head=%q depth=%d)\", head, depth)"
+        },
+        {
+          "line": 410,
+          "statement": "t.Fatalf(\"change-id resolver must not be called in non-jj mode (id=%q)\", id)"
+        },
+        {
+          "line": 427,
+          "statement": "resolveDepth := func(string, int) (string, error) { t.Fatal(\"unused\"); return \"\", nil }"
+        }
+      ],
+      "cases": [
+        {
+          "case": "TestRecoverRangeTip/jj_mode_resolves_tip_by_change-id_and_never_uses_depth",
+          "golden_lines": [
+            274
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestRecoverRangeTip/non-jj_mode_resolves_tip_by_depth-from-HEAD_and_never_uses_change-id",
+          "golden_lines": [
+            275
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestRecoverRangeTip/propagates_resolver_error",
+          "golden_lines": [
+            276
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "git_test.go",
+      "source_sha256": "1f68277ea9afec24c4bd855025011422856c0d582b5e676421d3f81c6da27d21",
+      "function": "TestOrderSelection",
+      "line": 433,
+      "assertion_sites": [],
+      "cases": [
+        {
+          "case": "TestOrderSelection/contiguous_selection",
+          "golden_lines": [
+            233
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestOrderSelection/empty_selection_errors",
+          "golden_lines": [
+            234
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestOrderSelection/gapped_selection_spans_the_gap",
+          "golden_lines": [
+            235
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestOrderSelection/order_of_args_does_not_matter",
+          "golden_lines": [
+            236
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestOrderSelection/single_commit",
+          "golden_lines": [
+            237
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestOrderSelection/unknown_commit_errors",
+          "golden_lines": [
+            238
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "git_test.go",
+      "source_sha256": "1f68277ea9afec24c4bd855025011422856c0d582b5e676421d3f81c6da27d21",
+      "function": "TestMarkUnselected",
+      "line": 475,
+      "assertion_sites": [],
+      "cases": [
+        {
+          "case": "TestMarkUnselected/leaves_already-skipped_commits_skipped",
+          "golden_lines": [
+            129
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestMarkUnselected/skips_commits_not_in_the_selected_set",
+          "golden_lines": [
+            130
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "git_test.go",
+      "source_sha256": "1f68277ea9afec24c4bd855025011422856c0d582b5e676421d3f81c6da27d21",
+      "function": "TestValidateRemoteRefsBeforePush",
+      "line": 493,
+      "assertion_sites": [],
+      "cases": [
+        {
+          "case": "TestValidateRemoteRefsBeforePush/all_have_refs_returns_nil",
+          "golden_lines": [
+            308
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestValidateRemoteRefsBeforePush/empty_slice_returns_nil",
+          "golden_lines": [
+            309
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestValidateRemoteRefsBeforePush/multiple_missing_reported_in_stack_order",
+          "golden_lines": [
+            310
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestValidateRemoteRefsBeforePush/one_missing_returns_that_shorthash",
+          "golden_lines": [
+            311
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestValidateRemoteRefsBeforePush/skipped_missing-ref_is_not_reported",
+          "golden_lines": [
+            312
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "git_test.go",
+      "source_sha256": "1f68277ea9afec24c4bd855025011422856c0d582b5e676421d3f81c6da27d21",
+      "function": "TestShortenTitle",
+      "line": 551,
+      "assertion_sites": [],
+      "cases": [
+        {
+          "case": "TestShortenTitle/exact_max_length_unchanged",
+          "golden_lines": [
+            304
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestShortenTitle/long_title_with_space",
+          "golden_lines": [
+            305
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestShortenTitle/long_title_without_space",
+          "golden_lines": [
+            306
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestShortenTitle/short_title_unchanged",
+          "golden_lines": [
+            307
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "git_test.go",
+      "source_sha256": "1f68277ea9afec24c4bd855025011422856c0d582b5e676421d3f81c6da27d21",
+      "function": "TestSelectLocalBranchForCommitSkipsDetachedHeadPlaceholder",
+      "line": 579,
+      "assertion_sites": [],
+      "cases": [
+        {
+          "case": "TestSelectLocalBranchForCommitSkipsDetachedHeadPlaceholder",
+          "golden_lines": [
+            290
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "git_test.go",
+      "source_sha256": "1f68277ea9afec24c4bd855025011422856c0d582b5e676421d3f81c6da27d21",
+      "function": "TestSelectLocalBranchForCommitRejectsDetachedOnly",
+      "line": 592,
+      "assertion_sites": [],
+      "cases": [
+        {
+          "case": "TestSelectLocalBranchForCommitRejectsDetachedOnly",
+          "golden_lines": [
+            289
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "git_test.go",
+      "source_sha256": "1f68277ea9afec24c4bd855025011422856c0d582b5e676421d3f81c6da27d21",
+      "function": "TestValidateRemoteRefRejectsDetachedHeadPlaceholder",
+      "line": 604,
+      "assertion_sites": [],
+      "cases": [
+        {
+          "case": "TestValidateRemoteRefRejectsDetachedHeadPlaceholder",
+          "golden_lines": [],
+          "rust_tests": [
+            "src/tests/adapters.rs::git_ref_validation_rewrite_failures_and_missing_local_branch"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "git_test.go",
+      "source_sha256": "1f68277ea9afec24c4bd855025011422856c0d582b5e676421d3f81c6da27d21",
+      "function": "TestPickStackLeaf",
+      "line": 615,
+      "assertion_sites": [],
+      "cases": [
+        {
+          "case": "TestPickStackLeaf/diverged_stack_with_sub-chains_still_returns_ok=false",
+          "golden_lines": [
+            268
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestPickStackLeaf/diverged_stacks_return_ok=false",
+          "golden_lines": [
+            269
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestPickStackLeaf/linear_chain_of_descendants_picks_the_topmost",
+          "golden_lines": [
+            270
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestPickStackLeaf/linear_chain_regardless_of_input_order",
+          "golden_lines": [
+            271
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestPickStackLeaf/no_descendants_returns_empty_leaf_and_ok",
+          "golden_lines": [
+            272
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestPickStackLeaf/single_descendant_tip_is_the_leaf",
+          "golden_lines": [
+            273
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "git_test.go",
+      "source_sha256": "1f68277ea9afec24c4bd855025011422856c0d582b5e676421d3f81c6da27d21",
+      "function": "TestFullMessageRoundTrip",
+      "line": 712,
+      "assertion_sites": [],
+      "cases": [
+        {
+          "case": "TestFullMessageRoundTrip/idempotent_rewrite",
+          "golden_lines": [
+            65,
+            66,
+            67,
+            68,
+            69,
+            70,
+            71,
+            72
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestFullMessageRoundTrip/many_footer_items_with_body",
+          "golden_lines": [
+            73,
+            74
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestFullMessageRoundTrip/two_footer_items",
+          "golden_lines": [
+            75,
+            76
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "git_test.go",
+      "source_sha256": "1f68277ea9afec24c4bd855025011422856c0d582b5e676421d3f81c6da27d21",
+      "function": "TestParseTrailers",
+      "line": 775,
+      "assertion_sites": [],
+      "cases": [
+        {
+          "case": "TestParseTrailers/aligned_footer_after_body",
+          "golden_lines": [
+            262
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestParseTrailers/aligned_footer_block",
+          "golden_lines": [
+            263
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestParseTrailers/footer_only",
+          "golden_lines": [
+            264
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestParseTrailers/no_blank_line_above_footer",
+          "golden_lines": [
+            265
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestParseTrailers/no_footer",
+          "golden_lines": [
+            266
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestParseTrailers/whitespace-only_separator_line",
+          "golden_lines": [
+            267
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "git_test.go",
+      "source_sha256": "1f68277ea9afec24c4bd855025011422856c0d582b5e676421d3f81c6da27d21",
+      "function": "TestFullMessage",
+      "line": 828,
+      "assertion_sites": [],
+      "cases": [
+        {
+          "case": "TestFullMessage/aligns_keys_and_puts_remote-ref_last",
+          "golden_lines": [
+            61,
+            62
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestFullMessage/empty_message_has_a_single_blank_line_before_the_footer",
+          "golden_lines": [
+            63,
+            64
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "git_test.go",
+      "source_sha256": "1f68277ea9afec24c4bd855025011422856c0d582b5e676421d3f81c6da27d21",
+      "function": "TestDecideRefSync",
+      "line": 858,
+      "assertion_sites": [
+        {
+          "line": 884,
+          "statement": "t.Errorf(\"decideRefSync(%v, %v, ff=%v, same=%v) = %v, want %v\","
+        }
+      ],
+      "cases": [
+        {
+          "case": "TestDecideRefSync/already_there",
+          "golden_lines": [
+            1
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestDecideRefSync/already_there,_ancestry_irrelevant",
+          "golden_lines": [
+            2
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestDecideRefSync/plain_fast-forward",
+          "golden_lines": [
+            3
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestDecideRefSync/same_change,_sideways",
+          "golden_lines": [
+            4
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestDecideRefSync/unrelated_branch_sharing_the_name",
+          "golden_lines": [
+            5
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "git_test.go",
+      "source_sha256": "1f68277ea9afec24c4bd855025011422856c0d582b5e676421d3f81c6da27d21",
+      "function": "TestShortHash",
+      "line": 891,
+      "assertion_sites": [
+        {
+          "line": 900,
+          "statement": "t.Errorf(\"shortHash(%q) = %q, want %q\", in, got, want)"
+        }
+      ],
+      "cases": [
+        {
+          "case": "TestShortHash",
+          "golden_lines": [
+            300,
+            301,
+            302,
+            303
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "github_test.go",
+      "source_sha256": "a44f56a1eb01079772dd46db42b40070a62b7b9cb8f773d5f77f559b0dca883a",
+      "function": "TestDraftPRCreationLogic",
+      "line": 11,
+      "assertion_sites": [
+        {
+          "line": 98,
+          "statement": "t.Errorf(\"%s\\nGot isDraft=%v, want isDraft=%v\\nTitle: %q, config.draft=%v\","
+        }
+      ],
+      "cases": [
+        {
+          "case": "TestDraftPRCreationLogic/both_draft_flag_and_pattern",
+          "golden_lines": [],
+          "rust_tests": [
+            "src/tests/adapters.rs::github_owner_query_and_all_draft_creation_cases"
+          ]
+        },
+        {
+          "case": "TestDraftPRCreationLogic/case_insensitive_pattern_matching",
+          "golden_lines": [
+            9
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens",
+            "src/tests/adapters.rs::github_owner_query_and_all_draft_creation_cases"
+          ]
+        },
+        {
+          "case": "TestDraftPRCreationLogic/draft_flag_disabled_with_normal_title",
+          "golden_lines": [
+            10
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens",
+            "src/tests/adapters.rs::github_owner_query_and_all_draft_creation_cases"
+          ]
+        },
+        {
+          "case": "TestDraftPRCreationLogic/draft_flag_enabled_with_normal_title",
+          "golden_lines": [],
+          "rust_tests": [
+            "src/tests/adapters.rs::github_owner_query_and_all_draft_creation_cases"
+          ]
+        },
+        {
+          "case": "TestDraftPRCreationLogic/draft_pattern_in_title_with_flag_disabled",
+          "golden_lines": [
+            11
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens",
+            "src/tests/adapters.rs::github_owner_query_and_all_draft_creation_cases"
+          ]
+        },
+        {
+          "case": "TestDraftPRCreationLogic/draft_pattern_with_brackets",
+          "golden_lines": [
+            12
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens",
+            "src/tests/adapters.rs::github_owner_query_and_all_draft_creation_cases"
+          ]
+        },
+        {
+          "case": "TestDraftPRCreationLogic/draft_pattern_with_wip_in_brackets",
+          "golden_lines": [
+            13
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens",
+            "src/tests/adapters.rs::github_owner_query_and_all_draft_creation_cases"
+          ]
+        },
+        {
+          "case": "TestDraftPRCreationLogic/draft_prefix_pattern",
+          "golden_lines": [
+            14
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens",
+            "src/tests/adapters.rs::github_owner_query_and_all_draft_creation_cases"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "github_test.go",
+      "source_sha256": "a44f56a1eb01079772dd46db42b40070a62b7b9cb8f773d5f77f559b0dca883a",
+      "function": "TestPRNumberExtraction",
+      "line": 109,
+      "assertion_sites": [
+        {
+          "line": 161,
+          "statement": "t.Errorf(\"%s\\nFailed to extract PR number from output: %q\","
+        },
+        {
+          "line": 172,
+          "statement": "t.Errorf(\"%s\\nFailed to parse PR number: %v\", tt.description, err)"
+        },
+        {
+          "line": 178,
+          "statement": "t.Errorf(\"%s\\nGot PR number %d, want %d from output: %q\","
+        },
+        {
+          "line": 185,
+          "statement": "t.Errorf(\"%s\\nExpected no extraction, but got: %s\","
+        }
+      ],
+      "cases": [
+        {
+          "case": "TestPRNumberExtraction/PR_URL_with_trailing_newline",
+          "golden_lines": [],
+          "rust_tests": [
+            "src/tests/adapters.rs::github_lookup_fallback_errors_creation_and_status_diagnostics"
+          ]
+        },
+        {
+          "case": "TestPRNumberExtraction/large_PR_number",
+          "golden_lines": [],
+          "rust_tests": [
+            "src/tests/adapters.rs::github_lookup_fallback_errors_creation_and_status_diagnostics"
+          ]
+        },
+        {
+          "case": "TestPRNumberExtraction/no_PR_number_in_output",
+          "golden_lines": [],
+          "rust_tests": [
+            "src/tests/adapters.rs::github_lookup_fallback_errors_creation_and_status_diagnostics"
+          ]
+        },
+        {
+          "case": "TestPRNumberExtraction/output_with_extra_text",
+          "golden_lines": [],
+          "rust_tests": [
+            "src/tests/adapters.rs::github_lookup_fallback_errors_creation_and_status_diagnostics"
+          ]
+        },
+        {
+          "case": "TestPRNumberExtraction/standard_PR_URL_output",
+          "golden_lines": [],
+          "rust_tests": [
+            "src/tests/adapters.rs::github_lookup_fallback_errors_creation_and_status_diagnostics"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "github_test.go",
+      "source_sha256": "a44f56a1eb01079772dd46db42b40070a62b7b9cb8f773d5f77f559b0dca883a",
+      "function": "TestGithubRepoOwner",
+      "line": 195,
+      "assertion_sites": [
+        {
+          "line": 204,
+          "statement": "t.Errorf(\"githubRepoOwner() = %q, want %q\", owner, \"calendly\")"
+        }
+      ],
+      "cases": [
+        {
+          "case": "TestGithubRepoOwner",
+          "golden_lines": [],
+          "rust_tests": [
+            "src/tests/adapters.rs::github_owner_query_and_all_draft_creation_cases"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "github_test.go",
+      "source_sha256": "a44f56a1eb01079772dd46db42b40070a62b7b9cb8f773d5f77f559b0dca883a",
+      "function": "TestSelectPRNumberForHeadRefPrefersOpenPR",
+      "line": 208,
+      "assertion_sites": [
+        {
+          "line": 229,
+          "statement": "t.Errorf(\"selectPRNumberForHeadRef() = %d, want 42\", prNumber)"
+        }
+      ],
+      "cases": [
+        {
+          "case": "TestSelectPRNumberForHeadRefPrefersOpenPR",
+          "golden_lines": [
+            292
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "github_test.go",
+      "source_sha256": "a44f56a1eb01079772dd46db42b40070a62b7b9cb8f773d5f77f559b0dca883a",
+      "function": "TestSelectPRNumberForHeadRefFallsBackToClosedPR",
+      "line": 233,
+      "assertion_sites": [
+        {
+          "line": 247,
+          "statement": "t.Errorf(\"selectPRNumberForHeadRef() = %d, want 41\", prNumber)"
+        }
+      ],
+      "cases": [
+        {
+          "case": "TestSelectPRNumberForHeadRefFallsBackToClosedPR",
+          "golden_lines": [
+            291
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "github_test.go",
+      "source_sha256": "a44f56a1eb01079772dd46db42b40070a62b7b9cb8f773d5f77f559b0dca883a",
+      "function": "TestCommitNewlyCreatedFlag",
+      "line": 253,
+      "assertion_sites": [
+        {
+          "line": 279,
+          "statement": "t.Errorf(\"Initial state incorrect: got %v, want %v\","
+        },
+        {
+          "line": 288,
+          "statement": "t.Errorf(\"%s\\nAfter creation: got NewlyCreated=%v, want %v\","
+        }
+      ],
+      "cases": [
+        {
+          "case": "TestCommitNewlyCreatedFlag/new_commit_starts_as_not_newly_created",
+          "golden_lines": [],
+          "rust_tests": [
+            "src/tests/adapters.rs::github_lookup_fallback_errors_creation_and_status_diagnostics"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "github_test.go",
+      "source_sha256": "a44f56a1eb01079772dd46db42b40070a62b7b9cb8f773d5f77f559b0dca883a",
+      "function": "TestDraftStatusPreservation",
+      "line": 299,
+      "assertion_sites": [],
+      "cases": [
+        {
+          "case": "TestDraftStatusPreservation/existing_draft_PR_stays_draft",
+          "golden_lines": [],
+          "rust_tests": [
+            "src/tests/workflows.rs::existing_drafts_and_manually_ready_prs_preserve_their_state",
+            "src/tests/workflows.rs::first_repeat_and_unchanged_submission_preserve_bases_bodies_and_draft_choice"
+          ]
+        },
+        {
+          "case": "TestDraftStatusPreservation/existing_ready_PR_stays_ready",
+          "golden_lines": [],
+          "rust_tests": [
+            "src/tests/workflows.rs::existing_drafts_and_manually_ready_prs_preserve_their_state",
+            "src/tests/workflows.rs::first_repeat_and_unchanged_submission_preserve_bases_bodies_and_draft_choice"
+          ]
+        },
+        {
+          "case": "TestDraftStatusPreservation/manually_marked_draft_stays_draft",
+          "golden_lines": [],
+          "rust_tests": [
+            "src/tests/workflows.rs::existing_drafts_and_manually_ready_prs_preserve_their_state",
+            "src/tests/workflows.rs::first_repeat_and_unchanged_submission_preserve_bases_bodies_and_draft_choice"
+          ]
+        },
+        {
+          "case": "TestDraftStatusPreservation/manually_marked_ready_stays_ready",
+          "golden_lines": [],
+          "rust_tests": [
+            "src/tests/workflows.rs::existing_drafts_and_manually_ready_prs_preserve_their_state",
+            "src/tests/workflows.rs::first_repeat_and_unchanged_submission_preserve_bases_bodies_and_draft_choice"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "github_test.go",
+      "source_sha256": "a44f56a1eb01079772dd46db42b40070a62b7b9cb8f773d5f77f559b0dca883a",
+      "function": "TestDraftFlagPrecedence",
+      "line": 364,
+      "assertion_sites": [
+        {
+          "line": 426,
+          "statement": "t.Errorf(\"Draft precedence failed:\\n\"+"
+        }
+      ],
+      "cases": [
+        {
+          "case": "TestDraftFlagPrecedence/flag=false,_pattern=false_->_ready",
+          "golden_lines": [
+            7
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens",
+            "src/tests/adapters.rs::github_owner_query_and_all_draft_creation_cases"
+          ]
+        },
+        {
+          "case": "TestDraftFlagPrecedence/flag=false,_pattern=true_->_draft",
+          "golden_lines": [
+            8
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens",
+            "src/tests/adapters.rs::github_owner_query_and_all_draft_creation_cases"
+          ]
+        },
+        {
+          "case": "TestDraftFlagPrecedence/flag=true,_pattern=false_->_draft",
+          "golden_lines": [],
+          "rust_tests": [
+            "src/tests/adapters.rs::github_owner_query_and_all_draft_creation_cases"
+          ]
+        },
+        {
+          "case": "TestDraftFlagPrecedence/flag=true,_pattern=true_->_draft",
+          "golden_lines": [],
+          "rust_tests": [
+            "src/tests/adapters.rs::github_owner_query_and_all_draft_creation_cases"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "github_test.go",
+      "source_sha256": "a44f56a1eb01079772dd46db42b40070a62b7b9cb8f773d5f77f559b0dca883a",
+      "function": "TestDraftPRCreationVsUpdateBehavior",
+      "line": 443,
+      "assertion_sites": [],
+      "cases": [
+        {
+          "case": "TestDraftPRCreationVsUpdateBehavior",
+          "golden_lines": [],
+          "rust_tests": [
+            "src/tests/workflows.rs::first_repeat_and_unchanged_submission_preserve_bases_bodies_and_draft_choice"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "github_test.go",
+      "source_sha256": "a44f56a1eb01079772dd46db42b40070a62b7b9cb8f773d5f77f559b0dca883a",
+      "function": "TestIsBaseChangeBlockedByStack",
+      "line": 472,
+      "assertion_sites": [
+        {
+          "line": 491,
+          "statement": "t.Errorf(\"isBaseChangeBlockedByStack(%v) = %v, want %v\", tc.err, got, tc.want)"
+        }
+      ],
+      "cases": [
+        {
+          "case": "TestIsBaseChangeBlockedByStack/nil",
+          "golden_lines": [
+            103
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestIsBaseChangeBlockedByStack/plain_wrapped",
+          "golden_lines": [
+            104
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestIsBaseChangeBlockedByStack/real_gh_error",
+          "golden_lines": [
+            105
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestIsBaseChangeBlockedByStack/unrelated_exec_error",
+          "golden_lines": [
+            106
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestIsBaseChangeBlockedByStack/unrelated_plain",
+          "golden_lines": [
+            107
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "github_test.go",
+      "source_sha256": "a44f56a1eb01079772dd46db42b40070a62b7b9cb8f773d5f77f559b0dca883a",
+      "function": "TestIsGhStackMissing",
+      "line": 497,
+      "assertion_sites": [
+        {
+          "line": 512,
+          "statement": "t.Errorf(\"isGhStackMissing(%q, %v) = %v, want %v\", tc.out, tc.err, got, tc.want)"
+        }
+      ],
+      "cases": [
+        {
+          "case": "TestIsGhStackMissing/extension_missing",
+          "golden_lines": [
+            108
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestIsGhStackMissing/missing_text_but_no_error",
+          "golden_lines": [
+            109
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestIsGhStackMissing/nil",
+          "golden_lines": [
+            110
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestIsGhStackMissing/unrelated_error",
+          "golden_lines": [
+            111
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "github_test.go",
+      "source_sha256": "a44f56a1eb01079772dd46db42b40070a62b7b9cb8f773d5f77f559b0dca883a",
+      "function": "TestIsStackNeedsRebuild",
+      "line": 524,
+      "assertion_sites": [
+        {
+          "line": 558,
+          "statement": "t.Errorf(\"isStackNeedsRebuild(%q, %v) = %v, want %v\", tc.out, tc.err, got, tc.want)"
+        }
+      ],
+      "cases": [
+        {
+          "case": "TestIsStackNeedsRebuild/must_be_added_to_the_top",
+          "golden_lines": [
+            112
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestIsStackNeedsRebuild/nil",
+          "golden_lines": [
+            113
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestIsStackNeedsRebuild/reason_only_in_error",
+          "golden_lines": [
+            114
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestIsStackNeedsRebuild/refusal_text_but_no_error",
+          "golden_lines": [
+            115
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestIsStackNeedsRebuild/unrelated_error",
+          "golden_lines": [
+            116
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestIsStackNeedsRebuild/would_remove",
+          "golden_lines": [
+            117
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "github_test.go",
+      "source_sha256": "a44f56a1eb01079772dd46db42b40070a62b7b9cb8f773d5f77f559b0dca883a",
+      "function": "TestIsStackPartiallyUnstacked",
+      "line": 564,
+      "assertion_sites": [
+        {
+          "line": 583,
+          "statement": "t.Errorf(\"isStackPartiallyUnstacked(%q) = %v, want %v\", tc.out, got, tc.want)"
+        }
+      ],
+      "cases": [
+        {
+          "case": "TestIsStackPartiallyUnstacked/clean_unstack",
+          "golden_lines": [
+            118
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestIsStackPartiallyUnstacked/empty",
+          "golden_lines": [
+            119
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestIsStackPartiallyUnstacked/queued_for_merge",
+          "golden_lines": [
+            120
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "github_test.go",
+      "source_sha256": "a44f56a1eb01079772dd46db42b40070a62b7b9cb8f773d5f77f559b0dca883a",
+      "function": "TestGhStackReason",
+      "line": 589,
+      "assertion_sites": [
+        {
+          "line": 613,
+          "statement": "t.Errorf(\"ghStackReason(%q) = %q, want %q\", tc.out, got, tc.want)"
+        }
+      ],
+      "cases": [
+        {
+          "case": "TestGhStackReason/empty",
+          "golden_lines": [
+            99
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestGhStackReason/no_refusal_line",
+          "golden_lines": [
+            100
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestGhStackReason/picks_the_refusal_line_out_of_surrounding_output",
+          "golden_lines": [
+            101
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestGhStackReason/strips_marker",
+          "golden_lines": [
+            102
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "github_test.go",
+      "source_sha256": "a44f56a1eb01079772dd46db42b40070a62b7b9cb8f773d5f77f559b0dca883a",
+      "function": "TestIsStackPushRejected",
+      "line": 619,
+      "assertion_sites": [
+        {
+          "line": 645,
+          "statement": "t.Errorf(\"isStackPushRejected() = %v, want %v\", got, tc.want)"
+        }
+      ],
+      "cases": [
+        {
+          "case": "TestIsStackPushRejected/auth_failure",
+          "golden_lines": [
+            121
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestIsStackPushRejected/failed_to_push_wording_alone",
+          "golden_lines": [
+            122
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestIsStackPushRejected/needs_rebuild_is_not_a_push_failure",
+          "golden_lines": [
+            123
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestIsStackPushRejected/real_gh-stack_rejection",
+          "golden_lines": [
+            124
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestIsStackPushRejected/rejection_only_in_err",
+          "golden_lines": [
+            125
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestIsStackPushRejected/success",
+          "golden_lines": [
+            126
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestIsStackPushRejected/unrelated",
+          "golden_lines": [
+            127
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "main_test.go",
+      "source_sha256": "b74ca80db2604a9c40f321be8e0a4a415a6bcb8ecef7eeee96262c15eae76ea3",
+      "function": "TestGeneratePRBodyWithSentinels",
+      "line": 10,
+      "assertion_sites": [
+        {
+          "line": 134,
+          "statement": "t.Errorf(\"%s\\nResult missing expected content: %q\\nFull result:\\n%s\","
+        },
+        {
+          "line": 142,
+          "statement": "t.Errorf(\"%s\\nResult contains unwanted content: %q\\nFull result:\\n%s\","
+        },
+        {
+          "line": 151,
+          "statement": "t.Errorf(\"%s\\nSentinel count mismatch: start=%d, end=%d (expected 1 each)\\nFull result:\\n%s\","
+        }
+      ],
+      "cases": [
+        {
+          "case": "TestGeneratePRBodyWithSentinels/backwards_compatibility_-_old_format_with_bot_content_after",
+          "golden_lines": [
+            79
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestGeneratePRBodyWithSentinels/backwards_compatibility_-_old_format_without_sentinels",
+          "golden_lines": [
+            80
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestGeneratePRBodyWithSentinels/empty_body",
+          "golden_lines": [
+            81
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestGeneratePRBodyWithSentinels/first_time_-_no_existing_section",
+          "golden_lines": [
+            82
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestGeneratePRBodyWithSentinels/multiple_bot_sections",
+          "golden_lines": [
+            83
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestGeneratePRBodyWithSentinels/preserve_content_after_git-pr_section",
+          "golden_lines": [
+            84
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestGeneratePRBodyWithSentinels/update_existing_section_with_sentinels",
+          "golden_lines": [
+            85
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "main_test.go",
+      "source_sha256": "b74ca80db2604a9c40f321be8e0a4a415a6bcb8ecef7eeee96262c15eae76ea3",
+      "function": "TestGeneratePRBodyWithCommitMessage",
+      "line": 162,
+      "assertion_sites": [
+        {
+          "line": 175,
+          "statement": "t.Errorf(\"Missing commit message in result: %s\", result)"
+        },
+        {
+          "line": 180,
+          "statement": "t.Errorf(\"Missing start sentinel in result: %s\", result)"
+        },
+        {
+          "line": 183,
+          "statement": "t.Errorf(\"Missing end sentinel in result: %s\", result)"
+        },
+        {
+          "line": 188,
+          "statement": "t.Errorf(\"Should not contain old PR description when commit has message: %s\", result)"
+        }
+      ],
+      "cases": [
+        {
+          "case": "TestGeneratePRBodyWithCommitMessage",
+          "golden_lines": [
+            78
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "main_test.go",
+      "source_sha256": "b74ca80db2604a9c40f321be8e0a4a415a6bcb8ecef7eeee96262c15eae76ea3",
+      "function": "TestGeneratePRBodyPreservesExistingWhenSentinelsPresent",
+      "line": 199,
+      "assertion_sites": [
+        {
+          "line": 214,
+          "statement": "t.Errorf(\"Existing description content %q was not preserved.\\nResult:\\n%s\", want, result)"
+        },
+        {
+          "line": 220,
+          "statement": "t.Errorf(\"Commit message body should not override existing PR body when sentinels are present.\\nResult:\\n%s\", result)"
+        },
+        {
+          "line": 225,
+          "statement": "t.Errorf(\"New stack info missing.\\nResult:\\n%s\", result)"
+        },
+        {
+          "line": 228,
+          "statement": "t.Errorf(\"Old stack info still present.\\nResult:\\n%s\", result)"
+        },
+        {
+          "line": 233,
+          "statement": "t.Errorf(\"Expected exactly 1 start marker, got %d\", got)"
+        },
+        {
+          "line": 236,
+          "statement": "t.Errorf(\"Expected exactly 1 end marker, got %d\", got)"
+        }
+      ],
+      "cases": [
+        {
+          "case": "TestGeneratePRBodyPreservesExistingWhenSentinelsPresent",
+          "golden_lines": [
+            77
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "main_test.go",
+      "source_sha256": "b74ca80db2604a9c40f321be8e0a4a415a6bcb8ecef7eeee96262c15eae76ea3",
+      "function": "TestSentinelMarkerStructure",
+      "line": 241,
+      "assertion_sites": [
+        {
+          "line": 253,
+          "statement": "t.Fatalf(\"Sentinels not found in result: %s\", result)"
+        },
+        {
+          "line": 257,
+          "statement": "t.Fatalf(\"End marker before start marker: start=%d, end=%d\", startIdx, endIdx)"
+        },
+        {
+          "line": 268,
+          "statement": "t.Errorf(\"Section doesn't start correctly.\\nExpected prefix: %q\\nGot: %q\","
+        },
+        {
+          "line": 273,
+          "statement": "t.Errorf(\"Section doesn't end correctly.\\nExpected suffix: %q\\nGot: %q\","
+        },
+        {
+          "line": 280,
+          "statement": "t.Errorf(\"Content between markers missing stack info.\\nExpected: %q\\nGot: %q\","
+        }
+      ],
+      "cases": [
+        {
+          "case": "TestSentinelMarkerStructure",
+          "golden_lines": [
+            293
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "main_test.go",
+      "source_sha256": "b74ca80db2604a9c40f321be8e0a4a415a6bcb8ecef7eeee96262c15eae76ea3",
+      "function": "TestSentinelReplacement",
+      "line": 291,
+      "assertion_sites": [
+        {
+          "line": 314,
+          "statement": "t.Errorf(\"Round %d: Sentinel duplication detected! start=%d, end=%d\\nResult:\\n%s\","
+        },
+        {
+          "line": 320,
+          "statement": "t.Errorf(\"Round %d: Missing current stack info\\nExpected: %s\\nResult:\\n%s\","
+        },
+        {
+          "line": 329,
+          "statement": "t.Errorf(\"Round %d: Old stack info still present: %s\\nResult:\\n%s\","
+        },
+        {
+          "line": 336,
+          "statement": "t.Errorf(\"Round %d: Original description lost\\nResult:\\n%s\","
+        }
+      ],
+      "cases": [
+        {
+          "case": "TestSentinelReplacement",
+          "golden_lines": [
+            294,
+            295,
+            296
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "main_test.go",
+      "source_sha256": "b74ca80db2604a9c40f321be8e0a4a415a6bcb8ecef7eeee96262c15eae76ea3",
+      "function": "TestSentinelWithBotInterference",
+      "line": 350,
+      "assertion_sites": [
+        {
+          "line": 374,
+          "statement": "t.Errorf(\"Updated stack info missing: %s\", result3)"
+        },
+        {
+          "line": 377,
+          "statement": "t.Errorf(\"Old stack info still present: %s\", result3)"
+        },
+        {
+          "line": 380,
+          "statement": "t.Errorf(\"Bot content lost after git-pr update: %s\", result3)"
+        },
+        {
+          "line": 393,
+          "statement": "t.Errorf(\"Final stack info missing: %s\", result5)"
+        },
+        {
+          "line": 396,
+          "statement": "t.Errorf(\"First bot content lost: %s\", result5)"
+        },
+        {
+          "line": 399,
+          "statement": "t.Errorf(\"Second bot content lost: %s\", result5)"
+        },
+        {
+          "line": 402,
+          "statement": "t.Errorf(\"Old stack versions still present: %s\", result5)"
+        },
+        {
+          "line": 408,
+          "statement": "t.Errorf(\"Multiple git-pr sections found: %d\\nResult:\\n%s\", startCount, result5)"
+        }
+      ],
+      "cases": [
+        {
+          "case": "TestSentinelWithBotInterference",
+          "golden_lines": [
+            297,
+            298,
+            299
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "output_test.go",
+      "source_sha256": "d40ae34ca29a29680d0221cb1f90add0ac2b857028ba4051c7f28ad6f2cc4c43",
+      "function": "TestFormatPROutput_Presets",
+      "line": 29,
+      "assertion_sites": [],
+      "cases": [
+        {
+          "case": "TestFormatPROutput_Presets",
+          "golden_lines": [
+            53,
+            54,
+            55,
+            56,
+            57,
+            58,
+            59,
+            60
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "output_test.go",
+      "source_sha256": "d40ae34ca29a29680d0221cb1f90add0ac2b857028ba4051c7f28ad6f2cc4c43",
+      "function": "TestFormatPROutput_CustomTemplates",
+      "line": 50,
+      "assertion_sites": [],
+      "cases": [
+        {
+          "case": "TestFormatPROutput_CustomTemplates",
+          "golden_lines": [
+            39,
+            40,
+            41,
+            42,
+            43,
+            44,
+            45,
+            46,
+            47,
+            48,
+            49,
+            50,
+            51,
+            52
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "output_test.go",
+      "source_sha256": "d40ae34ca29a29680d0221cb1f90add0ac2b857028ba4051c7f28ad6f2cc4c43",
+      "function": "TestResolveOutputFormat_DefaultsToURLTitle",
+      "line": 74,
+      "assertion_sites": [],
+      "cases": [
+        {
+          "case": "TestResolveOutputFormat_DefaultsToURLTitle",
+          "golden_lines": [
+            285,
+            286
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "output_test.go",
+      "source_sha256": "d40ae34ca29a29680d0221cb1f90add0ac2b857028ba4051c7f28ad6f2cc4c43",
+      "function": "TestResolveOutputFormat_UnknownPlaceholder",
+      "line": 86,
+      "assertion_sites": [],
+      "cases": [
+        {
+          "case": "TestResolveOutputFormat_UnknownPlaceholder",
+          "golden_lines": [
+            287
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "output_test.go",
+      "source_sha256": "d40ae34ca29a29680d0221cb1f90add0ac2b857028ba4051c7f28ad6f2cc4c43",
+      "function": "TestResolveOutputFormat_UnknownPreset",
+      "line": 95,
+      "assertion_sites": [],
+      "cases": [
+        {
+          "case": "TestResolveOutputFormat_UnknownPreset",
+          "golden_lines": [
+            288
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "output_test.go",
+      "source_sha256": "d40ae34ca29a29680d0221cb1f90add0ac2b857028ba4051c7f28ad6f2cc4c43",
+      "function": "TestOutputFieldsAndReplacementsInSync",
+      "line": 106,
+      "assertion_sites": [],
+      "cases": [
+        {
+          "case": "TestOutputFieldsAndReplacementsInSync",
+          "golden_lines": [],
+          "rust_tests": [
+            "src/tests/unit/pure.rs::output_presets_custom_templates_and_validation"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "prtemplate_test.go",
+      "source_sha256": "dabc5426dcbd91d559ff1b69c2a7764f9bab19c76e320b596cd37927380d5c55",
+      "function": "TestLoadPRTemplate",
+      "line": 10,
+      "assertion_sites": [
+        {
+          "line": 14,
+          "statement": "t.Fatal(err)"
+        },
+        {
+          "line": 21,
+          "statement": "t.Fatal(err)"
+        },
+        {
+          "line": 27,
+          "statement": "t.Fatal(err)"
+        },
+        {
+          "line": 88,
+          "statement": "t.Fatalf(\"setup failed: %v\", err)"
+        },
+        {
+          "line": 96,
+          "statement": "t.Errorf(\"loadPRTemplate() = %q, want to contain %q\", result, tt.wantContains)"
+        },
+        {
+          "line": 101,
+          "statement": "t.Errorf(\"loadPRTemplate() should return default template, got %q\", result)"
+        },
+        {
+          "line": 105,
+          "statement": "t.Errorf(\"loadPRTemplate() should not return default template\")"
+        }
+      ],
+      "cases": [
+        {
+          "case": "TestLoadPRTemplate/load_from_.github/PULL_REQUEST_TEMPLATE.md",
+          "golden_lines": [],
+          "rust_tests": [
+            "src/tests/adapters.rs::templates_precedence_and_submission_cache_boundary"
+          ]
+        },
+        {
+          "case": "TestLoadPRTemplate/load_from_root_PULL_REQUEST_TEMPLATE.md",
+          "golden_lines": [],
+          "rust_tests": [
+            "src/tests/adapters.rs::templates_precedence_and_submission_cache_boundary"
+          ]
+        },
+        {
+          "case": "TestLoadPRTemplate/prefer_.github_over_root",
+          "golden_lines": [],
+          "rust_tests": [
+            "src/tests/adapters.rs::templates_precedence_and_submission_cache_boundary"
+          ]
+        },
+        {
+          "case": "TestLoadPRTemplate/use_default_when_no_template_found",
+          "golden_lines": [],
+          "rust_tests": [
+            "src/tests/adapters.rs::templates_precedence_and_submission_cache_boundary"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "prtemplate_test.go",
+      "source_sha256": "dabc5426dcbd91d559ff1b69c2a7764f9bab19c76e320b596cd37927380d5c55",
+      "function": "TestGetPRTemplateCaching",
+      "line": 112,
+      "assertion_sites": [
+        {
+          "line": 123,
+          "statement": "t.Error(\"getPRTemplate() should cache the template\")"
+        },
+        {
+          "line": 129,
+          "statement": "t.Error(\"getPRTemplate() should return same cached value\")"
+        }
+      ],
+      "cases": [
+        {
+          "case": "TestGetPRTemplateCaching",
+          "golden_lines": [],
+          "rust_tests": [
+            "src/tests/workflows.rs::template_is_loaded_once_per_submission_even_when_file_changes"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "push_test.go",
+      "source_sha256": "45ecb30db06191119cb058e5652a06033440148227a84251a074e2401f830840",
+      "function": "TestPushRemoteRef",
+      "line": 9,
+      "assertion_sites": [
+        {
+          "line": 86,
+          "statement": "t.Fatalf(\"output = %q, want %q\", output, tt.wantOutput)"
+        },
+        {
+          "line": 89,
+          "statement": "t.Fatalf(\"error = %v, want %v\", err, tt.wantErr)"
+        },
+        {
+          "line": 92,
+          "statement": "t.Fatalf(\"commands = %#v, want %#v\", commands, tt.wantCommands)"
+        },
+        {
+          "line": 95,
+          "statement": "t.Fatalf(\"used %d responses, want %d\", nextResponse, len(tt.responses))"
+        }
+      ],
+      "cases": [
+        {
+          "case": "TestPushRemoteRef/failed_push_and_failed_verification",
+          "golden_lines": [],
+          "rust_tests": [
+            "src/tests/workflows.rs::failures_preserve_completed_pushes_and_report_exact_postcondition",
+            "src/tests/adapters.rs::git_ref_validation_rewrite_failures_and_missing_local_branch"
+          ]
+        },
+        {
+          "case": "TestPushRemoteRef/failed_push_whose_postcondition_is_already_satisfied",
+          "golden_lines": [],
+          "rust_tests": [
+            "src/tests/workflows.rs::failures_preserve_completed_pushes_and_report_exact_postcondition",
+            "src/tests/adapters.rs::git_ref_validation_rewrite_failures_and_missing_local_branch"
+          ]
+        },
+        {
+          "case": "TestPushRemoteRef/failed_push_with_divergent_remote_ref",
+          "golden_lines": [],
+          "rust_tests": [
+            "src/tests/workflows.rs::failures_preserve_completed_pushes_and_report_exact_postcondition",
+            "src/tests/adapters.rs::git_ref_validation_rewrite_failures_and_missing_local_branch"
+          ]
+        },
+        {
+          "case": "TestPushRemoteRef/successful_push",
+          "golden_lines": [],
+          "rust_tests": [
+            "src/tests/workflows.rs::failures_preserve_completed_pushes_and_report_exact_postcondition",
+            "src/tests/adapters.rs::git_ref_validation_rewrite_failures_and_missing_local_branch"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "push_test.go",
+      "source_sha256": "45ecb30db06191119cb058e5652a06033440148227a84251a074e2401f830840",
+      "function": "TestRemoteRefMatchesRequiresExactHashAndRef",
+      "line": 106,
+      "assertion_sites": [
+        {
+          "line": 113,
+          "statement": "t.Fatal(\"expected exact hash and ref to match\")"
+        },
+        {
+          "line": 116,
+          "statement": "t.Fatal(\"short hash must not match\")"
+        },
+        {
+          "line": 119,
+          "statement": "t.Fatal(\"different ref must not match\")"
+        }
+      ],
+      "cases": [
+        {
+          "case": "TestRemoteRefMatchesRequiresExactHashAndRef",
+          "golden_lines": [
+            277,
+            278,
+            279
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "utils_test.go",
+      "source_sha256": "84c7423d4fe9d3994837f5769480241a617afb7adfa85b8004deb97e65209c42",
+      "function": "TestConfirm",
+      "line": 11,
+      "assertion_sites": [
+        {
+          "line": 17,
+          "statement": "t.Errorf(\"confirm() with autoAccept = true; want true\")"
+        },
+        {
+          "line": 30,
+          "statement": "t.Fatalf(\"os.Pipe: %v\", err)"
+        },
+        {
+          "line": 38,
+          "statement": "t.Errorf(\"confirm() on non-interactive stdin; want false\")"
+        }
+      ],
+      "cases": [
+        {
+          "case": "TestConfirm/autoAccept_short-circuits",
+          "golden_lines": [],
+          "rust_tests": [
+            "src/tests/workflows.rs::native_stack_configuration_authorises_linking_and_rebuild_remains_explicit",
+            "src/tests/progress.rs::real_terminal_and_redirected_output_preserve_prompts_and_results"
+          ]
+        },
+        {
+          "case": "TestConfirm/non-interactive_declines",
+          "golden_lines": [],
+          "rust_tests": [
+            "src/tests/workflows.rs::native_stack_configuration_authorises_linking_and_rebuild_remains_explicit",
+            "src/tests/progress.rs::real_terminal_and_redirected_output_preserve_prompts_and_results"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "utils_test.go",
+      "source_sha256": "84c7423d4fe9d3994837f5769480241a617afb7adfa85b8004deb97e65209c42",
+      "function": "TestParseCommaList",
+      "line": 43,
+      "assertion_sites": [
+        {
+          "line": 61,
+          "statement": "t.Errorf(\"parseCommaList(%q) = %v, want %v\", tc.in, got, tc.want)"
+        }
+      ],
+      "cases": [
+        {
+          "case": "TestParseCommaList/empty",
+          "golden_lines": [
+            239
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestParseCommaList/leading_comma",
+          "golden_lines": [
+            240
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestParseCommaList/only_commas",
+          "golden_lines": [
+            241
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestParseCommaList/only_spaces",
+          "golden_lines": [
+            242
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestParseCommaList/single",
+          "golden_lines": [
+            243
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestParseCommaList/trailing_comma",
+          "golden_lines": [
+            244
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestParseCommaList/trim_and_drop_empties",
+          "golden_lines": [
+            245
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "utils_test.go",
+      "source_sha256": "84c7423d4fe9d3994837f5769480241a617afb7adfa85b8004deb97e65209c42",
+      "function": "TestFormatKey",
+      "line": 66,
+      "assertion_sites": [
+        {
+          "line": 81,
+          "statement": "t.Errorf(\"formatKey(%q) = %q, want %q\", tc.in, got, tc.want)"
+        }
+      ],
+      "cases": [
+        {
+          "case": "TestFormatKey",
+          "golden_lines": [
+            31,
+            32,
+            33,
+            34,
+            35,
+            36,
+            37,
+            38
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "utils_test.go",
+      "source_sha256": "84c7423d4fe9d3994837f5769480241a617afb7adfa85b8004deb97e65209c42",
+      "function": "TestGenerateStackInfo",
+      "line": 86,
+      "assertion_sites": [
+        {
+          "line": 171,
+          "statement": "t.Errorf(\"generateStackInfo() position header = %v, want to contain %v\", result, tt.wantPosition)"
+        },
+        {
+          "line": 176,
+          "statement": "t.Errorf(\"generateStackInfo() order = %v, want to contain %v\", result, tt.wantOrder)"
+        },
+        {
+          "line": 189,
+          "statement": "t.Errorf(\"generateStackInfo() first list item = %v, want to contain %v\", firstListItem, tt.wantFirstInList)"
+        }
+      ],
+      "cases": [
+        {
+          "case": "TestGenerateStackInfo/middle_commit,_reverse=false",
+          "golden_lines": [
+            86
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestGenerateStackInfo/middle_commit,_reverse=true",
+          "golden_lines": [
+            87
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestGenerateStackInfo/newest_commit,_reverse=false",
+          "golden_lines": [
+            88
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestGenerateStackInfo/newest_commit,_reverse=true",
+          "golden_lines": [
+            89
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestGenerateStackInfo/oldest_commit,_reverse=false",
+          "golden_lines": [
+            90
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestGenerateStackInfo/oldest_commit,_reverse=true",
+          "golden_lines": [
+            91
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "utils_test.go",
+      "source_sha256": "84c7423d4fe9d3994837f5769480241a617afb7adfa85b8004deb97e65209c42",
+      "function": "TestGenerateStackInfoSingleCommit",
+      "line": 195,
+      "assertion_sites": [
+        {
+          "line": 208,
+          "statement": "t.Errorf(\"generateStackInfo() with single commit should not show position header, got: %v\", result)"
+        }
+      ],
+      "cases": [
+        {
+          "case": "TestGenerateStackInfoSingleCommit",
+          "golden_lines": [
+            97
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "utils_test.go",
+      "source_sha256": "84c7423d4fe9d3994837f5769480241a617afb7adfa85b8004deb97e65209c42",
+      "function": "TestGenerateStackInfoWithoutStatusEmojis",
+      "line": 211,
+      "assertion_sites": [
+        {
+          "line": 234,
+          "statement": "t.Errorf(\"stack entry has a leading status emoji: %q\\n%s\", line, result)"
+        },
+        {
+          "line": 239,
+          "statement": "t.Errorf(\"stack contains disabled marker %q:\\n%s\", marker, result)"
+        },
+        {
+          "line": 244,
+          "statement": "t.Errorf(\"stack is missing %s:\\n%s\", prNumber, result)"
+        }
+      ],
+      "cases": [
+        {
+          "case": "TestGenerateStackInfoWithoutStatusEmojis",
+          "golden_lines": [
+            98
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "utils_test.go",
+      "source_sha256": "84c7423d4fe9d3994837f5769480241a617afb7adfa85b8004deb97e65209c42",
+      "function": "TestGenerateStackInfoPreservesMergedPRs",
+      "line": 249,
+      "assertion_sites": [
+        {
+          "line": 299,
+          "statement": "t.Errorf(\"Want position %q in result:\\n%v\", tt.wantPosition, result)"
+        },
+        {
+          "line": 305,
+          "statement": "t.Errorf(\"Want merged PR '\u2714\ufe0f #101' in result:\\n%v\", result)"
+        },
+        {
+          "line": 323,
+          "statement": "t.Errorf(\"Want merged PR first (normal order), got first line: %v\", firstPRLine)"
+        },
+        {
+          "line": 327,
+          "statement": "t.Errorf(\"Want merged PR last (reverse order), got last line: %v\", lastPRLine)"
+        }
+      ],
+      "cases": [
+        {
+          "case": "TestGenerateStackInfoPreservesMergedPRs/preserve_merged_PR_#101,_normal_order",
+          "golden_lines": [
+            95
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestGenerateStackInfoPreservesMergedPRs/preserve_merged_PR_#101,_reverse_order",
+          "golden_lines": [
+            96
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "utils_test.go",
+      "source_sha256": "84c7423d4fe9d3994837f5769480241a617afb7adfa85b8004deb97e65209c42",
+      "function": "TestExtractPRNumbersFromStackInfo",
+      "line": 334,
+      "assertion_sites": [
+        {
+          "line": 405,
+          "statement": "t.Errorf(\"extractPRNumbersFromStackInfo() = %v, want %v\", result, tt.wantPRNums)"
+        },
+        {
+          "line": 411,
+          "statement": "t.Errorf(\"extractPRNumbersFromStackInfo()[%d] = %v, want %v\", i, prNum, tt.wantPRNums[i])"
+        }
+      ],
+      "cases": [
+        {
+          "case": "TestExtractPRNumbersFromStackInfo/empty_body",
+          "golden_lines": [
+            18
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestExtractPRNumbersFromStackInfo/extract_from_body_with_sentinels",
+          "golden_lines": [
+            19
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestExtractPRNumbersFromStackInfo/extract_from_old_format_without_sentinels",
+          "golden_lines": [
+            20
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestExtractPRNumbersFromStackInfo/extract_marker-free_stack",
+          "golden_lines": [
+            21
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestExtractPRNumbersFromStackInfo/extract_with_merged_PRs",
+          "golden_lines": [
+            22
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestExtractPRNumbersFromStackInfo/no_stack_info_in_body",
+          "golden_lines": [
+            23
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "utils_test.go",
+      "source_sha256": "84c7423d4fe9d3994837f5769480241a617afb7adfa85b8004deb97e65209c42",
+      "function": "TestGenerateStackInfoInsertsNewPRInMiddle",
+      "line": 417,
+      "assertion_sites": [
+        {
+          "line": 456,
+          "statement": "t.Fatalf(\"Expected %d PRs, got %d: %v\\nResult:\\n%s\", len(expectedOrder), len(prOrder), prOrder, result)"
+        },
+        {
+          "line": 461,
+          "statement": "t.Errorf(\"Position %d: want PR #%s, got #%s\\nFull order: %v\\nResult:\\n%s\", i, want, prOrder[i], prOrder, result)"
+        }
+      ],
+      "cases": [
+        {
+          "case": "TestGenerateStackInfoInsertsNewPRInMiddle",
+          "golden_lines": [
+            93
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "utils_test.go",
+      "source_sha256": "84c7423d4fe9d3994837f5769480241a617afb7adfa85b8004deb97e65209c42",
+      "function": "TestExtractPRHistoryNormalizesReversedOrder",
+      "line": 465,
+      "assertion_sites": [
+        {
+          "line": 517,
+          "statement": "t.Fatalf(\"Got %d entries, want %d\", len(entries), len(tt.wantNums))"
+        },
+        {
+          "line": 522,
+          "statement": "t.Errorf(\"Position %d: got PR #%d, want #%d\", i, entry.Number, tt.wantNums[i])"
+        }
+      ],
+      "cases": [
+        {
+          "case": "TestExtractPRHistoryNormalizesReversedOrder/keeps_oldest-at-top_as-is",
+          "golden_lines": [
+            15
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestExtractPRHistoryNormalizesReversedOrder/legacy_format_without_order_note_stays_as-is",
+          "golden_lines": [
+            16
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        },
+        {
+          "case": "TestExtractPRHistoryNormalizesReversedOrder/normalizes_newest-at-top_to_oldest-first",
+          "golden_lines": [
+            17
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "utils_test.go",
+      "source_sha256": "84c7423d4fe9d3994837f5769480241a617afb7adfa85b8004deb97e65209c42",
+      "function": "TestGenerateStackInfoHistoricalPRsAreMerged",
+      "line": 529,
+      "assertion_sites": [
+        {
+          "line": 561,
+          "statement": "t.Errorf(\"Historical PR #%d should be marked as merged (\u2714\ufe0f)\\nResult:\\n%s\", pr, result)"
+        },
+        {
+          "line": 571,
+          "statement": "t.Fatalf(\"missing PR ref in result:\\n%s\", result)"
+        },
+        {
+          "line": 574,
+          "statement": "t.Errorf(\"expected history PRs before current stack, got order 101=%d 104=%d 102=%d 103=%d\\n%s\","
+        }
+      ],
+      "cases": [
+        {
+          "case": "TestGenerateStackInfoHistoricalPRsAreMerged",
+          "golden_lines": [
+            92
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        }
+      ]
+    },
+    {
+      "suite": "utils_test.go",
+      "source_sha256": "84c7423d4fe9d3994837f5769480241a617afb7adfa85b8004deb97e65209c42",
+      "function": "TestGenerateStackInfoMarksMergedInLocalStack",
+      "line": 579,
+      "assertion_sites": [
+        {
+          "line": 609,
+          "statement": "t.Errorf(\"Merged PR #102 in local stack should be marked \u2714\ufe0f\\nResult:\\n%s\", result)"
+        },
+        {
+          "line": 612,
+          "statement": "t.Errorf(\"Merged PR #102 should not have \u2b1b marker\\nResult:\\n%s\", result)"
+        }
+      ],
+      "cases": [
+        {
+          "case": "TestGenerateStackInfoMarksMergedInLocalStack",
+          "golden_lines": [
+            94
+          ],
+          "rust_tests": [
+            "src/tests/unit/reference.rs::reference_goldens"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,3555 @@
+{
+  "collection": "submission-efficiency-followups-rust",
+  "reference": {
+    "revision": "fd311895aeebf5c7f3a433a685232f64add36558",
+    "tree": "f170643be22b074ce31cbbe1d1ef64aa69a113b7",
+    "fixture_executable_sha256": "74562eeb9954d3cc055495e3de2df8cde09308a12e82712d73c739e7939301b3",
+    "profile": "release",
+    "wait_instrumentation": "baseline clock unchanged; elapsed duration includes waits"
+  },
+  "candidate": {
+    "application_sha256": "7910b093da12e012a5c6e248c73c7594e8a678233ec52d4be37b705290e78db9",
+    "harness_sha256": {
+      "parity.py": "5c1d06aa3e8d69e791bc063b09424ad2437432f6d0401fdd6048d3e365e4b606",
+      "fixture_command.py": "82d084aee1dde9e441515350ed33327a60fba0bf82dcf893b6a43bca43e4bc2c"
+    },
+    "fixture_executable_sha256": "42d236bac6ff40b1af9f1ed72c1bd8134aed718623dcad24bea11ba60faadf20",
+    "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+    "architecture": "arm64",
+    "compiler": "rustc 1.99.0 (b940084d7 2026-09-28)",
+    "git": "git version 2.56.0",
+    "python": "3.15.0"
+  },
+  "profile": "release",
+  "jobs": 1,
+  "latency_ms": 0,
+  "paired_scenarios": 25,
+  "submissions_per_implementation": 75,
+  "phase_order": [
+    "first",
+    "amended",
+    "unchanged"
+  ],
+  "statistics": {
+    "branchless-1-False": {
+      "reference": [
+        {
+          "median": 8.46334945900162,
+          "tail": 8.517119332995208,
+          "samples": [
+            8.46334945900162,
+            8.280867624998791,
+            8.517119332995208
+          ]
+        },
+        {
+          "median": 7.410660583002027,
+          "tail": 7.504368499998236,
+          "samples": [
+            7.410660583002027,
+            7.504368499998236,
+            7.369958208997559
+          ]
+        },
+        {
+          "median": 7.369806415998028,
+          "tail": 7.52823158299725,
+          "samples": [
+            7.366128999994544,
+            7.52823158299725,
+            7.369806415998028
+          ]
+        }
+      ],
+      "candidate": [
+        {
+          "median": 4.637739916994178,
+          "tail": 6.506999459001236,
+          "samples": [
+            6.506999459001236,
+            4.637739916994178,
+            4.522675124993839
+          ]
+        },
+        {
+          "median": 2.674637124997389,
+          "tail": 3.1833317920027184,
+          "samples": [
+            3.1833317920027184,
+            2.64452470800461,
+            2.674637124997389
+          ]
+        },
+        {
+          "median": 2.606872584001394,
+          "tail": 2.9594944160053274,
+          "samples": [
+            2.9594944160053274,
+            2.606872584001394,
+            2.5691942909979844
+          ]
+        }
+      ]
+    },
+    "branchless-10-False": {
+      "reference": [
+        {
+          "median": 20.87160212500021,
+          "tail": 20.973597166004765,
+          "samples": [
+            20.973597166004765,
+            20.148473042005207,
+            20.87160212500021
+          ]
+        },
+        {
+          "median": 11.497791334004432,
+          "tail": 11.733584875000815,
+          "samples": [
+            11.371514624996053,
+            11.733584875000815,
+            11.497791334004432
+          ]
+        },
+        {
+          "median": 11.643608083002619,
+          "tail": 13.56274937499984,
+          "samples": [
+            11.299654499998724,
+            11.643608083002619,
+            13.56274937499984
+          ]
+        }
+      ],
+      "candidate": [
+        {
+          "median": 15.421314125000208,
+          "tail": 15.600108291000652,
+          "samples": [
+            15.268217625001853,
+            15.600108291000652,
+            15.421314125000208
+          ]
+        },
+        {
+          "median": 4.4656581669987645,
+          "tail": 4.623205042000336,
+          "samples": [
+            4.623205042000336,
+            4.144912041003408,
+            4.4656581669987645
+          ]
+        },
+        {
+          "median": 4.359188249996805,
+          "tail": 4.451934167002037,
+          "samples": [
+            4.341501333998167,
+            4.359188249996805,
+            4.451934167002037
+          ]
+        }
+      ]
+    },
+    "branchless-10-True": {
+      "reference": [
+        {
+          "median": 19.947181000003184,
+          "tail": 20.206622249999782,
+          "samples": [
+            19.947181000003184,
+            20.206622249999782,
+            18.917815875000088
+          ]
+        },
+        {
+          "median": 11.709583957999712,
+          "tail": 11.981417708004301,
+          "samples": [
+            11.709583957999712,
+            11.981417708004301,
+            11.292335999998613
+          ]
+        },
+        {
+          "median": 11.643331125000259,
+          "tail": 11.82797733299958,
+          "samples": [
+            11.82797733299958,
+            11.578744083999482,
+            11.643331125000259
+          ]
+        }
+      ],
+      "candidate": [
+        {
+          "median": 16.3979725829995,
+          "tail": 17.249713208002504,
+          "samples": [
+            16.3979725829995,
+            16.15998016600497,
+            17.249713208002504
+          ]
+        },
+        {
+          "median": 4.199451333995967,
+          "tail": 4.380991375001031,
+          "samples": [
+            3.9846377079957165,
+            4.199451333995967,
+            4.380991375001031
+          ]
+        },
+        {
+          "median": 4.30612979199941,
+          "tail": 4.349248042002728,
+          "samples": [
+            3.8936830000020564,
+            4.349248042002728,
+            4.30612979199941
+          ]
+        }
+      ]
+    },
+    "branchless-100-False": {
+      "reference": [
+        {
+          "median": 237.36317108300136,
+          "tail": 237.36317108300136,
+          "samples": [
+            237.36317108300136
+          ]
+        },
+        {
+          "median": 70.9476772909984,
+          "tail": 70.9476772909984,
+          "samples": [
+            70.9476772909984
+          ]
+        },
+        {
+          "median": 65.16325766599766,
+          "tail": 65.16325766599766,
+          "samples": [
+            65.16325766599766
+          ]
+        }
+      ],
+      "candidate": [
+        {
+          "median": 128.57159254200087,
+          "tail": 128.57159254200087,
+          "samples": [
+            128.57159254200087
+          ]
+        },
+        {
+          "median": 29.533133000004455,
+          "tail": 29.533133000004455,
+          "samples": [
+            29.533133000004455
+          ]
+        },
+        {
+          "median": 27.88826733300084,
+          "tail": 27.88826733300084,
+          "samples": [
+            27.88826733300084
+          ]
+        }
+      ]
+    },
+    "branchless-50-False": {
+      "reference": [
+        {
+          "median": 87.36474987499969,
+          "tail": 87.36474987499969,
+          "samples": [
+            87.36474987499969
+          ]
+        },
+        {
+          "median": 33.792952874995535,
+          "tail": 33.792952874995535,
+          "samples": [
+            33.792952874995535
+          ]
+        },
+        {
+          "median": 36.03572554200218,
+          "tail": 36.03572554200218,
+          "samples": [
+            36.03572554200218
+          ]
+        }
+      ],
+      "candidate": [
+        {
+          "median": 66.20295812500262,
+          "tail": 66.20295812500262,
+          "samples": [
+            66.20295812500262
+          ]
+        },
+        {
+          "median": 15.138638374999573,
+          "tail": 15.138638374999573,
+          "samples": [
+            15.138638374999573
+          ]
+        },
+        {
+          "median": 19.06952099999762,
+          "tail": 19.06952099999762,
+          "samples": [
+            19.06952099999762
+          ]
+        }
+      ]
+    },
+    "jj-10-False": {
+      "reference": [
+        {
+          "median": 23.605018249996647,
+          "tail": 25.73862087499583,
+          "samples": [
+            25.73862087499583,
+            23.605018249996647,
+            18.708625750005012
+          ]
+        },
+        {
+          "median": 15.477752665996377,
+          "tail": 19.30690550000145,
+          "samples": [
+            19.30690550000145,
+            15.477752665996377,
+            14.899034458001552
+          ]
+        },
+        {
+          "median": 14.992538457998307,
+          "tail": 17.52854516699881,
+          "samples": [
+            17.52854516699881,
+            14.992538457998307,
+            13.501066125005309
+          ]
+        }
+      ],
+      "candidate": [
+        {
+          "median": 16.44774933300505,
+          "tail": 18.13952179199987,
+          "samples": [
+            16.44774933300505,
+            18.13952179199987,
+            14.838371541001834
+          ]
+        },
+        {
+          "median": 6.575926541998342,
+          "tail": 9.882532416995673,
+          "samples": [
+            6.575926541998342,
+            9.882532416995673,
+            4.040035749996605
+          ]
+        },
+        {
+          "median": 5.207024000003003,
+          "tail": 7.8560231660012505,
+          "samples": [
+            5.207024000003003,
+            7.8560231660012505,
+            3.9449427500003367
+          ]
+        }
+      ]
+    },
+    "jj-10-True": {
+      "reference": [
+        {
+          "median": 23.055107125001086,
+          "tail": 27.389459874997556,
+          "samples": [
+            17.91317925000476,
+            23.055107125001086,
+            27.389459874997556
+          ]
+        },
+        {
+          "median": 18.343275666004047,
+          "tail": 24.478634874998534,
+          "samples": [
+            16.16963683400536,
+            18.343275666004047,
+            24.478634874998534
+          ]
+        },
+        {
+          "median": 18.378562417005014,
+          "tail": 21.60269183300261,
+          "samples": [
+            14.664943167001184,
+            21.60269183300261,
+            18.378562417005014
+          ]
+        }
+      ],
+      "candidate": [
+        {
+          "median": 16.415392000002612,
+          "tail": 20.309240249996947,
+          "samples": [
+            16.415392000002612,
+            16.335964582998713,
+            20.309240249996947
+          ]
+        },
+        {
+          "median": 5.065396541001974,
+          "tail": 5.890515125000093,
+          "samples": [
+            5.065396541001974,
+            4.425560417002998,
+            5.890515125000093
+          ]
+        },
+        {
+          "median": 4.359463000000687,
+          "tail": 5.905480458000966,
+          "samples": [
+            4.359463000000687,
+            4.327668541001913,
+            5.905480458000966
+          ]
+        }
+      ]
+    },
+    "jj-50-False": {
+      "reference": [
+        {
+          "median": 80.6080466669955,
+          "tail": 80.6080466669955,
+          "samples": [
+            80.6080466669955
+          ]
+        },
+        {
+          "median": 61.192738541001745,
+          "tail": 61.192738541001745,
+          "samples": [
+            61.192738541001745
+          ]
+        },
+        {
+          "median": 113.9144084590007,
+          "tail": 113.9144084590007,
+          "samples": [
+            113.9144084590007
+          ]
+        }
+      ],
+      "candidate": [
+        {
+          "median": 66.23975849999988,
+          "tail": 66.23975849999988,
+          "samples": [
+            66.23975849999988
+          ]
+        },
+        {
+          "median": 34.60770233299991,
+          "tail": 34.60770233299991,
+          "samples": [
+            34.60770233299991
+          ]
+        },
+        {
+          "median": 33.82557633299439,
+          "tail": 33.82557633299439,
+          "samples": [
+            33.82557633299439
+          ]
+        }
+      ]
+    },
+    "jj-workspace-10-False": {
+      "reference": [
+        {
+          "median": 32.49709412499942,
+          "tail": 51.39248283300549,
+          "samples": [
+            51.39248283300549,
+            32.49709412499942,
+            28.210191792000842
+          ]
+        },
+        {
+          "median": 27.76976999999897,
+          "tail": 27.913361667000572,
+          "samples": [
+            27.913361667000572,
+            27.76976999999897,
+            21.53959287500038
+          ]
+        },
+        {
+          "median": 22.624804583996593,
+          "tail": 36.334475000003295,
+          "samples": [
+            36.334475000003295,
+            22.624804583996593,
+            19.307883791996574
+          ]
+        }
+      ],
+      "candidate": [
+        {
+          "median": 24.382317291994696,
+          "tail": 39.80088320800132,
+          "samples": [
+            39.80088320800132,
+            24.382317291994696,
+            20.17333591699571
+          ]
+        },
+        {
+          "median": 12.323338416994375,
+          "tail": 26.767055749995052,
+          "samples": [
+            26.767055749995052,
+            12.323338416994375,
+            7.881884499998705
+          ]
+        },
+        {
+          "median": 8.598127000004752,
+          "tail": 12.281230417000188,
+          "samples": [
+            12.281230417000188,
+            8.598127000004752,
+            5.512565666998853
+          ]
+        }
+      ]
+    },
+    "jj-workspace-10-True": {
+      "reference": [
+        {
+          "median": 31.609192957999767,
+          "tail": 33.27796337500331,
+          "samples": [
+            31.609192957999767,
+            24.314516999998887,
+            33.27796337500331
+          ]
+        },
+        {
+          "median": 32.93129675000091,
+          "tail": 35.943862624997564,
+          "samples": [
+            31.090424958005315,
+            32.93129675000091,
+            35.943862624997564
+          ]
+        },
+        {
+          "median": 33.433768957998836,
+          "tail": 39.33570524999959,
+          "samples": [
+            39.33570524999959,
+            33.433768957998836,
+            26.569485833002545
+          ]
+        }
+      ],
+      "candidate": [
+        {
+          "median": 32.35917833300482,
+          "tail": 34.7164434160004,
+          "samples": [
+            34.7164434160004,
+            32.35917833300482,
+            18.791795625002123
+          ]
+        },
+        {
+          "median": 21.50172170800215,
+          "tail": 22.207865542004583,
+          "samples": [
+            22.207865542004583,
+            21.50172170800215,
+            9.948510000001988
+          ]
+        },
+        {
+          "median": 5.5055146669983515,
+          "tail": 11.736157041996194,
+          "samples": [
+            11.736157041996194,
+            5.5055146669983515,
+            4.934537916000409
+          ]
+        }
+      ]
+    },
+    "jj-workspace-50-False": {
+      "reference": [
+        {
+          "median": 84.89956916699884,
+          "tail": 84.89956916699884,
+          "samples": [
+            84.89956916699884
+          ]
+        },
+        {
+          "median": 51.06804708299751,
+          "tail": 51.06804708299751,
+          "samples": [
+            51.06804708299751
+          ]
+        },
+        {
+          "median": 49.0233149170017,
+          "tail": 49.0233149170017,
+          "samples": [
+            49.0233149170017
+          ]
+        }
+      ],
+      "candidate": [
+        {
+          "median": 67.71340879100171,
+          "tail": 67.71340879100171,
+          "samples": [
+            67.71340879100171
+          ]
+        },
+        {
+          "median": 16.129415709001478,
+          "tail": 16.129415709001478,
+          "samples": [
+            16.129415709001478
+          ]
+        },
+        {
+          "median": 9.204337499999383,
+          "tail": 9.204337499999383,
+          "samples": [
+            9.204337499999383
+          ]
+        }
+      ]
+    }
+  },
+  "operations": {
+    "branchless-1-False": {
+      "reference": {
+        "first": {
+          "commands": [
+            36,
+            36,
+            36
+          ],
+          "requests": [
+            4,
+            4,
+            4
+          ],
+          "native_child_pushes": [
+            0,
+            0,
+            0
+          ],
+          "deliberate_wait_seconds": null,
+          "scheduled_wait_seconds": null,
+          "phase_operations": {
+            "create": [
+              1,
+              1,
+              1
+            ],
+            "description": [
+              1,
+              1,
+              1
+            ],
+            "discovery": [
+              33,
+              33,
+              33
+            ],
+            "lookup": [
+              3,
+              3,
+              3
+            ],
+            "push": [
+              1,
+              1,
+              1
+            ],
+            "rewrite": [
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        "amended": {
+          "commands": [
+            33,
+            33,
+            33
+          ],
+          "requests": [
+            7,
+            7,
+            7
+          ],
+          "native_child_pushes": [
+            0,
+            0,
+            0
+          ],
+          "deliberate_wait_seconds": null,
+          "scheduled_wait_seconds": null,
+          "phase_operations": {
+            "description": [
+              1,
+              1,
+              1
+            ],
+            "discovery": [
+              32,
+              32,
+              32
+            ],
+            "lookup": [
+              6,
+              6,
+              6
+            ],
+            "push": [
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        "unchanged": {
+          "commands": [
+            33,
+            33,
+            33
+          ],
+          "requests": [
+            7,
+            7,
+            7
+          ],
+          "native_child_pushes": [
+            0,
+            0,
+            0
+          ],
+          "deliberate_wait_seconds": null,
+          "scheduled_wait_seconds": null,
+          "phase_operations": {
+            "description": [
+              1,
+              1,
+              1
+            ],
+            "discovery": [
+              32,
+              32,
+              32
+            ],
+            "lookup": [
+              6,
+              6,
+              6
+            ],
+            "push": [
+              1,
+              1,
+              1
+            ]
+          }
+        }
+      },
+      "candidate": {
+        "first": {
+          "commands": [
+            34,
+            34,
+            34
+          ],
+          "requests": [
+            3,
+            3,
+            3
+          ],
+          "native_child_pushes": [
+            0,
+            0,
+            0
+          ],
+          "deliberate_wait_seconds": [
+            0.8214030265808105,
+            0.8379600048065186,
+            0.8349781036376953
+          ],
+          "scheduled_wait_seconds": [
+            0.817594458,
+            0.834036584,
+            0.831491708
+          ],
+          "phase_operations": {
+            "create": [
+              1,
+              1,
+              1
+            ],
+            "description": [
+              1,
+              1,
+              1
+            ],
+            "discovery": [
+              32,
+              32,
+              32
+            ],
+            "lookup": [
+              1,
+              1,
+              1
+            ],
+            "push": [
+              1,
+              1,
+              1
+            ],
+            "rewrite": [
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        "amended": {
+          "commands": [
+            30,
+            30,
+            30
+          ],
+          "requests": [
+            2,
+            2,
+            2
+          ],
+          "native_child_pushes": [
+            0,
+            0,
+            0
+          ],
+          "deliberate_wait_seconds": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scheduled_wait_seconds": [
+            0,
+            0,
+            0
+          ],
+          "phase_operations": {
+            "description": [
+              1,
+              1,
+              1
+            ],
+            "discovery": [
+              29,
+              29,
+              29
+            ],
+            "lookup": [
+              1,
+              1,
+              1
+            ],
+            "push": [
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        "unchanged": {
+          "commands": [
+            30,
+            30,
+            30
+          ],
+          "requests": [
+            1,
+            1,
+            1
+          ],
+          "native_child_pushes": [
+            0,
+            0,
+            0
+          ],
+          "deliberate_wait_seconds": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scheduled_wait_seconds": [
+            0,
+            0,
+            0
+          ],
+          "phase_operations": {
+            "discovery": [
+              29,
+              29,
+              29
+            ],
+            "lookup": [
+              1,
+              1,
+              1
+            ],
+            "push": [
+              1,
+              1,
+              1
+            ]
+          }
+        }
+      }
+    },
+    "branchless-10-False": {
+      "reference": {
+        "first": {
+          "commands": [
+            117,
+            117,
+            117
+          ],
+          "requests": [
+            40,
+            40,
+            40
+          ],
+          "native_child_pushes": [
+            0,
+            0,
+            0
+          ],
+          "deliberate_wait_seconds": null,
+          "scheduled_wait_seconds": null,
+          "phase_operations": {
+            "create": [
+              10,
+              10,
+              10
+            ],
+            "description": [
+              10,
+              10,
+              10
+            ],
+            "discovery": [
+              87,
+              87,
+              87
+            ],
+            "lookup": [
+              30,
+              30,
+              30
+            ],
+            "push": [
+              10,
+              10,
+              10
+            ],
+            "rewrite": [
+              10,
+              10,
+              10
+            ]
+          }
+        },
+        "amended": {
+          "commands": [
+            87,
+            87,
+            87
+          ],
+          "requests": [
+            70,
+            70,
+            70
+          ],
+          "native_child_pushes": [
+            0,
+            0,
+            0
+          ],
+          "deliberate_wait_seconds": null,
+          "scheduled_wait_seconds": null,
+          "phase_operations": {
+            "description": [
+              10,
+              10,
+              10
+            ],
+            "discovery": [
+              77,
+              77,
+              77
+            ],
+            "lookup": [
+              60,
+              60,
+              60
+            ],
+            "push": [
+              10,
+              10,
+              10
+            ]
+          }
+        },
+        "unchanged": {
+          "commands": [
+            87,
+            87,
+            87
+          ],
+          "requests": [
+            70,
+            70,
+            70
+          ],
+          "native_child_pushes": [
+            0,
+            0,
+            0
+          ],
+          "deliberate_wait_seconds": null,
+          "scheduled_wait_seconds": null,
+          "phase_operations": {
+            "description": [
+              10,
+              10,
+              10
+            ],
+            "discovery": [
+              77,
+              77,
+              77
+            ],
+            "lookup": [
+              60,
+              60,
+              60
+            ],
+            "push": [
+              10,
+              10,
+              10
+            ]
+          }
+        }
+      },
+      "candidate": {
+        "first": {
+          "commands": [
+            43,
+            43,
+            43
+          ],
+          "requests": [
+            12,
+            12,
+            12
+          ],
+          "native_child_pushes": [
+            0,
+            0,
+            0
+          ],
+          "deliberate_wait_seconds": [
+            9.875428199768066,
+            9.854029655456543,
+            9.8578040599823
+          ],
+          "scheduled_wait_seconds": [
+            9.837272168,
+            9.819532543,
+            9.82176125
+          ],
+          "phase_operations": {
+            "create": [
+              10,
+              10,
+              10
+            ],
+            "description": [
+              1,
+              1,
+              1
+            ],
+            "discovery": [
+              41,
+              41,
+              41
+            ],
+            "lookup": [
+              1,
+              1,
+              1
+            ],
+            "push": [
+              1,
+              1,
+              1
+            ],
+            "rewrite": [
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        "amended": {
+          "commands": [
+            39,
+            39,
+            39
+          ],
+          "requests": [
+            2,
+            2,
+            2
+          ],
+          "native_child_pushes": [
+            0,
+            0,
+            0
+          ],
+          "deliberate_wait_seconds": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scheduled_wait_seconds": [
+            0,
+            0,
+            0
+          ],
+          "phase_operations": {
+            "description": [
+              1,
+              1,
+              1
+            ],
+            "discovery": [
+              38,
+              38,
+              38
+            ],
+            "lookup": [
+              1,
+              1,
+              1
+            ],
+            "push": [
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        "unchanged": {
+          "commands": [
+            39,
+            39,
+            39
+          ],
+          "requests": [
+            1,
+            1,
+            1
+          ],
+          "native_child_pushes": [
+            0,
+            0,
+            0
+          ],
+          "deliberate_wait_seconds": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scheduled_wait_seconds": [
+            0,
+            0,
+            0
+          ],
+          "phase_operations": {
+            "discovery": [
+              38,
+              38,
+              38
+            ],
+            "lookup": [
+              1,
+              1,
+              1
+            ],
+            "push": [
+              1,
+              1,
+              1
+            ]
+          }
+        }
+      }
+    },
+    "branchless-10-True": {
+      "reference": {
+        "first": {
+          "commands": [
+            118,
+            118,
+            118
+          ],
+          "requests": [
+            40,
+            40,
+            40
+          ],
+          "native_child_pushes": [
+            10,
+            10,
+            10
+          ],
+          "deliberate_wait_seconds": null,
+          "scheduled_wait_seconds": null,
+          "phase_operations": {
+            "create": [
+              10,
+              10,
+              10
+            ],
+            "description": [
+              10,
+              10,
+              10
+            ],
+            "discovery": [
+              87,
+              87,
+              87
+            ],
+            "lookup": [
+              30,
+              30,
+              30
+            ],
+            "native": [
+              1,
+              1,
+              1
+            ],
+            "push": [
+              10,
+              10,
+              10
+            ],
+            "rewrite": [
+              10,
+              10,
+              10
+            ]
+          }
+        },
+        "amended": {
+          "commands": [
+            88,
+            88,
+            88
+          ],
+          "requests": [
+            70,
+            70,
+            70
+          ],
+          "native_child_pushes": [
+            10,
+            10,
+            10
+          ],
+          "deliberate_wait_seconds": null,
+          "scheduled_wait_seconds": null,
+          "phase_operations": {
+            "description": [
+              10,
+              10,
+              10
+            ],
+            "discovery": [
+              77,
+              77,
+              77
+            ],
+            "lookup": [
+              60,
+              60,
+              60
+            ],
+            "native": [
+              1,
+              1,
+              1
+            ],
+            "push": [
+              10,
+              10,
+              10
+            ]
+          }
+        },
+        "unchanged": {
+          "commands": [
+            88,
+            88,
+            88
+          ],
+          "requests": [
+            70,
+            70,
+            70
+          ],
+          "native_child_pushes": [
+            10,
+            10,
+            10
+          ],
+          "deliberate_wait_seconds": null,
+          "scheduled_wait_seconds": null,
+          "phase_operations": {
+            "description": [
+              10,
+              10,
+              10
+            ],
+            "discovery": [
+              77,
+              77,
+              77
+            ],
+            "lookup": [
+              60,
+              60,
+              60
+            ],
+            "native": [
+              1,
+              1,
+              1
+            ],
+            "push": [
+              10,
+              10,
+              10
+            ]
+          }
+        }
+      },
+      "candidate": {
+        "first": {
+          "commands": [
+            43,
+            43,
+            43
+          ],
+          "requests": [
+            13,
+            13,
+            13
+          ],
+          "native_child_pushes": [
+            0,
+            0,
+            0
+          ],
+          "deliberate_wait_seconds": [
+            10.864581108093262,
+            10.88028621673584,
+            10.819196224212646
+          ],
+          "scheduled_wait_seconds": [
+            10.828641623,
+            10.840651625,
+            10.779161043
+          ],
+          "phase_operations": {
+            "create": [
+              10,
+              10,
+              10
+            ],
+            "description": [
+              1,
+              1,
+              1
+            ],
+            "discovery": [
+              41,
+              41,
+              41
+            ],
+            "lookup": [
+              1,
+              1,
+              1
+            ],
+            "native": [
+              1,
+              1,
+              1
+            ],
+            "push": [
+              1,
+              1,
+              1
+            ],
+            "rewrite": [
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        "amended": {
+          "commands": [
+            39,
+            39,
+            39
+          ],
+          "requests": [
+            3,
+            3,
+            3
+          ],
+          "native_child_pushes": [
+            0,
+            0,
+            0
+          ],
+          "deliberate_wait_seconds": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scheduled_wait_seconds": [
+            0,
+            0,
+            0
+          ],
+          "phase_operations": {
+            "description": [
+              1,
+              1,
+              1
+            ],
+            "discovery": [
+              38,
+              38,
+              38
+            ],
+            "lookup": [
+              1,
+              1,
+              1
+            ],
+            "native": [
+              1,
+              1,
+              1
+            ],
+            "push": [
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        "unchanged": {
+          "commands": [
+            39,
+            39,
+            39
+          ],
+          "requests": [
+            2,
+            2,
+            2
+          ],
+          "native_child_pushes": [
+            0,
+            0,
+            0
+          ],
+          "deliberate_wait_seconds": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scheduled_wait_seconds": [
+            0,
+            0,
+            0
+          ],
+          "phase_operations": {
+            "discovery": [
+              38,
+              38,
+              38
+            ],
+            "lookup": [
+              1,
+              1,
+              1
+            ],
+            "native": [
+              1,
+              1,
+              1
+            ],
+            "push": [
+              1,
+              1,
+              1
+            ]
+          }
+        }
+      }
+    },
+    "branchless-100-False": {
+      "reference": {
+        "first": {
+          "commands": [
+            927
+          ],
+          "requests": [
+            400
+          ],
+          "native_child_pushes": [
+            0
+          ],
+          "deliberate_wait_seconds": null,
+          "scheduled_wait_seconds": null,
+          "phase_operations": {
+            "create": [
+              100
+            ],
+            "description": [
+              100
+            ],
+            "discovery": [
+              627
+            ],
+            "lookup": [
+              300
+            ],
+            "push": [
+              100
+            ],
+            "rewrite": [
+              100
+            ]
+          }
+        },
+        "amended": {
+          "commands": [
+            627
+          ],
+          "requests": [
+            700
+          ],
+          "native_child_pushes": [
+            0
+          ],
+          "deliberate_wait_seconds": null,
+          "scheduled_wait_seconds": null,
+          "phase_operations": {
+            "description": [
+              100
+            ],
+            "discovery": [
+              527
+            ],
+            "lookup": [
+              600
+            ],
+            "push": [
+              100
+            ]
+          }
+        },
+        "unchanged": {
+          "commands": [
+            627
+          ],
+          "requests": [
+            700
+          ],
+          "native_child_pushes": [
+            0
+          ],
+          "deliberate_wait_seconds": null,
+          "scheduled_wait_seconds": null,
+          "phase_operations": {
+            "description": [
+              100
+            ],
+            "discovery": [
+              527
+            ],
+            "lookup": [
+              600
+            ],
+            "push": [
+              100
+            ]
+          }
+        }
+      },
+      "candidate": {
+        "first": {
+          "commands": [
+            133
+          ],
+          "requests": [
+            113
+          ],
+          "native_child_pushes": [
+            0
+          ],
+          "deliberate_wait_seconds": [
+            103.11074757575989
+          ],
+          "scheduled_wait_seconds": [
+            102.767445249
+          ],
+          "phase_operations": {
+            "create": [
+              100
+            ],
+            "description": [
+              4
+            ],
+            "discovery": [
+              131
+            ],
+            "lookup": [
+              9
+            ],
+            "push": [
+              1
+            ],
+            "rewrite": [
+              1
+            ]
+          }
+        },
+        "amended": {
+          "commands": [
+            129
+          ],
+          "requests": [
+            8
+          ],
+          "native_child_pushes": [
+            0
+          ],
+          "deliberate_wait_seconds": [
+            3.007370948791504
+          ],
+          "scheduled_wait_seconds": [
+            2.999591417
+          ],
+          "phase_operations": {
+            "description": [
+              4
+            ],
+            "discovery": [
+              128
+            ],
+            "lookup": [
+              4
+            ],
+            "push": [
+              1
+            ]
+          }
+        },
+        "unchanged": {
+          "commands": [
+            129
+          ],
+          "requests": [
+            4
+          ],
+          "native_child_pushes": [
+            0
+          ],
+          "deliberate_wait_seconds": [
+            0.0
+          ],
+          "scheduled_wait_seconds": [
+            0
+          ],
+          "phase_operations": {
+            "discovery": [
+              128
+            ],
+            "lookup": [
+              4
+            ],
+            "push": [
+              1
+            ]
+          }
+        }
+      }
+    },
+    "branchless-50-False": {
+      "reference": {
+        "first": {
+          "commands": [
+            477
+          ],
+          "requests": [
+            200
+          ],
+          "native_child_pushes": [
+            0
+          ],
+          "deliberate_wait_seconds": null,
+          "scheduled_wait_seconds": null,
+          "phase_operations": {
+            "create": [
+              50
+            ],
+            "description": [
+              50
+            ],
+            "discovery": [
+              327
+            ],
+            "lookup": [
+              150
+            ],
+            "push": [
+              50
+            ],
+            "rewrite": [
+              50
+            ]
+          }
+        },
+        "amended": {
+          "commands": [
+            327
+          ],
+          "requests": [
+            350
+          ],
+          "native_child_pushes": [
+            0
+          ],
+          "deliberate_wait_seconds": null,
+          "scheduled_wait_seconds": null,
+          "phase_operations": {
+            "description": [
+              50
+            ],
+            "discovery": [
+              277
+            ],
+            "lookup": [
+              300
+            ],
+            "push": [
+              50
+            ]
+          }
+        },
+        "unchanged": {
+          "commands": [
+            327
+          ],
+          "requests": [
+            350
+          ],
+          "native_child_pushes": [
+            0
+          ],
+          "deliberate_wait_seconds": null,
+          "scheduled_wait_seconds": null,
+          "phase_operations": {
+            "description": [
+              50
+            ],
+            "discovery": [
+              277
+            ],
+            "lookup": [
+              300
+            ],
+            "push": [
+              50
+            ]
+          }
+        }
+      },
+      "candidate": {
+        "first": {
+          "commands": [
+            83
+          ],
+          "requests": [
+            55
+          ],
+          "native_child_pushes": [
+            0
+          ],
+          "deliberate_wait_seconds": [
+            50.635112047195435
+          ],
+          "scheduled_wait_seconds": [
+            50.454286585
+          ],
+          "phase_operations": {
+            "create": [
+              50
+            ],
+            "description": [
+              2
+            ],
+            "discovery": [
+              81
+            ],
+            "lookup": [
+              3
+            ],
+            "push": [
+              1
+            ],
+            "rewrite": [
+              1
+            ]
+          }
+        },
+        "amended": {
+          "commands": [
+            79
+          ],
+          "requests": [
+            4
+          ],
+          "native_child_pushes": [
+            0
+          ],
+          "deliberate_wait_seconds": [
+            1.0049149990081787
+          ],
+          "scheduled_wait_seconds": [
+            0.99988675
+          ],
+          "phase_operations": {
+            "description": [
+              2
+            ],
+            "discovery": [
+              78
+            ],
+            "lookup": [
+              2
+            ],
+            "push": [
+              1
+            ]
+          }
+        },
+        "unchanged": {
+          "commands": [
+            79
+          ],
+          "requests": [
+            2
+          ],
+          "native_child_pushes": [
+            0
+          ],
+          "deliberate_wait_seconds": [
+            0.0
+          ],
+          "scheduled_wait_seconds": [
+            0
+          ],
+          "phase_operations": {
+            "discovery": [
+              78
+            ],
+            "lookup": [
+              2
+            ],
+            "push": [
+              1
+            ]
+          }
+        }
+      }
+    },
+    "jj-10-False": {
+      "reference": {
+        "first": {
+          "commands": [
+            141,
+            141,
+            141
+          ],
+          "requests": [
+            40,
+            40,
+            40
+          ],
+          "native_child_pushes": [
+            0,
+            0,
+            0
+          ],
+          "deliberate_wait_seconds": null,
+          "scheduled_wait_seconds": null,
+          "phase_operations": {
+            "create": [
+              10,
+              10,
+              10
+            ],
+            "description": [
+              10,
+              10,
+              10
+            ],
+            "discovery": [
+              111,
+              111,
+              111
+            ],
+            "lookup": [
+              30,
+              30,
+              30
+            ],
+            "push": [
+              10,
+              10,
+              10
+            ],
+            "rewrite": [
+              10,
+              10,
+              10
+            ]
+          }
+        },
+        "amended": {
+          "commands": [
+            111,
+            111,
+            111
+          ],
+          "requests": [
+            70,
+            70,
+            70
+          ],
+          "native_child_pushes": [
+            0,
+            0,
+            0
+          ],
+          "deliberate_wait_seconds": null,
+          "scheduled_wait_seconds": null,
+          "phase_operations": {
+            "description": [
+              10,
+              10,
+              10
+            ],
+            "discovery": [
+              101,
+              101,
+              101
+            ],
+            "lookup": [
+              60,
+              60,
+              60
+            ],
+            "push": [
+              10,
+              10,
+              10
+            ]
+          }
+        },
+        "unchanged": {
+          "commands": [
+            111,
+            111,
+            111
+          ],
+          "requests": [
+            70,
+            70,
+            70
+          ],
+          "native_child_pushes": [
+            0,
+            0,
+            0
+          ],
+          "deliberate_wait_seconds": null,
+          "scheduled_wait_seconds": null,
+          "phase_operations": {
+            "description": [
+              10,
+              10,
+              10
+            ],
+            "discovery": [
+              101,
+              101,
+              101
+            ],
+            "lookup": [
+              60,
+              60,
+              60
+            ],
+            "push": [
+              10,
+              10,
+              10
+            ]
+          }
+        }
+      },
+      "candidate": {
+        "first": {
+          "commands": [
+            53,
+            53,
+            53
+          ],
+          "requests": [
+            12,
+            12,
+            12
+          ],
+          "native_child_pushes": [
+            0,
+            0,
+            0
+          ],
+          "deliberate_wait_seconds": [
+            9.789761781692505,
+            9.758092880249023,
+            9.866727590560913
+          ],
+          "scheduled_wait_seconds": [
+            9.751106334,
+            9.713177085,
+            9.825746459
+          ],
+          "phase_operations": {
+            "create": [
+              10,
+              10,
+              10
+            ],
+            "description": [
+              1,
+              1,
+              1
+            ],
+            "discovery": [
+              51,
+              51,
+              51
+            ],
+            "lookup": [
+              1,
+              1,
+              1
+            ],
+            "push": [
+              1,
+              1,
+              1
+            ],
+            "rewrite": [
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        "amended": {
+          "commands": [
+            45,
+            45,
+            45
+          ],
+          "requests": [
+            2,
+            2,
+            2
+          ],
+          "native_child_pushes": [
+            0,
+            0,
+            0
+          ],
+          "deliberate_wait_seconds": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scheduled_wait_seconds": [
+            0,
+            0,
+            0
+          ],
+          "phase_operations": {
+            "description": [
+              1,
+              1,
+              1
+            ],
+            "discovery": [
+              44,
+              44,
+              44
+            ],
+            "lookup": [
+              1,
+              1,
+              1
+            ],
+            "push": [
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        "unchanged": {
+          "commands": [
+            45,
+            45,
+            45
+          ],
+          "requests": [
+            1,
+            1,
+            1
+          ],
+          "native_child_pushes": [
+            0,
+            0,
+            0
+          ],
+          "deliberate_wait_seconds": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scheduled_wait_seconds": [
+            0,
+            0,
+            0
+          ],
+          "phase_operations": {
+            "discovery": [
+              44,
+              44,
+              44
+            ],
+            "lookup": [
+              1,
+              1,
+              1
+            ],
+            "push": [
+              1,
+              1,
+              1
+            ]
+          }
+        }
+      }
+    },
+    "jj-10-True": {
+      "reference": {
+        "first": {
+          "commands": [
+            142,
+            142,
+            142
+          ],
+          "requests": [
+            40,
+            40,
+            40
+          ],
+          "native_child_pushes": [
+            10,
+            10,
+            10
+          ],
+          "deliberate_wait_seconds": null,
+          "scheduled_wait_seconds": null,
+          "phase_operations": {
+            "create": [
+              10,
+              10,
+              10
+            ],
+            "description": [
+              10,
+              10,
+              10
+            ],
+            "discovery": [
+              111,
+              111,
+              111
+            ],
+            "lookup": [
+              30,
+              30,
+              30
+            ],
+            "native": [
+              1,
+              1,
+              1
+            ],
+            "push": [
+              10,
+              10,
+              10
+            ],
+            "rewrite": [
+              10,
+              10,
+              10
+            ]
+          }
+        },
+        "amended": {
+          "commands": [
+            112,
+            112,
+            112
+          ],
+          "requests": [
+            70,
+            70,
+            70
+          ],
+          "native_child_pushes": [
+            10,
+            10,
+            10
+          ],
+          "deliberate_wait_seconds": null,
+          "scheduled_wait_seconds": null,
+          "phase_operations": {
+            "description": [
+              10,
+              10,
+              10
+            ],
+            "discovery": [
+              101,
+              101,
+              101
+            ],
+            "lookup": [
+              60,
+              60,
+              60
+            ],
+            "native": [
+              1,
+              1,
+              1
+            ],
+            "push": [
+              10,
+              10,
+              10
+            ]
+          }
+        },
+        "unchanged": {
+          "commands": [
+            112,
+            112,
+            112
+          ],
+          "requests": [
+            70,
+            70,
+            70
+          ],
+          "native_child_pushes": [
+            10,
+            10,
+            10
+          ],
+          "deliberate_wait_seconds": null,
+          "scheduled_wait_seconds": null,
+          "phase_operations": {
+            "description": [
+              10,
+              10,
+              10
+            ],
+            "discovery": [
+              101,
+              101,
+              101
+            ],
+            "lookup": [
+              60,
+              60,
+              60
+            ],
+            "native": [
+              1,
+              1,
+              1
+            ],
+            "push": [
+              10,
+              10,
+              10
+            ]
+          }
+        }
+      },
+      "candidate": {
+        "first": {
+          "commands": [
+            53,
+            53,
+            53
+          ],
+          "requests": [
+            13,
+            13,
+            13
+          ],
+          "native_child_pushes": [
+            0,
+            0,
+            0
+          ],
+          "deliberate_wait_seconds": [
+            10.843199014663696,
+            10.83847427368164,
+            10.838253736495972
+          ],
+          "scheduled_wait_seconds": [
+            10.800829624,
+            10.798495707999999,
+            10.798152793
+          ],
+          "phase_operations": {
+            "create": [
+              10,
+              10,
+              10
+            ],
+            "description": [
+              1,
+              1,
+              1
+            ],
+            "discovery": [
+              51,
+              51,
+              51
+            ],
+            "lookup": [
+              1,
+              1,
+              1
+            ],
+            "native": [
+              1,
+              1,
+              1
+            ],
+            "push": [
+              1,
+              1,
+              1
+            ],
+            "rewrite": [
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        "amended": {
+          "commands": [
+            45,
+            45,
+            45
+          ],
+          "requests": [
+            3,
+            3,
+            3
+          ],
+          "native_child_pushes": [
+            0,
+            0,
+            0
+          ],
+          "deliberate_wait_seconds": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scheduled_wait_seconds": [
+            0,
+            0,
+            0
+          ],
+          "phase_operations": {
+            "description": [
+              1,
+              1,
+              1
+            ],
+            "discovery": [
+              44,
+              44,
+              44
+            ],
+            "lookup": [
+              1,
+              1,
+              1
+            ],
+            "native": [
+              1,
+              1,
+              1
+            ],
+            "push": [
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        "unchanged": {
+          "commands": [
+            45,
+            45,
+            45
+          ],
+          "requests": [
+            2,
+            2,
+            2
+          ],
+          "native_child_pushes": [
+            0,
+            0,
+            0
+          ],
+          "deliberate_wait_seconds": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scheduled_wait_seconds": [
+            0,
+            0,
+            0
+          ],
+          "phase_operations": {
+            "discovery": [
+              44,
+              44,
+              44
+            ],
+            "lookup": [
+              1,
+              1,
+              1
+            ],
+            "native": [
+              1,
+              1,
+              1
+            ],
+            "push": [
+              1,
+              1,
+              1
+            ]
+          }
+        }
+      }
+    },
+    "jj-50-False": {
+      "reference": {
+        "first": {
+          "commands": [
+            581
+          ],
+          "requests": [
+            200
+          ],
+          "native_child_pushes": [
+            0
+          ],
+          "deliberate_wait_seconds": null,
+          "scheduled_wait_seconds": null,
+          "phase_operations": {
+            "create": [
+              50
+            ],
+            "description": [
+              50
+            ],
+            "discovery": [
+              431
+            ],
+            "lookup": [
+              150
+            ],
+            "push": [
+              50
+            ],
+            "rewrite": [
+              50
+            ]
+          }
+        },
+        "amended": {
+          "commands": [
+            431
+          ],
+          "requests": [
+            350
+          ],
+          "native_child_pushes": [
+            0
+          ],
+          "deliberate_wait_seconds": null,
+          "scheduled_wait_seconds": null,
+          "phase_operations": {
+            "description": [
+              50
+            ],
+            "discovery": [
+              381
+            ],
+            "lookup": [
+              300
+            ],
+            "push": [
+              50
+            ]
+          }
+        },
+        "unchanged": {
+          "commands": [
+            431
+          ],
+          "requests": [
+            350
+          ],
+          "native_child_pushes": [
+            0
+          ],
+          "deliberate_wait_seconds": null,
+          "scheduled_wait_seconds": null,
+          "phase_operations": {
+            "description": [
+              50
+            ],
+            "discovery": [
+              381
+            ],
+            "lookup": [
+              300
+            ],
+            "push": [
+              50
+            ]
+          }
+        }
+      },
+      "candidate": {
+        "first": {
+          "commands": [
+            93
+          ],
+          "requests": [
+            55
+          ],
+          "native_child_pushes": [
+            0
+          ],
+          "deliberate_wait_seconds": [
+            50.49327278137207
+          ],
+          "scheduled_wait_seconds": [
+            50.287653669
+          ],
+          "phase_operations": {
+            "create": [
+              50
+            ],
+            "description": [
+              2
+            ],
+            "discovery": [
+              91
+            ],
+            "lookup": [
+              3
+            ],
+            "push": [
+              1
+            ],
+            "rewrite": [
+              1
+            ]
+          }
+        },
+        "amended": {
+          "commands": [
+            85
+          ],
+          "requests": [
+            4
+          ],
+          "native_child_pushes": [
+            0
+          ],
+          "deliberate_wait_seconds": [
+            1.0001468658447266
+          ],
+          "scheduled_wait_seconds": [
+            0.99989275
+          ],
+          "phase_operations": {
+            "description": [
+              2
+            ],
+            "discovery": [
+              84
+            ],
+            "lookup": [
+              2
+            ],
+            "push": [
+              1
+            ]
+          }
+        },
+        "unchanged": {
+          "commands": [
+            85
+          ],
+          "requests": [
+            2
+          ],
+          "native_child_pushes": [
+            0
+          ],
+          "deliberate_wait_seconds": [
+            0.0
+          ],
+          "scheduled_wait_seconds": [
+            0
+          ],
+          "phase_operations": {
+            "discovery": [
+              84
+            ],
+            "lookup": [
+              2
+            ],
+            "push": [
+              1
+            ]
+          }
+        }
+      }
+    },
+    "jj-workspace-10-False": {
+      "reference": {
+        "first": {
+          "commands": [
+            144,
+            144,
+            144
+          ],
+          "requests": [
+            40,
+            40,
+            40
+          ],
+          "native_child_pushes": [
+            0,
+            0,
+            0
+          ],
+          "deliberate_wait_seconds": null,
+          "scheduled_wait_seconds": null,
+          "phase_operations": {
+            "create": [
+              10,
+              10,
+              10
+            ],
+            "description": [
+              10,
+              10,
+              10
+            ],
+            "discovery": [
+              114,
+              114,
+              114
+            ],
+            "lookup": [
+              30,
+              30,
+              30
+            ],
+            "push": [
+              10,
+              10,
+              10
+            ],
+            "rewrite": [
+              10,
+              10,
+              10
+            ]
+          }
+        },
+        "amended": {
+          "commands": [
+            114,
+            114,
+            114
+          ],
+          "requests": [
+            70,
+            70,
+            70
+          ],
+          "native_child_pushes": [
+            0,
+            0,
+            0
+          ],
+          "deliberate_wait_seconds": null,
+          "scheduled_wait_seconds": null,
+          "phase_operations": {
+            "description": [
+              10,
+              10,
+              10
+            ],
+            "discovery": [
+              104,
+              104,
+              104
+            ],
+            "lookup": [
+              60,
+              60,
+              60
+            ],
+            "push": [
+              10,
+              10,
+              10
+            ]
+          }
+        },
+        "unchanged": {
+          "commands": [
+            113,
+            113,
+            113
+          ],
+          "requests": [
+            70,
+            70,
+            70
+          ],
+          "native_child_pushes": [
+            0,
+            0,
+            0
+          ],
+          "deliberate_wait_seconds": null,
+          "scheduled_wait_seconds": null,
+          "phase_operations": {
+            "description": [
+              10,
+              10,
+              10
+            ],
+            "discovery": [
+              103,
+              103,
+              103
+            ],
+            "lookup": [
+              60,
+              60,
+              60
+            ],
+            "push": [
+              10,
+              10,
+              10
+            ]
+          }
+        }
+      },
+      "candidate": {
+        "first": {
+          "commands": [
+            66,
+            66,
+            66
+          ],
+          "requests": [
+            12,
+            12,
+            12
+          ],
+          "native_child_pushes": [
+            0,
+            0,
+            0
+          ],
+          "deliberate_wait_seconds": [
+            9.100556373596191,
+            9.607630014419556,
+            9.845410108566284
+          ],
+          "scheduled_wait_seconds": [
+            9.053861542,
+            9.5867125,
+            9.813065709
+          ],
+          "phase_operations": {
+            "create": [
+              10,
+              10,
+              10
+            ],
+            "description": [
+              1,
+              1,
+              1
+            ],
+            "discovery": [
+              64,
+              64,
+              64
+            ],
+            "lookup": [
+              1,
+              1,
+              1
+            ],
+            "push": [
+              1,
+              1,
+              1
+            ],
+            "rewrite": [
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        "amended": {
+          "commands": [
+            58,
+            58,
+            58
+          ],
+          "requests": [
+            2,
+            2,
+            2
+          ],
+          "native_child_pushes": [
+            0,
+            0,
+            0
+          ],
+          "deliberate_wait_seconds": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scheduled_wait_seconds": [
+            0,
+            0,
+            0
+          ],
+          "phase_operations": {
+            "description": [
+              1,
+              1,
+              1
+            ],
+            "discovery": [
+              57,
+              57,
+              57
+            ],
+            "lookup": [
+              1,
+              1,
+              1
+            ],
+            "push": [
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        "unchanged": {
+          "commands": [
+            47,
+            47,
+            47
+          ],
+          "requests": [
+            1,
+            1,
+            1
+          ],
+          "native_child_pushes": [
+            0,
+            0,
+            0
+          ],
+          "deliberate_wait_seconds": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scheduled_wait_seconds": [
+            0,
+            0,
+            0
+          ],
+          "phase_operations": {
+            "discovery": [
+              46,
+              46,
+              46
+            ],
+            "lookup": [
+              1,
+              1,
+              1
+            ],
+            "push": [
+              1,
+              1,
+              1
+            ]
+          }
+        }
+      }
+    },
+    "jj-workspace-10-True": {
+      "reference": {
+        "first": {
+          "commands": [
+            145,
+            145,
+            145
+          ],
+          "requests": [
+            40,
+            40,
+            40
+          ],
+          "native_child_pushes": [
+            10,
+            10,
+            10
+          ],
+          "deliberate_wait_seconds": null,
+          "scheduled_wait_seconds": null,
+          "phase_operations": {
+            "create": [
+              10,
+              10,
+              10
+            ],
+            "description": [
+              10,
+              10,
+              10
+            ],
+            "discovery": [
+              114,
+              114,
+              114
+            ],
+            "lookup": [
+              30,
+              30,
+              30
+            ],
+            "native": [
+              1,
+              1,
+              1
+            ],
+            "push": [
+              10,
+              10,
+              10
+            ],
+            "rewrite": [
+              10,
+              10,
+              10
+            ]
+          }
+        },
+        "amended": {
+          "commands": [
+            115,
+            115,
+            115
+          ],
+          "requests": [
+            70,
+            70,
+            70
+          ],
+          "native_child_pushes": [
+            10,
+            10,
+            10
+          ],
+          "deliberate_wait_seconds": null,
+          "scheduled_wait_seconds": null,
+          "phase_operations": {
+            "description": [
+              10,
+              10,
+              10
+            ],
+            "discovery": [
+              104,
+              104,
+              104
+            ],
+            "lookup": [
+              60,
+              60,
+              60
+            ],
+            "native": [
+              1,
+              1,
+              1
+            ],
+            "push": [
+              10,
+              10,
+              10
+            ]
+          }
+        },
+        "unchanged": {
+          "commands": [
+            114,
+            114,
+            114
+          ],
+          "requests": [
+            70,
+            70,
+            70
+          ],
+          "native_child_pushes": [
+            10,
+            10,
+            10
+          ],
+          "deliberate_wait_seconds": null,
+          "scheduled_wait_seconds": null,
+          "phase_operations": {
+            "description": [
+              10,
+              10,
+              10
+            ],
+            "discovery": [
+              103,
+              103,
+              103
+            ],
+            "lookup": [
+              60,
+              60,
+              60
+            ],
+            "native": [
+              1,
+              1,
+              1
+            ],
+            "push": [
+              10,
+              10,
+              10
+            ]
+          }
+        }
+      },
+      "candidate": {
+        "first": {
+          "commands": [
+            66,
+            66,
+            66
+          ],
+          "requests": [
+            13,
+            13,
+            13
+          ],
+          "native_child_pushes": [
+            0,
+            0,
+            0
+          ],
+          "deliberate_wait_seconds": [
+            10.402358770370483,
+            10.584401845932007,
+            10.852042436599731
+          ],
+          "scheduled_wait_seconds": [
+            10.356841165,
+            10.551549543,
+            10.813874415999999
+          ],
+          "phase_operations": {
+            "create": [
+              10,
+              10,
+              10
+            ],
+            "description": [
+              1,
+              1,
+              1
+            ],
+            "discovery": [
+              64,
+              64,
+              64
+            ],
+            "lookup": [
+              1,
+              1,
+              1
+            ],
+            "native": [
+              1,
+              1,
+              1
+            ],
+            "push": [
+              1,
+              1,
+              1
+            ],
+            "rewrite": [
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        "amended": {
+          "commands": [
+            58,
+            58,
+            58
+          ],
+          "requests": [
+            3,
+            3,
+            3
+          ],
+          "native_child_pushes": [
+            0,
+            0,
+            0
+          ],
+          "deliberate_wait_seconds": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scheduled_wait_seconds": [
+            0,
+            0,
+            0
+          ],
+          "phase_operations": {
+            "description": [
+              1,
+              1,
+              1
+            ],
+            "discovery": [
+              57,
+              57,
+              57
+            ],
+            "lookup": [
+              1,
+              1,
+              1
+            ],
+            "native": [
+              1,
+              1,
+              1
+            ],
+            "push": [
+              1,
+              1,
+              1
+            ]
+          }
+        },
+        "unchanged": {
+          "commands": [
+            47,
+            47,
+            47
+          ],
+          "requests": [
+            2,
+            2,
+            2
+          ],
+          "native_child_pushes": [
+            0,
+            0,
+            0
+          ],
+          "deliberate_wait_seconds": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scheduled_wait_seconds": [
+            0,
+            0,
+            0
+          ],
+          "phase_operations": {
+            "discovery": [
+              46,
+              46,
+              46
+            ],
+            "lookup": [
+              1,
+              1,
+              1
+            ],
+            "native": [
+              1,
+              1,
+              1
+            ],
+            "push": [
+              1,
+              1,
+              1
+            ]
+          }
+        }
+      }
+    },
+    "jj-workspace-50-False": {
+      "reference": {
+        "first": {
+          "commands": [
+            584
+          ],
+          "requests": [
+            200
+          ],
+          "native_child_pushes": [
+            0
+          ],
+          "deliberate_wait_seconds": null,
+          "scheduled_wait_seconds": null,
+          "phase_operations": {
+            "create": [
+              50
+            ],
+            "description": [
+              50
+            ],
+            "discovery": [
+              434
+            ],
+            "lookup": [
+              150
+            ],
+            "push": [
+              50
+            ],
+            "rewrite": [
+              50
+            ]
+          }
+        },
+        "amended": {
+          "commands": [
+            434
+          ],
+          "requests": [
+            350
+          ],
+          "native_child_pushes": [
+            0
+          ],
+          "deliberate_wait_seconds": null,
+          "scheduled_wait_seconds": null,
+          "phase_operations": {
+            "description": [
+              50
+            ],
+            "discovery": [
+              384
+            ],
+            "lookup": [
+              300
+            ],
+            "push": [
+              50
+            ]
+          }
+        },
+        "unchanged": {
+          "commands": [
+            433
+          ],
+          "requests": [
+            350
+          ],
+          "native_child_pushes": [
+            0
+          ],
+          "deliberate_wait_seconds": null,
+          "scheduled_wait_seconds": null,
+          "phase_operations": {
+            "description": [
+              50
+            ],
+            "discovery": [
+              383
+            ],
+            "lookup": [
+              300
+            ],
+            "push": [
+              50
+            ]
+          }
+        }
+      },
+      "candidate": {
+        "first": {
+          "commands": [
+            146
+          ],
+          "requests": [
+            55
+          ],
+          "native_child_pushes": [
+            0
+          ],
+          "deliberate_wait_seconds": [
+            50.92892289161682
+          ],
+          "scheduled_wait_seconds": [
+            50.751741879
+          ],
+          "phase_operations": {
+            "create": [
+              50
+            ],
+            "description": [
+              2
+            ],
+            "discovery": [
+              144
+            ],
+            "lookup": [
+              3
+            ],
+            "push": [
+              1
+            ],
+            "rewrite": [
+              1
+            ]
+          }
+        },
+        "amended": {
+          "commands": [
+            138
+          ],
+          "requests": [
+            4
+          ],
+          "native_child_pushes": [
+            0
+          ],
+          "deliberate_wait_seconds": [
+            1.002377986907959
+          ],
+          "scheduled_wait_seconds": [
+            0.999909167
+          ],
+          "phase_operations": {
+            "description": [
+              2
+            ],
+            "discovery": [
+              137
+            ],
+            "lookup": [
+              2
+            ],
+            "push": [
+              1
+            ]
+          }
+        },
+        "unchanged": {
+          "commands": [
+            87
+          ],
+          "requests": [
+            2
+          ],
+          "native_child_pushes": [
+            0
+          ],
+          "deliberate_wait_seconds": [
+            0.0
+          ],
+          "scheduled_wait_seconds": [
+            0
+          ],
+          "phase_operations": {
+            "discovery": [
+              86
+            ],
+            "lookup": [
+              2
+            ],
+            "push": [
+              1
+            ]
+          }
+        }
+      }
+    }
+  },
+  "comparison_analysis": {
+    "harness_sha256": {
+      "parity.py": "0295180c51a1432a6b85a185cf0b1421ea648ae0ed9727a943cab2df31be5059",
+      "fixture_command.py": "82d084aee1dde9e441515350ed33327a60fba0bf82dcf893b6a43bca43e4bc2c"
+    },
+    "method": "Retained raw evidence re-compared after excluding the exact libtest 60-second entrypoint notice from stdout comparison. Original output, elapsed durations, operation traces and repository snapshots remain unchanged.",
+    "collection_harness": "target/validation/followups/collection-parity.py",
+    "comparison_patch": "target/validation/followups/harness-correction.patch",
+    "production_source_changed": false,
+    "timed_collection_repeated": false
+  },
+  "method_notes": [
+    "The reference is the pinned Rust revision preceding the submission redesign; the candidate includes that redesign and the six follow-up corrections.",
+    "The 1-commit and 10-commit workloads have three paired samples with reversed middle-sample order; each 50-commit and 100-commit workload has one paired scale probe.",
+    "One scenario runs at a time; all compilation and acceptance suites completed before collection.",
+    "Both applications use ordinary release compilation, isolated repositories and the same loopback service model.",
+    "The default full-stack footer is used; compact presentation has independent algorithmic and protocol assertions.",
+    "Elapsed durations include baseline waits. Baseline wait fields are null because its unchanged clock has no separate wait instrumentation.",
+    "HTTP counts exclude requests hidden inside the reference GitHub CLI. Native child publication is modelled by the fixture; installed-extension latency is not measured.",
+    "The candidate source and executable identities precede the mandatory commit-hook version increment.",
+    "The collection measures the complete redesign against the earlier Rust implementation and does not isolate the marginal timing effect of the six follow-up corrections.",
+    "Repeated samples provide descriptive medians and maxima, not confidence intervals or live-service latency forecasts; larger single-sample probes establish no latency distribution."
+  ]
+}

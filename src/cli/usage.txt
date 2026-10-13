@@ -1,0 +1,10 @@
+Usage: git pr [OPTIONS] [COMMITS]
+
+COMMITS may be:
+  (omitted)        Push origin/<trunk>..HEAD as stacked PRs (default).
+  BASE..TIP        Push the commits in the BASE..TIP range as stacked PRs.
+  COMMIT           Push exactly that one commit as a single PR.
+  COMMIT...        Push the named commits (2+) as stacked PRs; commits between
+                   them on the stack are skipped. Args may be in any order.
+
+A COMMIT may be a git ref/hash, or (in a jj repo) a jj change-id.

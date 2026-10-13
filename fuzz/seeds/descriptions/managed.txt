@@ -1,0 +1,7 @@
+Human prefix, including [links](https://example.invalid/).
+
+<!-- git-pr-stack-start -->
+Old managed content.
+<!-- git-pr-stack-end -->
+
+Human suffix: naïve 🦀.

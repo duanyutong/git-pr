@@ -1,0 +1,19 @@
+avoid-breaking-exported-api = false
+too-many-arguments-threshold = 8
+type-complexity-threshold = 250
+
+# Tests legitimately use expect/unwrap/panic for assertions.
+allow-expect-in-tests = true
+allow-unwrap-in-tests = true
+allow-panic-in-tests = true
+
+# Words that look like identifiers but are valid prose.
+doc-valid-idents = [
+  "..",
+  "ANSI",
+  "CLI",
+  "CodeGraph",
+  "GitHub",
+  "RustSec",
+  "UTF-8",
+]

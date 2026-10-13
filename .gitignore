@@ -1,0 +1,13 @@
+/target/
+/.agents/
+/.codegraph/
+/.venv/
+/coverage/
+/.ruff_cache/
+/.serena/
+/lcov.info
+/tarpaulin-report.html
+*.profraw
+*.profdata
+.DS_Store
+__pycache__/

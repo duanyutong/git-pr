@@ -1,0 +1,4 @@
+[default.extend-words]
+branchless = "branchless"
+revset = "revset"
+revsets = "revsets"
