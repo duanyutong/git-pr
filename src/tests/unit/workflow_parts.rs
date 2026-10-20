@@ -200,7 +200,7 @@ fn base_verification_rejects_changes_after_creation_without_retargeting() {
 }
 
 #[test]
-fn reordered_publications_stop_before_rewriting_or_remote_effects_in_both_modes() {
+fn unverifiable_reorders_stop_before_rewriting_or_remote_effects_in_both_modes() {
     for native in [false, true] {
         for infer_refs in [false, true] {
             let w = World::new(4);
@@ -238,7 +238,7 @@ fn reordered_publications_stop_before_rewriting_or_remote_effects_in_both_modes(
             for _ in 0..2 {
                 w.0.lock().unwrap().trace.clear();
                 let error = format!("{:#}", w.run(&flags).unwrap_err());
-                assert!(error.contains("unsafe publication: PR #102"), "{error}");
+                assert!(error.contains("unsafe publication"), "{error}");
                 assert!(error.contains("no local rewrites, pushes or PR changes"));
                 let memory = w.0.lock().unwrap();
                 assert_eq!(memory.commits, commits);

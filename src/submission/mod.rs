@@ -151,6 +151,7 @@ impl Application {
             .context("PR content reconciliation failed after publication; pushed refs and completed PR changes are retained")?;
         diagnostics.phase("native stack links", || Self::native_stack(&config, &github, &state, &publication.bases))
             .context("native stack reconciliation failed after publication; pushed refs and completed PR changes are retained")?;
+        publication.finish(&github, &state)?;
         for commit in state.selected_mut() {
             commit.metadata_updated = github.was_updated(commit.pr_number);
         }

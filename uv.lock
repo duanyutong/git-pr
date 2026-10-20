@@ -57,12 +57,12 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "semver", specifier = ">=3.0.4" },
-    { name = "tomlkit", specifier = ">=0.13.3" },
+    { name = "semver", specifier = ">=3.1.0" },
+    { name = "tomlkit", specifier = ">=0.15.2" },
 ]
 
 [package.metadata.requires-dev]
-dev = [{ name = "coverage", specifier = ">=7.10" }]
+dev = [{ name = "coverage", specifier = ">=7.16.2" }]
 
 [[package]]
 name = "semver"

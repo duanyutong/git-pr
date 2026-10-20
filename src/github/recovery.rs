@@ -1,4 +1,4 @@
-//! Fresh observations and narrowly scoped mutations for obsolete PR bases.
+//! Fresh observations and verified mutations for PR base transitions.
 
 use anyhow::{Context, Result, bail};
 use serde_json::json;

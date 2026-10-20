@@ -62,6 +62,42 @@ pub(crate) enum StackOutcome {
 }
 
 impl GitHub<'_> {
+    pub(crate) fn check_transition_stack(
+        &self,
+        number: u64,
+        selected: &[u64],
+        claimed: &[u64],
+    ) -> Result<()> {
+        let topology = self.observe_topology(number, &[])?;
+        if number == 0
+            || topology
+                .pull_requests
+                .iter()
+                .any(|pr| !selected.contains(&pr.number))
+            || claimed
+                .iter()
+                .any(|number| !topology.pull_requests.iter().any(|pr| pr.number == *number))
+        {
+            bail!("native stack transition requires its complete membership");
+        }
+        Ok(())
+    }
+
+    pub(crate) fn unstack_transition(&self, number: u64) -> Result<()> {
+        let result = self.request_url(
+            "POST",
+            &self.repo_url(&format!("stacks/{number}/unstack")),
+            None,
+        );
+        // A lost acknowledgement is resolved by fresh membership observations.
+        if let Ok(response) = result
+            && response.status != 204
+        {
+            bail!("native stack transition is incomplete; some PRs remain stacked");
+        }
+        Ok(())
+    }
+
     pub(crate) fn require_recoverable_membership(
         pr: &crate::model::pull_request::RecoveryPullRequest,
     ) -> Result<()> {

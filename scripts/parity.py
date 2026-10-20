@@ -48,13 +48,20 @@ NEW_GIT_SETTINGS = (
             "git-pr.compactStack",
             "git-pr.readTimeout",
             "git-pr.commandTimeout",
+            "git-pr.transitionJournal",
         }
     )
     | REMOTE_GIT_SETTINGS
 )
 FOLLOWUP_GIT_SETTINGS = (
     frozenset(
-        {"git-pr.stackUp", "git-pr.compactStack", "git-pr.readTimeout", "git-pr.commandTimeout"}
+        {
+            "git-pr.stackUp",
+            "git-pr.compactStack",
+            "git-pr.readTimeout",
+            "git-pr.commandTimeout",
+            "git-pr.transitionJournal",
+        }
     )
     | REMOTE_GIT_SETTINGS
 )

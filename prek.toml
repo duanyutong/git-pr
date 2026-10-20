@@ -1,6 +1,6 @@
-minimum_prek_version = "0.5.5"
+minimum_prek_version = "0.5.6"
 default_stages = ["pre-commit"]
-default_language_version = { python = "3.15.0", golang = "1.27.2", rust = { request = "1.99.0", preference = "only-system" } }
+default_language_version = { python = "3.15.0", golang = "1.27.3", rust = { request = "1.99.1", preference = "only-system" } }
 exclude = "^(LICENSE|THIRD_PARTY_NOTICES.md|tests/fixtures/|fuzz/seeds/)"
 
 [[repos]]
@@ -19,7 +19,7 @@ hooks = [
 
 [[repos]]
 repo = "https://github.com/astral-sh/ruff-pre-commit"
-rev = "v0.17.0"
+rev = "v0.17.1"
 
 [[repos.hooks]]
 id = "ruff-format"
@@ -35,7 +35,7 @@ priority = 5
 
 [[repos]]
 repo = "https://github.com/shellcheck-py/shellcheck-py"
-rev = "v0.11.0.1"
+rev = "v0.11.0.1-1"
 
 [[repos.hooks]]
 id = "shellcheck"
@@ -82,7 +82,7 @@ priority = 3
 id = "tombi-format"
 name = "TOML formatting"
 language = "python"
-additional_dependencies = ["tombi==1.8.4"]
+additional_dependencies = ["tombi==1.8.9"]
 entry = "tombi format --offline"
 types = ["toml"]
 exclude = "(^|/)(Cargo\\.toml|Cargo\\.lock|uv\\.lock)$"
@@ -92,7 +92,7 @@ priority = 4
 id = "tombi-lint"
 name = "TOML validation"
 language = "python"
-additional_dependencies = ["tombi==1.8.4"]
+additional_dependencies = ["tombi==1.8.9"]
 entry = "tombi lint --offline"
 types = ["toml"]
 exclude = "(^|/)(Cargo\\.toml|Cargo\\.lock|uv\\.lock)$"
@@ -289,7 +289,7 @@ always_run = true
 id = "coverage-reference"
 name = "Application coverage with reference tools"
 language = "golang"
-additional_dependencies = ["github.com/cli/cli/v2/cmd/gh@v2.102.0"]
+additional_dependencies = ["github.com/cli/cli/v2/cmd/gh@v2.102.1"]
 entry = "uv run scripts/measure.py coverage uv run scripts/coverage.py"
 stages = ["manual"]
 pass_filenames = false
@@ -299,7 +299,7 @@ always_run = true
 id = "parity-reference"
 name = "Differential acceptance with reference tools"
 language = "golang"
-additional_dependencies = ["github.com/cli/cli/v2/cmd/gh@v2.102.0"]
+additional_dependencies = ["github.com/cli/cli/v2/cmd/gh@v2.102.1"]
 entry = "uv run scripts/measure.py parity uv run scripts/parity.py"
 stages = ["manual"]
 pass_filenames = false
@@ -309,7 +309,7 @@ always_run = true
 id = "benchmark-reference"
 name = "Benchmark with reference tools"
 language = "golang"
-additional_dependencies = ["github.com/cli/cli/v2/cmd/gh@v2.102.0"]
+additional_dependencies = ["github.com/cli/cli/v2/cmd/gh@v2.102.1"]
 entry = "uv run scripts/measure.py benchmark uv run scripts/parity.py --bench"
 stages = ["manual"]
 pass_filenames = false

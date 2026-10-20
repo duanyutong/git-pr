@@ -1,6 +1,6 @@
 //! Pull-request values exchanged between policy and service adapters.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
@@ -27,7 +27,7 @@ pub(crate) struct Reference {
     pub name: String,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub(crate) struct NativeStack {
     pub number: u64,
 }
@@ -59,7 +59,7 @@ impl PullRequest {
 
 /// Complete metadata acquired only when publication requires a base transition.
 /// Missing fields must not turn an uncertain observation into recovery authority.
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub(crate) struct RecoveryPullRequest {
     pub number: u64,
     pub node_id: String,
@@ -73,7 +73,7 @@ pub(crate) struct RecoveryPullRequest {
     pub stack: Option<NativeStack>,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub(crate) struct RecoveryReference {
     #[serde(rename = "ref")]
     pub name: String,
@@ -81,7 +81,7 @@ pub(crate) struct RecoveryReference {
     pub repo: RecoveryRepository,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub(crate) struct RecoveryRepository {
     pub full_name: String,
 }

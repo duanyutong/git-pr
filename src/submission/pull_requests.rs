@@ -50,7 +50,7 @@ impl Publication {
             dependant_times: Vec::new(),
             recovery: None,
         };
-        let mut recover = None;
+        let mut recover = !github.config.transition_journal.is_empty();
         for (group, chunk) in stack.chunks(25).enumerate() {
             let references: Vec<_> = chunk
                 .iter()
@@ -73,17 +73,16 @@ impl Publication {
                 let pr = github.publication_pr(reference)?;
                 if let Some(pr) = &pr {
                     if pr.base.name != plan.bases[index]
-                        && plan.bases[index] == github.config.repo.trunk
+                        && github.config.transition_journal.is_empty()
+                        && plan.bases[index] != github.config.repo.trunk
+                        && pr.base.name != github.config.repo.trunk
                         && !stack[start..]
                             .iter()
                             .any(|commit| !commit.skip && commit.remote_ref() == pr.base.name)
                     {
-                        recover.get_or_insert_with(|| {
-                            (pr.number, pr.head.name.clone(), pr.base.name.clone())
-                        });
-                    } else {
                         crate::github::policy::require_publication_base(pr, &plan.bases[index])?;
                     }
+                    recover |= pr.base.name != plan.bases[index];
                 }
                 let identity = pr.map(|pr| Identity {
                     number: pr.number,
@@ -91,6 +90,13 @@ impl Publication {
                 });
                 plan.entries.push((index, reference.to_owned(), identity));
             }
+        }
+        if recover {
+            plan.recovery = Some(
+                super::recovery::Recovery::observe(github, stack, start, &plan.bases)
+                    .context("unsafe publication: publication transition could not be verified")?,
+            );
+            return Ok(plan);
         }
         let selected = plan.selected_prs();
         plan.dependant_times = plan
@@ -108,10 +114,6 @@ impl Publication {
                 Ok(Cell::new(acquired))
             })
             .collect::<Result<_>>()?;
-        if let Some((number, reference, base)) = recover {
-            plan.recovery = Some(super::recovery::Recovery::observe(github, stack, start, &plan.bases)
-                .with_context(|| format!("unsafe publication: PR #{number} for head {reference:?} has base {base:?}; recovery to {:?} could not be verified", github.config.repo.trunk))?);
-        }
         Ok(plan)
     }
 
@@ -123,6 +125,25 @@ impl Publication {
                     .map(|pr| (pr.number, (reference.as_str(), self.bases[*i].as_str())))
             })
             .collect()
+    }
+
+    pub(super) fn finish(&self, github: &GitHub<'_>, state: &State) -> Result<()> {
+        if let Some(recovery) = &self.recovery {
+            if recovery.restore_native() && !github.config.github_stack {
+                let base = state
+                    .stack
+                    .iter()
+                    .enumerate()
+                    .skip(state.start)
+                    .find(|(_, commit)| !commit.skip)
+                    .map_or(github.config.repo.trunk.as_str(), |(index, _)| {
+                        self.bases[index].as_str()
+                    });
+                github.manage_stack(state.selected(), base)?;
+            }
+            recovery.finish(github, state)?;
+        }
+        Ok(())
     }
 
     pub(super) fn verify(
@@ -184,7 +205,16 @@ impl Publication {
                     );
                 }
                 if let Some(pr) = actual {
-                    crate::github::policy::require_publication_base(&pr, &self.bases[*index])?;
+                    let base = if published {
+                        &self.bases[*index]
+                    } else {
+                        self.recovery
+                            .as_ref()
+                            .map_or(self.bases[*index].as_str(), |plan| {
+                                plan.publication_base(*index)
+                            })
+                    };
+                    crate::github::policy::require_publication_base(&pr, base)?;
                     commit.pr_number = pr.number;
                 }
             }
@@ -262,7 +292,7 @@ impl Application {
         if let Some(recovery) = &publication.recovery {
             self.commands
                 .terminal
-                .stage("Recovering merged downstack base");
+                .stage("Preparing publication transition");
             recovery.apply(github, state, &publication.bases)?;
             self.commands.terminal.stage("Publishing branches");
         }
@@ -274,6 +304,9 @@ impl Application {
             git.push_all(&commits)?;
         }
         git.sync_refs(state.selected());
+        if let Some(recovery) = &publication.recovery {
+            recovery.complete(github, state)?;
+        }
         publication.verify(github, state, true)
             .context("PR state changed or could not be verified after publication; pushed refs are retained, and PR creation and updates have been stopped")?;
         self.commands.terminal.stage("Reconciling pull requests");

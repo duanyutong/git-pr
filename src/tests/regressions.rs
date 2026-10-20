@@ -292,14 +292,38 @@ fn pipe_branch_is_synchronised_without_moving_the_checked_out_branch() {
     assert_eq!(f.git(&["status", "--porcelain"]), "");
 }
 
+fn hydrate_publication_heads(f: &Fixture) {
+    let observed = f.service.prs.lock().unwrap().clone();
+    for (number, original) in observed {
+        let head = f.git(&[
+            "rev-parse",
+            &format!(
+                "refs/remotes/origin/{}",
+                original["head"]["ref"].as_str().unwrap()
+            ),
+        ]);
+        let mut prs = f.service.prs.lock().unwrap();
+        let pr = prs.get_mut(&number).unwrap();
+        pr["head"]["sha"] = json!(head);
+        pr["base"]["sha"] = json!(f.trunk);
+        pr["merged_at"] = serde_json::Value::Null;
+        pr["merge_commit_sha"] = serde_json::Value::Null;
+        if pr["stack"].is_null() {
+            pr["stack"] = serde_json::Value::Null;
+        }
+        drop(prs);
+    }
+}
+
 #[test]
-fn reordered_stack_cannot_reach_the_hosts_indirect_merge_transition() {
+fn reordered_stack_preserves_open_prs_with_the_hosts_indirect_merge_lifecycle() {
     for native in [false, true] {
         for delete in [false, true] {
             let f = Fixture::with_service(
                 3,
                 true,
                 Service {
+                    recovery_destination: true,
                     indirect_merges: Some(delete),
                     ..Service::default()
                 },
@@ -313,44 +337,114 @@ fn reordered_stack_cannot_reach_the_hosts_indirect_merge_transition() {
                 "--yes",
             ];
             f.run(&flags).unwrap();
-            let remote_before = f.git(&["ls-remote", "--heads", "origin"]);
-            let prs_before = f.service.prs.lock().unwrap().clone();
+            hydrate_publication_heads(&f);
+            let original = f.service.prs.lock().unwrap().clone();
             f.git(&["checkout", "--detach", &f.trunk]);
-            let mut rewritten = Vec::new();
             for index in [1, 0, 2] {
                 f.git(&["cherry-pick", &f.hashes[index]]);
-                rewritten.push(f.git(&["rev-parse", "HEAD"]));
             }
             f.service.trace.lock().unwrap().clear();
-            let error = format!("{:#}", f.run(&flags).unwrap_err());
-            assert!(error.contains("unsafe publication: PR #102"), "{error}");
-            assert!(!f.trace().iter().any(|e| e["args"][0] == "push"));
-            assert_eq!(*f.service.prs.lock().unwrap(), prs_before);
-            assert_eq!(f.git(&["ls-remote", "--heads", "origin"]), remote_before);
-
-            // Exercise the oracle: the legacy ordering really does merge PR #102.
-            // Every ref and service state below belongs to this disposable fixture.
-            let specs: Vec<_> = [2, 1, 3]
-                .iter()
-                .zip(&rewritten)
-                .map(|(branch, oid)| format!("{oid}:refs/heads/topic/{branch}"))
-                .collect();
-            f.git(&["push", "-f", "origin", &specs[0], &specs[1], &specs[2]]);
-            assert_eq!(f.service.prs.lock().unwrap()[&102]["merged"], true);
-            assert_eq!(
-                !f.git(&["ls-remote", "--heads", "origin"])
-                    .contains("refs/heads/topic/2"),
-                delete
-            );
-            f.service.trace.lock().unwrap().clear();
-            let error = format!("{:#}", f.run(&flags).unwrap_err());
-            assert!(error.contains("is merged"), "{error}");
+            f.run(&flags).unwrap();
+            let prs = f.service.prs.lock().unwrap();
+            for (number, base) in [(102, "main"), (101, "topic/2"), (103, "topic/1")] {
+                assert_eq!(prs[&number]["state"], "open");
+                assert_eq!(prs[&number]["merged"], false);
+                assert_eq!(prs[&number]["node_id"], original[&number]["node_id"]);
+                assert_eq!(prs[&number]["base"]["ref"], base);
+            }
+            drop(prs);
             assert!(
-                !f.trace().iter().any(|e| e["args"][0] == "push"
-                    || e["method"] == "PATCH"
-                    || e["path"] == "pulls")
+                !f.git(&["ls-remote", "--heads", "origin"])
+                    .contains("git-pr/transition/")
             );
-            assert_eq!(f.service.prs.lock().unwrap().len(), 3);
+            assert!(
+                !f.git(&["config", "--local", "--list"])
+                    .contains("transitionjournal")
+            );
+            f.run(&flags).unwrap();
+        }
+    }
+}
+
+#[test]
+fn unguarded_reordering_exercises_the_indirect_merge_oracle() {
+    for delete in [false, true] {
+        let f = Fixture::with_service(
+            3,
+            true,
+            Service {
+                indirect_merges: Some(delete),
+                ..Service::default()
+            },
+        );
+        f.run(&["--no-stack"]).unwrap();
+        f.git(&["checkout", "--detach", &f.trunk]);
+        let mut specs = Vec::new();
+        for index in [1, 0, 2] {
+            f.git(&["cherry-pick", &f.hashes[index]]);
+            specs.push(format!(
+                "{}:refs/heads/topic/{}",
+                f.git(&["rev-parse", "HEAD"]),
+                index + 1
+            ));
+        }
+        f.git(&["push", "-f", "origin", &specs[0], &specs[1], &specs[2]]);
+        assert_eq!(f.service.prs.lock().unwrap()[&102]["merged"], true);
+        assert_eq!(
+            !f.git(&["ls-remote", "--heads", "origin"])
+                .contains("refs/heads/topic/2"),
+            delete
+        );
+    }
+}
+
+#[test]
+fn insertion_at_every_position_supports_missing_and_published_new_branches() {
+    for position in 0..=3 {
+        for published in [false, true] {
+            let f = Fixture::with_service(
+                3,
+                true,
+                Service {
+                    recovery_destination: true,
+                    indirect_merges: Some(true),
+                    ..Service::default()
+                },
+            );
+            f.run(&["--no-stack"]).unwrap();
+            hydrate_publication_heads(&f);
+            f.git(&["checkout", "--detach", &f.trunk]);
+            for index in 0..=3 {
+                if index == position {
+                    f.write("inserted.txt", "synthetic insertion\n");
+                    f.git(&["add", "inserted.txt"]);
+                    f.git(&[
+                        "commit",
+                        "-m",
+                        "Inserted layer\n\nRemote-Ref: topic/inserted",
+                    ]);
+                    if published {
+                        f.git(&["push", "origin", "HEAD:refs/heads/topic/inserted"]);
+                    }
+                }
+                if index < 3 {
+                    f.git(&["cherry-pick", &f.hashes[index]]);
+                }
+            }
+            f.run(&["--no-stack"]).unwrap();
+            let mut order = vec!["topic/1", "topic/2", "topic/3"];
+            order.insert(position, "topic/inserted");
+            let prs = f.service.prs.lock().unwrap();
+            assert_eq!(prs.len(), 4);
+            for (index, head) in order.iter().enumerate() {
+                let pr = prs.values().find(|pr| pr["head"]["ref"] == *head).unwrap();
+                assert_eq!(pr["state"], "open");
+                assert_eq!(
+                    pr["base"]["ref"],
+                    if index == 0 { "main" } else { order[index - 1] }
+                );
+            }
+            drop(prs);
         }
     }
 }
