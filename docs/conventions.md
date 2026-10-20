@@ -5,7 +5,7 @@ The checkout provisions its own development tools.
 
 | Area | Convention |
 | --- | --- |
-| Compiler | Rust 1.99.0, Edition 2024, minimal toolchain with rustfmt, Clippy, LLVM tools and rust-analyzer. |
+| Compiler | Rust 1.99.1, Edition 2024, minimal toolchain with rustfmt, Clippy, LLVM tools and rust-analyzer. |
 | Rust policy | Workspace-wide compiler metadata and lints, inherited by the application; unsafe code is forbidden. |
 | Module layout | Production modules with children use `name/mod.rs`; leaf modules retain descriptive filenames, and ordinary production declarations use no custom source paths. |
 | Release profile | Optimisation level 3, fat LTO, one code-generation unit, aborting panics and stripped symbols. |

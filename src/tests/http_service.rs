@@ -152,7 +152,7 @@ pub(crate) fn respond(
             .unwrap_or(9);
         if path.ends_with("/unstack") {
             for pr in prs.values_mut() {
-                pr.as_object_mut().unwrap().remove("stack");
+                pr["stack"] = Value::Null;
             }
             return Ok(Value::Null);
         }

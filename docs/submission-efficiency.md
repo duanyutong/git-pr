@@ -115,7 +115,7 @@ Original PR numbers remain authoritative, and a PR absent from its previously ob
 The 51-PR expiry regressions require three refresh requests, whilst fresh repeated history extraction requires none.
 Publication preflight refreshes selected branch observations in groups of at most 25.
 A single open identity may be selected notwithstanding older closed history; multiple open identities or exclusively closed or merged history prevent publication.
-The planner pins PR numbers and node identities, and requires each existing base to equal its intended predecessor unless the merged-downstack recovery contract below is satisfied.
+The planner pins PR numbers and node identities, and constructs a verified transition whenever published bases differ from the intended predecessors.
 A separate paginated query observes open PRs targeting each publication destination and rejects dependants outside the verified selection.
 The publication plan retains a separate acquisition timestamp for each group of at most 25 destinations, using the invocation's monotonic clock.
 Each timestamp precedes acquisition of its group's first page, so request delays and pagination contribute to the observation age.
@@ -123,17 +123,32 @@ Before publication, dependant observations older than 30 seconds are reacquired;
 Slow acquisition of a later group does not renew the earlier groups, and failed reacquisition prevents publication without renewing the affected observation.
 These queries use GitHub's documented [`baseRefName` filter](https://docs.github.com/en/graphql/reference/repos#repository).
 After publication, affected head and PR observations are invalidated regardless of their age; the same pinned identities and bases must be confirmed before any creation or update.
-The ordinary post-publication reconciliation verifies bases and does not retarget existing PRs.
+The publication transition establishes intended bases before ordinary post-publication reconciliation verifies them.
 Branch publication explicitly disables automatic annotation following, so `push.followTags=true` cannot add unrelated annotated tags to the selected destination refs.
-These observations provide conservative containment for published-stack reorders; they do not constitute an atomic transaction or a proof covering arbitrary concurrent remote operations.
-General reordering and temporary-base staging remain unsupported.
+These observations constrain intermediate publication states; they do not constitute an atomic transaction or a proof covering arbitrary concurrent remote operations.
+Insertions at any position and permutations of a complete published stack use the same transition plan.
+A direct transition requires every intended base to exist and every old and new head/base combination to exclude an indirect merge.
+Otherwise, existing selected PRs temporarily target a tool-owned branch pinned to the observed trunk snapshot.
+Both original and prepared heads must remain outside that snapshot's ancestry.
+All selected refs are published with explicit expected-object leases before final bases are restored.
+Unselected incoming dependants prevent the transition.
+Native stack transitions require complete observed membership; dissolution is freshly verified before retargeting, and membership is reconstructed after final bases are established.
+A partial dissolution stops publication.
+
+The repository-local Git configuration key `git-pr.transitionJournal` retains the operation journal before the first remote mutation.
+The journal records reference expectations, prepared object identities and pinned PR identities without copying PR descriptions.
+Retries require the same selection and prepared commits, reacquire live observations and accept only recorded original or intended reference values and recognised intermediate bases.
+Unknown concurrent changes stop recovery whilst retaining the journal.
+Temporary branches are removed with an explicit lease only after fresh observation confirms that no open PR depends upon them.
+The journal is cleared after successful reconciliation and cleanup.
+Dry runs and rewrite checkpoints do not create a journal or mutate remote relationships.
 
 An obsolete base may be repaired before publication when its unique merged PR has a verified merge result in the live configured trunk, its original head is present in the surviving published history, and any remaining obsolete ref still identifies that generation.
 Recovery obtains strict individual PR observations, complete historical identity observations and live refs from a single resolved push destination matching the observed hosting repository.
 Required Git objects shall be available locally; failed ancestry reads stop recovery and require synchronisation rather than an inferred negative result.
 The original published heads and the prepared heads must remain outside their intended bases' ancestry throughout every old/new ref combination, and prepared heads must contain their intended bases.
 Deleted obsolete refs are permitted, whilst reused branches, ambiguous historical identities and unselected dependants are refused.
-Native members requiring retargeting remain blocked until a supported transition can be verified; an ordinary PR above a merged native stack is eligible.
+A surviving native member whose obsolete predecessor lies outside the selection remains ineligible for automatic merged-downstack repair; an ordinary PR above a merged native stack is eligible.
 
 The recovery plan remains read-only until local preparation completes.
 All observations and dependencies are reacquired before mutation, and each retarget must be freshly confirmed before any publication.

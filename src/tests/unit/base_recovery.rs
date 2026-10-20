@@ -569,23 +569,27 @@ fn refs_changed_during_retarget_stop_publication_without_rolling_back_the_base()
             [Response::Output(0, refs.clone()), Response::Output(0, refs.replace(&oid(11), &oid(12)))].into(),
         );
         let error = format!("{:#}", recovery.apply(github, &state, &bases).unwrap_err());
-        assert!(error.contains("repaired bases are retained"), "{error}");
+        assert!(error.contains("journal retained"), "{error}");
         assert_eq!(w.0.lock().unwrap().prs[&101]["base"]["ref"], "main");
         assert!(!w.trace().iter().any(|e| e["args"][0] == "push"));
     });
 }
 
 #[test]
-fn recovery_rejects_an_unsafe_partial_push_state_for_an_upper_pr() {
+fn recovery_stages_an_unsafe_partial_push_state_for_an_upper_pr() {
     let w = world(2);
     w.reply(
         &format!("git merge-base --is-ancestor {} {}", oid(12), oid(1)),
         0,
         "",
     );
-    let error = format!("{:#}", w.run(&["--no-stack"]).unwrap_err());
-    assert!(error.contains("indirect merge"), "{error}");
-    assert!(!w.trace().iter().any(effect));
+    w.run(&["--no-stack"]).unwrap();
+    assert!(
+        w.trace()
+            .iter()
+            .any(|event| event["body"]["base"] == "git-pr/transition/101")
+    );
+    assert_eq!(w.0.lock().unwrap().prs[&102]["state"], "open");
 }
 
 #[test]
@@ -621,16 +625,16 @@ fn recovery_requires_complete_observations_and_a_trunk_transition() {
         assert!(Recovery::observe(github, &state.stack, 0, &["main".into()]).is_err());
         github.observe(&["topic/1".into()]).unwrap();
         assert!(Recovery::observe(github, &state.stack, 0, &["other".into()]).is_err());
-        let (recovery, _) = observe(&w, github, &state);
+        let (mut recovery, _) = observe(&w, github, &state);
+        recovery.bases = vec!["absent".into()];
         assert!(
             recovery
-                .check_graph(
+                .check_final_graph(
                     Git {
                         commands: github.commands,
                         repo: &github.config.repo
                     },
-                    &state.stack,
-                    &["absent".into()]
+                    &state.stack
                 )
                 .is_err()
         );
@@ -714,4 +718,728 @@ fn recovery_retains_repaired_bases_when_final_verification_is_unavailable() {
         assert_eq!(w.0.lock().unwrap().prs[&101]["base"]["ref"], "main");
         assert!(!w.trace().iter().any(|event| event["args"][0] == "push"));
     }
+}
+
+fn transition_world(order: &[u64], published: &[u64]) -> Arc<World> {
+    let w = World::new(0);
+    let mut parents = BTreeMap::from([(0, vec![])]);
+    {
+        let mut m = w.0.lock().unwrap();
+        m.remote_refs.insert("refs/heads/main".into(), oid(0));
+        let mut previous = 0;
+        for number in published {
+            let hash = 10 + number;
+            parents.insert(hash, vec![previous]);
+            let base = if previous == 0 {
+                "main".into()
+            } else {
+                format!("topic/{}", previous - 10)
+            };
+            m.prs.insert(
+                100 + number,
+                pr(100 + number, &format!("topic/{number}"), hash, &base),
+            );
+            m.remote_refs
+                .insert(format!("refs/heads/topic/{number}"), oid(hash));
+            previous = hash;
+        }
+        previous = 0;
+        for number in order {
+            let hash = 20 + number;
+            parents.insert(hash, vec![previous]);
+            let mut commit = crate::tests::unit::support::commit(*number);
+            commit.hash = oid(hash);
+            m.commits.push(commit);
+            previous = hash;
+        }
+        m.branch = format!("topic/{}", order.last().unwrap());
+    }
+    for ancestor in parents.keys() {
+        for descendant in parents.keys() {
+            let mut pending = vec![*descendant];
+            let mut seen = BTreeSet::new();
+            while let Some(next) = pending.pop() {
+                if seen.insert(next) {
+                    pending.extend(&parents[&next]);
+                }
+            }
+            w.reply(
+                &format!(
+                    "git merge-base --is-ancestor {} {}",
+                    oid(*ancestor),
+                    oid(*descendant)
+                ),
+                i32::from(!seen.contains(ancestor)),
+                "",
+            );
+        }
+    }
+    w
+}
+
+#[test]
+fn insertions_at_every_position_and_permutations_preserve_existing_pr_identities() {
+    for order in [
+        vec![4, 1, 2, 3],
+        vec![1, 4, 2, 3],
+        vec![1, 2, 4, 3],
+        vec![1, 2, 3, 4],
+        vec![2, 1, 3],
+        vec![3, 2, 1],
+        vec![2, 3, 1],
+    ] {
+        for native in [false, true] {
+            for backend in ["git", "branchless", "jj"] {
+                let w = transition_world(&order, &[1, 2, 3]);
+                {
+                    let mut m = w.0.lock().unwrap();
+                    m.branchless = backend == "branchless";
+                    m.jj = backend == "jj";
+                    if native {
+                        for pr in m.prs.values_mut() {
+                            pr["stack"] = json!({"number":9});
+                        }
+                    }
+                }
+                w.run(&[if native {
+                    "--github-stack"
+                } else {
+                    "--no-stack"
+                }])
+                .unwrap();
+                let m = w.0.lock().unwrap();
+                for number in [1, 2, 3] {
+                    assert_eq!(
+                        m.prs[&(100 + number)]["node_id"],
+                        format!("PR_{}", 100 + number)
+                    );
+                    assert_eq!(m.prs[&(100 + number)]["state"], "open");
+                }
+                for (index, number) in order.iter().enumerate() {
+                    let pr = m
+                        .prs
+                        .values()
+                        .find(|pr| pr["head"]["ref"] == format!("topic/{number}"))
+                        .unwrap();
+                    assert_eq!(
+                        pr["base"]["ref"],
+                        if index == 0 {
+                            "main".into()
+                        } else {
+                            format!("topic/{}", order[index - 1])
+                        }
+                    );
+                    assert_eq!(pr["stack"].is_object(), native);
+                }
+                assert!(!m.config.contains_key(JOURNAL));
+                assert!(
+                    !m.remote_refs
+                        .keys()
+                        .any(|reference| reference.starts_with("refs/heads/git-pr/transition/"))
+                );
+                drop(m);
+            }
+        }
+    }
+}
+
+#[test]
+fn splitting_published_history_uses_a_direct_transition() {
+    let w = transition_world(&[1, 2, 3], &[1, 2, 3]);
+    {
+        let mut m = w.0.lock().unwrap();
+        m.prs.remove(&101);
+        m.prs.get_mut(&102).unwrap()["base"]["ref"] = json!("main");
+        for (number, commit) in (1..=3).zip(&mut m.commits) {
+            commit.hash = oid(10 + number);
+        }
+    }
+    w.run(&["--no-stack"]).unwrap();
+    assert!(!w.trace().iter().any(|e| {
+        e["body"]["base"]
+            .as_str()
+            .is_some_and(|base| base.starts_with("git-pr/transition/"))
+    }));
+    assert_eq!(w.0.lock().unwrap().prs[&102]["base"]["ref"], "topic/1");
+}
+
+#[derive(Debug)]
+struct Interruption {
+    world: Arc<World>,
+    remaining: std::sync::atomic::AtomicUsize,
+    halted: std::sync::atomic::AtomicBool,
+    all_operations: bool,
+}
+
+fn command_effect(args: &[String]) -> bool {
+    args.first().is_some_and(|arg| arg == "push")
+        || args.starts_with(&["config".into(), "--local".into()])
+}
+
+impl Interruption {
+    fn check(&self) -> anyhow::Result<()> {
+        if self.halted.load(std::sync::atomic::Ordering::SeqCst) {
+            anyhow::bail!("simulated process interruption");
+        }
+        Ok(())
+    }
+    fn applied(&self, effect: bool) -> anyhow::Result<()> {
+        if effect
+            && self
+                .remaining
+                .fetch_sub(1, std::sync::atomic::Ordering::SeqCst)
+                == 1
+        {
+            self.halted.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+        self.check()
+    }
+}
+
+impl crate::commands::CommandRunner for Interruption {
+    fn execute(
+        &self,
+        program: &str,
+        args: &[String],
+        cwd: &std::path::Path,
+        env: &BTreeMap<std::ffi::OsString, std::ffi::OsString>,
+    ) -> anyhow::Result<crate::commands::CommandOutput> {
+        self.check()?;
+        if self.all_operations {
+            self.applied(true)?;
+        }
+        let result = self.world.execute(program, args, cwd, env)?;
+        self.applied(!self.all_operations && command_effect(args))?;
+        Ok(result)
+    }
+}
+
+impl crate::github::http::Transport for Interruption {
+    fn request(&self, request: crate::github::http::Request<'_>) -> anyhow::Result<Vec<u8>> {
+        self.check()?;
+        if self.all_operations {
+            self.applied(true)?;
+        }
+        let mutation = matches!(request.method, "POST" | "PATCH" | "DELETE")
+            && !request.url.ends_with("/graphql");
+        let result = self.world.request(request)?;
+        self.applied(!self.all_operations && mutation)?;
+        Ok(result)
+    }
+}
+
+#[test]
+fn transitions_resume_after_interruption_at_every_mutation_boundary() {
+    for native in [false, true] {
+        for order in [&[2, 1, 3][..], &[1, 4, 2, 3][..]] {
+            let flags = [if native {
+                "--github-stack"
+            } else {
+                "--no-stack"
+            }];
+            let baseline = transition_world(order, &[1, 2, 3]);
+            if native {
+                for pr in baseline.0.lock().unwrap().prs.values_mut() {
+                    pr["stack"] = json!({"number":9});
+                }
+            }
+            baseline.run(&flags).unwrap();
+            let count = baseline
+                .trace()
+                .iter()
+                .filter(|event| {
+                    event["args"].as_array().is_some_and(|args| {
+                        command_effect(
+                            &args
+                                .iter()
+                                .map(|arg| arg.as_str().unwrap().to_owned())
+                                .collect::<Vec<_>>(),
+                        )
+                    }) || matches!(event["method"].as_str(), Some("POST" | "PATCH" | "DELETE"))
+                        && event["path"] != "graphql"
+                })
+                .count();
+            for boundary in 1..=count {
+                let w = transition_world(order, &[1, 2, 3]);
+                if native {
+                    for pr in w.0.lock().unwrap().prs.values_mut() {
+                        pr["stack"] = json!({"number":9});
+                    }
+                }
+                let interruption = Arc::new(Interruption {
+                    world: w.clone(),
+                    remaining: boundary.into(),
+                    halted: false.into(),
+                    all_operations: false,
+                });
+                let mut app = w.app();
+                app.commands.runner = interruption.clone();
+                app.transport = interruption;
+                let parsed =
+                    crate::cli::Flags::parse(flags.iter().map(|flag| (*flag).into()).collect())
+                        .unwrap();
+                assert!(
+                    app.execute(
+                        &parsed,
+                        &BTreeMap::from([("HOME".into(), "/unit/home".into())])
+                    )
+                    .is_err()
+                );
+                // A newly created PR carries the remote objects in a real observation.
+                {
+                    let mut m = w.0.lock().unwrap();
+                    let refs = m.remote_refs.clone();
+                    for pr in m.prs.values_mut() {
+                        if pr["head"]["sha"].is_null() {
+                            pr["head"]["sha"] = json!(
+                                refs[&format!(
+                                    "refs/heads/{}",
+                                    pr["head"]["ref"].as_str().unwrap()
+                                )]
+                            );
+                            pr["base"]["sha"] = json!(oid(0));
+                            pr["merged_at"] = Value::Null;
+                            pr["merge_commit_sha"] = Value::Null;
+                            if pr["stack"].is_null() {
+                                pr["stack"] = Value::Null;
+                            }
+                        }
+                    }
+                }
+                w.run(&flags).unwrap_or_else(|error| {
+                    panic!("native={native}, order={order:?}, boundary={boundary}: {error:#}")
+                });
+                let m = w.0.lock().unwrap();
+                assert!(!m.config.contains_key(JOURNAL));
+                assert!(
+                    !m.remote_refs
+                        .keys()
+                        .any(|reference| reference.starts_with("refs/heads/git-pr/transition/"))
+                );
+                assert!(m.prs.values().all(|pr| pr["state"] == "open"));
+                drop(m);
+            }
+        }
+    }
+}
+
+#[test]
+fn native_transitions_require_complete_membership_and_confirm_dissolution() {
+    for case in [
+        "partial-selection",
+        "multiple",
+        "partial-unstack",
+        "unconfirmed-unstack",
+        "unavailable-topology",
+    ] {
+        let w = transition_world(&[2, 1, 3], &[1, 2, 3]);
+        for pr in w.0.lock().unwrap().prs.values_mut() {
+            pr["stack"] = json!({"number":9});
+        }
+        match case {
+            "partial-selection" => {
+                w.0.lock().unwrap().prs.insert(104, {
+                    let mut extra = pr(104, "other", 13, "main");
+                    extra["stack"] = json!({"number":9});
+                    extra
+                });
+            }
+            "multiple" => {
+                w.0.lock().unwrap().prs.get_mut(&103).unwrap()["stack"] = json!({"number":10});
+            }
+            "partial-unstack" => w.http(
+                "POST stacks/9/unstack",
+                vec![Response::Output(200, "{}".into())],
+            ),
+            "unconfirmed-unstack" => w.http(
+                "POST stacks/9/unstack",
+                vec![Response::Output(200, String::new())],
+            ),
+            "unavailable-topology" => w.http(
+                "GET stacks/9",
+                vec![Response::Failure("unavailable".into())],
+            ),
+            _ => unreachable!(),
+        }
+        assert!(w.run(&["--no-stack"]).is_err(), "{case}");
+        assert!(
+            !w.trace()
+                .iter()
+                .any(|e| e["args"][0] == "push" || e["method"] == "PATCH"),
+            "{case}"
+        );
+    }
+    let w = transition_world(&[2, 1, 3], &[1, 2, 3]);
+    for pr in w.0.lock().unwrap().prs.values_mut() {
+        pr["stack"] = json!({"number":9});
+    }
+    w.run(&["--no-stack"]).unwrap();
+    assert!(
+        w.0.lock()
+            .unwrap()
+            .prs
+            .values()
+            .all(|pr| pr["stack"].is_object())
+    );
+}
+
+#[test]
+fn invalid_journals_and_changed_remote_state_cannot_authorise_recovery() {
+    for case in [
+        "invalid",
+        "missing-reference",
+        "selection",
+        "repository",
+        "commit",
+        "ancestry",
+        "ref",
+        "base",
+        "identity",
+        "head",
+        "new-pr",
+        "new-pr-read",
+        "missing-head",
+    ] {
+        let w = transition_world(&[2, 4, 1, 3], &[1, 2, 3]);
+        with_github(&w, |github| {
+            let state = state(&w);
+            let bases = crate::stack::selection::resolve_bases(&state.stack, 0, "main");
+            github
+                .observe(
+                    &state
+                        .stack
+                        .iter()
+                        .map(|c| c.remote_ref().to_owned())
+                        .collect::<Vec<_>>(),
+                )
+                .unwrap();
+            let plan = Recovery::observe(github, &state.stack, 0, &bases).unwrap();
+            plan.apply(github, &state, &bases).unwrap();
+        });
+        {
+            let mut m = w.0.lock().unwrap();
+            match case {
+                "missing-reference" => {
+                    let mut saved: Value = serde_json::from_str(&m.config[JOURNAL]).unwrap();
+                    saved["refs"].as_object_mut().unwrap().remove("topic/1");
+                    m.config.insert(JOURNAL.into(), saved.to_string());
+                }
+                "invalid" => {
+                    m.config.insert(JOURNAL.into(), "invalid JSON".into());
+                }
+                "selection" => {
+                    m.commits.remove(0);
+                }
+                "repository" => {
+                    let mut saved: Value = serde_json::from_str(&m.config[JOURNAL]).unwrap();
+                    saved["repository"] = json!("other/repo");
+                    m.config.insert(JOURNAL.into(), saved.to_string());
+                }
+                "commit" => m.commits[0].hash = oid(99),
+                "ref" => {
+                    m.remote_refs.insert("refs/heads/topic/1".into(), oid(99));
+                }
+                "base" => m.prs.get_mut(&101).unwrap()["base"]["ref"] = json!("human-base"),
+                "identity" => m.prs.get_mut(&101).unwrap()["node_id"] = json!("OTHER"),
+                "head" => m.prs.get_mut(&101).unwrap()["head"]["sha"] = json!(oid(99)),
+                "new-pr" | "new-pr-read" => {
+                    m.prs.insert(104, pr(104, "topic/4", 99, "main"));
+                }
+                "missing-head" => {
+                    let mut saved: Value = serde_json::from_str(&m.config[JOURNAL]).unwrap();
+                    saved["refs"]["topic/1"] = Value::Null;
+                    m.config.insert(JOURNAL.into(), saved.to_string());
+                    m.remote_refs.remove("refs/heads/topic/1");
+                }
+                "ancestry" => {}
+                _ => unreachable!(),
+            }
+            m.trace.clear();
+        }
+        if case == "new-pr-read" {
+            w.http(
+                "GET pulls/104",
+                vec![Response::Failure("unavailable new PR".into())],
+            );
+        }
+        if case == "ancestry" {
+            w.reply(
+                &format!("git merge-base --is-ancestor {} {}", oid(22), oid(24)),
+                1,
+                "",
+            );
+        }
+        assert!(w.run(&["--no-stack"]).is_err(), "{case}");
+        assert!(!w.trace().iter().any(effect), "{case}");
+    }
+}
+
+#[test]
+fn transition_preparation_rejects_collisions_and_changing_evidence() {
+    for case in [
+        "collision",
+        "staging-read",
+        "observation",
+        "ancestry",
+        "final-ancestry",
+        "staging-ancestry",
+        "staging-during-prepare",
+        "native-change",
+    ] {
+        let w = transition_world(&[2, 1, 3], &[1, 2, 3]);
+        if case == "native-change" {
+            for pr in w.0.lock().unwrap().prs.values_mut() {
+                pr["stack"] = json!({"number":9});
+            }
+        }
+        if case == "collision" {
+            w.0.lock()
+                .unwrap()
+                .remote_refs
+                .insert("refs/heads/git-pr/transition/101".into(), oid(0));
+        }
+        if case == "staging-read" {
+            w.fail("git ls-remote --refs -- https://github.com/org/repo.git refs/heads/git-pr/transition/101");
+        }
+        if case == "observation" {
+            let mut changed = w.0.lock().unwrap().prs[&102].clone();
+            changed["node_id"] = json!("OTHER");
+            w.http(
+                "GET pulls/102",
+                vec![Response::Output(200, changed.to_string())],
+            );
+        }
+        with_github(&w, |github| {
+            let state = state(&w);
+            let bases = crate::stack::selection::resolve_bases(&state.stack, 0, "main");
+            github
+                .observe(
+                    &state
+                        .stack
+                        .iter()
+                        .map(|c| c.remote_ref().to_owned())
+                        .collect::<Vec<_>>(),
+                )
+                .unwrap();
+            let result = Recovery::observe(github, &state.stack, 0, &bases);
+            if ["collision", "staging-read", "observation"].contains(&case) {
+                assert!(result.is_err(), "{case}");
+                return;
+            }
+            let mut plan = result.unwrap();
+            w.0.lock().unwrap().trace.clear();
+            match case {
+                "ancestry" => {
+                    plan.staging = None;
+                    w.fail(&format!(
+                        "git merge-base --is-ancestor {} {}",
+                        oid(12),
+                        oid(0)
+                    ));
+                }
+                "final-ancestry" => {
+                    w.reply(
+                        &format!("git merge-base --is-ancestor {} {}", oid(22), oid(21)),
+                        1,
+                        "",
+                    );
+                }
+                "staging-ancestry" => {
+                    w.fail(&format!(
+                        "git merge-base --is-ancestor {} {}",
+                        oid(12),
+                        oid(0)
+                    ));
+                }
+                "staging-during-prepare" => {
+                    w.reply(
+                        &format!("git merge-base --is-ancestor {} {}", oid(12), oid(0)),
+                        0,
+                        "",
+                    );
+                }
+                "native-change" => {
+                    for pr in w.0.lock().unwrap().prs.values_mut() {
+                        pr["stack"] = json!({"number":9});
+                    }
+                    w.http(
+                        "GET stacks/9",
+                        vec![Response::Failure("unavailable topology".into())],
+                    );
+                }
+                _ => unreachable!(),
+            }
+            assert!(plan.apply(github, &state, &bases).is_err(), "{case}");
+            assert!(!w.trace().iter().any(effect), "{case}");
+        });
+    }
+}
+
+#[test]
+fn unavailable_observations_stop_transitions_at_every_external_boundary() {
+    for native in [false, true] {
+        let baseline = transition_world(&[2, 1, 3], &[1, 2, 3]);
+        if native {
+            for pr in baseline.0.lock().unwrap().prs.values_mut() {
+                pr["stack"] = json!({"number":9});
+            }
+        }
+        let flags = [if native {
+            "--github-stack"
+        } else {
+            "--no-stack"
+        }];
+        baseline.run(&flags).unwrap();
+        let operations = baseline
+            .trace()
+            .iter()
+            .filter(|event| matches!(event["kind"].as_str(), Some("command" | "http")))
+            .count();
+        for boundary in 1..=operations {
+            let w = transition_world(&[2, 1, 3], &[1, 2, 3]);
+            if native {
+                for pr in w.0.lock().unwrap().prs.values_mut() {
+                    pr["stack"] = json!({"number":9});
+                }
+            }
+            let interruption = Arc::new(Interruption {
+                world: w.clone(),
+                remaining: boundary.into(),
+                halted: false.into(),
+                all_operations: true,
+            });
+            let mut app = w.app();
+            app.commands.runner = interruption.clone();
+            app.transport = interruption;
+            let parsed =
+                crate::cli::Flags::parse(flags.iter().map(|flag| (*flag).into()).collect())
+                    .unwrap();
+            let result = app.execute(
+                &parsed,
+                &BTreeMap::from([("HOME".into(), "/unit/home".into())]),
+            );
+            assert!(result.is_err(), "native={native}, boundary={boundary}");
+            assert!(
+                w.0.lock()
+                    .unwrap()
+                    .prs
+                    .values()
+                    .all(|pr| pr["state"] == "open"),
+                "native={native}, boundary={boundary}"
+            );
+        }
+    }
+}
+
+#[test]
+fn transitions_without_existing_identity_or_stable_preparation_are_refused() {
+    let w = transition_world(&[1, 2], &[]);
+    with_github(&w, |github| {
+        let state = state(&w);
+        github
+            .observe(&["topic/1".into(), "topic/2".into()])
+            .unwrap();
+        assert!(
+            Recovery::observe(github, &state.stack, 0, &["main".into(), "topic/1".into()]).is_err()
+        );
+    });
+    let w = world(2);
+    with_github(&w, |github| {
+        let state = state(&w);
+        let (plan, bases) = observe(&w, github, &state);
+        w.reply(
+            &format!("git merge-base --is-ancestor {} {}", oid(12), oid(1)),
+            0,
+            "",
+        );
+        assert!(plan.apply(github, &state, &bases).is_err());
+        assert!(!w.trace().iter().any(effect));
+    });
+}
+
+#[test]
+fn transition_barriers_preserve_the_journal_for_unavailable_or_changed_evidence() {
+    for case in ["parent-read", "ambiguous", "unpublished", "final-identity"] {
+        let w = world(1);
+        with_github(&w, |github| {
+            let state = state(&w);
+            let (plan, bases) = observe(&w, github, &state);
+            if case == "parent-read" {
+                w.http(
+                    "GET pulls/90",
+                    vec![Response::Failure("unavailable".into())],
+                );
+            }
+            if case == "ambiguous" {
+                w.0.lock()
+                    .unwrap()
+                    .prs
+                    .insert(102, pr(102, "topic/1", 11, "obsolete"));
+            }
+            if ["parent-read", "ambiguous"].contains(&case) {
+                assert!(plan.apply(github, &state, &bases).is_err());
+                assert!(!w.trace().iter().any(effect));
+                return;
+            }
+            plan.apply(github, &state, &bases).unwrap();
+            if case == "unpublished" {
+                assert!(plan.complete(github, &state).is_err());
+            } else {
+                Git {
+                    commands: github.commands,
+                    repo: &github.config.repo,
+                }
+                .push_with_leases(&[&state.stack[0]], Some(&plan.refs))
+                .unwrap();
+                plan.complete(github, &state).unwrap();
+                w.0.lock().unwrap().prs.get_mut(&101).unwrap()["node_id"] = json!("CHANGED");
+                assert!(plan.finish(github, &state).is_err());
+            }
+            assert!(w.0.lock().unwrap().config.contains_key(JOURNAL));
+        });
+    }
+}
+
+#[test]
+fn native_restoration_failure_retains_a_resumable_transition() {
+    let w = transition_world(&[2, 1, 3], &[1, 2, 3]);
+    for pr in w.0.lock().unwrap().prs.values_mut() {
+        pr["stack"] = json!({"number":9});
+    }
+    w.http(
+        "POST stacks",
+        vec![Response::Failure("native restoration unavailable".into())],
+    );
+    assert!(w.run(&["--no-stack"]).is_err());
+    assert!(w.0.lock().unwrap().config.contains_key(JOURNAL));
+    w.0.lock().unwrap().http_responses.clear();
+    w.run(&["--no-stack"]).unwrap();
+    assert!(!w.0.lock().unwrap().config.contains_key(JOURNAL));
+}
+
+#[test]
+fn repeated_recovery_can_recreate_an_anchor_deleted_before_journal_cleanup() {
+    let w = transition_world(&[2, 1, 3], &[1, 2, 3]);
+    with_github(&w, |github| {
+        let state = state(&w);
+        let bases = crate::stack::selection::resolve_bases(&state.stack, 0, "main");
+        github
+            .observe(&["topic/1".into(), "topic/2".into(), "topic/3".into()])
+            .unwrap();
+        let plan = Recovery::observe(github, &state.stack, 0, &bases).unwrap();
+        plan.apply(github, &state, &bases).unwrap();
+    });
+    with_github(&w, |github| {
+        let state = state(&w);
+        let bases = crate::stack::selection::resolve_bases(&state.stack, 0, "main");
+        let plan = Recovery::observe(github, &state.stack, 0, &bases).unwrap();
+        plan.apply(github, &state, &bases).unwrap();
+    });
+    // An interrupted cleanup has removed its ref but retained the newer journal.
+    w.0.lock()
+        .unwrap()
+        .remote_refs
+        .remove("refs/heads/git-pr/transition/101");
+    w.run(&["--no-stack"]).unwrap();
+    assert!(!w.0.lock().unwrap().config.contains_key(JOURNAL));
 }

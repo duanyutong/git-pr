@@ -20,7 +20,7 @@ pub(crate) fn require_publication_base(pr: &PullRequest, base: &str) -> anyhow::
     require_open(pr)?;
     if pr.base.name != base {
         anyhow::bail!(
-            "unsafe publication: PR #{} for head {:?} has base {:?}, but the local stack requires {base:?}. Publishing reordered branches before their PR relationships are safely transitioned can cause GitHub to mark PRs as merged. This base change has not been verified as recovery from a merged downstack; restore the published order or arrange a separately verified transition before retrying. Neither --yes nor --no-stack bypasses this check",
+            "unsafe publication: PR #{} for head {:?} has base {:?}, but the local stack requires {base:?}. Publishing reordered branches before their PR relationships are safely transitioned can cause GitHub to mark PRs as merged. The required publication transition has not been verified; include the complete published stack and synchronise its remote state before retrying. Neither --yes nor --no-stack bypasses this check",
             pr.number,
             pr.head.name,
             pr.base.name,

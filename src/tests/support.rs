@@ -70,6 +70,7 @@ pub(super) struct Service {
     pub indirect_merges: Option<bool>,
     pub stack_base: Mutex<Option<String>>,
     pub recovery_destination: bool,
+    pub git_context: Mutex<Option<(PathBuf, BTreeMap<OsString, OsString>)>>,
 }
 impl Service {
     /// Model host lifecycle effects using the disposable remote's actual Git graph.
@@ -219,6 +220,14 @@ impl CommandRunner for Service {
     ) -> Result<CommandOutput> {
         self.record(json!({"kind":"command","program":program,"args":args}));
         let key = format!("{program} {}", args.join(" "));
+        if program == "git"
+            && self.indirect_merges.is_some()
+            && !args
+                .first()
+                .is_some_and(|arg| arg.starts_with("--git-dir="))
+        {
+            *self.git_context.lock().unwrap() = Some((cwd.to_owned(), env.clone()));
+        }
         if let Some((status, text)) = self.command_errors.lock().unwrap().get(&key) {
             return Ok(CommandOutput {
                 status: *status,
@@ -343,6 +352,13 @@ impl Transport for Service {
             body.as_ref(),
         )?;
         drop(prs);
+        if request.method == "PATCH"
+            && body.as_ref().is_some_and(|body| body.get("base").is_some())
+            && let Some(delete) = self.indirect_merges
+        {
+            let (cwd, env) = self.git_context.lock().unwrap().clone().unwrap();
+            self.recognise_indirect_merges(&cwd, &env, delete)?;
+        }
         if request.method == "GET" && path.starts_with("stacks/") {
             if let Some(base) = self.stack_base.lock().unwrap().as_ref() {
                 value["base"]["ref"] = json!(base);

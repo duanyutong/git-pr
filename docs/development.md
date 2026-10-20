@@ -1,6 +1,6 @@
 # Development
 
-Rust 1.99.0 and Edition 2024 are specified by `rust-toolchain.toml` and `Cargo.toml`.
+Rust 1.99.1 and Edition 2024 are specified by `rust-toolchain.toml` and `Cargo.toml`.
 Development requires Git, rustup, uv, just and prek; command-runner versions are declared in `scripts/dev-tools.env`.
 Linux requires a C compiler, pkg-config and the D-Bus development headers; credential acceptance additionally requires `dbus-run-session` and `gnome-keyring-daemon`.
 The corresponding Debian and Ubuntu packages are `build-essential pkg-config libdbus-1-dev libssl-dev dbus-x11 gnome-keyring`.

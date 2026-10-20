@@ -136,10 +136,13 @@ These gates form part of `just coverage`.
 
 ## Published-stack safety regressions
 
-Reordered submissions shall fail before trailer rewriting, branch publication or PR mutation, with native stack management both enabled and disabled.
-The same requirement applies to inferred branch names, ambiguous open identities, exclusively closed or merged branch history, and open dependants outside the verified selection.
+Complete, verifiable reordered submissions shall preserve open PR identities through a safe publication transition, with native stack management both enabled and disabled.
+Unverifiable transitions shall stop before remote mutation, including inferred branch names without sufficient evidence, ambiguous open identities, exclusively closed or merged branch history, and open dependants outside the verified selection.
 A disposable Git repository supplies actual ancestry to a host-lifecycle fixture which recognises indirect merges, optionally deletes merged heads and retargets dependent PRs.
-The regression verifies that the guarded application cannot reach that transition; an explicit unsafe push inside the disposable fixture verifies that the oracle detects the original failure mechanism.
+The regression verifies that planned reordering preserves open PRs; an explicit unsafe push in an independent disposable fixture verifies that the oracle detects the original failure mechanism.
+Synthetic insertion cases exercise every stack position with the inserted branch both present and absent on the remote.
+In-memory permutation cases cover Git, git-branchless and Jujutsu, complete native membership and ordinary PRs.
+Interruption cases stop execution after each completed mutation and require a subsequent invocation to finish from fresh observations without replacing existing PR identities.
 This fixture is not a claim of complete equivalence with GitHub's asynchronous processing.
 
 Merged-downstack recovery regressions exercise ordinary, squash and rewritten merge histories against actual disposable Git repositories, with the obsolete base both present and deleted.

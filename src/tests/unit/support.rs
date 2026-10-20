@@ -324,7 +324,11 @@ impl CommandRunner for World {
             }
             for spec in view.iter().filter(|arg| arg.contains(":refs/heads/")) {
                 let (oid, reference) = spec.split_once(':').unwrap();
-                m.remote_refs.insert(reference.into(), oid.into());
+                if oid.is_empty() {
+                    m.remote_refs.remove(reference);
+                } else {
+                    m.remote_refs.insert(reference.into(), oid.into());
+                }
                 for pr in m.prs.values_mut().filter(|pr| {
                     pr["head"]["ref"].as_str() == reference.strip_prefix("refs/heads/")
                         && pr["head"].get("sha").is_some()
@@ -353,8 +357,16 @@ impl CommandRunner for World {
                 };
                 value.clone()
             }
-            ("git", ["config", "--replace-all", key, value]) => {
+            (
+                "git",
+                ["config", "--replace-all", key, value]
+                | ["config", "--local", "--replace-all", key, value],
+            ) => {
                 m.config.insert((*key).into(), (*value).into());
+                String::new()
+            }
+            ("git", ["config", "--local", "--unset-all", key]) => {
+                m.config.remove(*key);
                 String::new()
             }
             ("git", ["rev-parse", "--show-toplevel"]) | ("jj", ["workspace", "root"]) => {
