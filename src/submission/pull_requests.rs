@@ -28,8 +28,10 @@ use super::{Application, State};
 pub(super) struct Publication {
     pub(super) bases: Vec<String>,
     entries: Vec<(usize, String, Option<Identity>)>,
+    dependant_refs: Vec<String>,
     dependant_times: Vec<Cell<Instant>>,
     recovery: Option<super::recovery::Recovery>,
+    leases: std::collections::BTreeMap<String, Option<String>>,
 }
 
 #[derive(Debug)]
@@ -40,15 +42,20 @@ struct Identity {
 
 impl Publication {
     pub(super) fn observe(github: &GitHub<'_>, stack: &[Commit], start: usize) -> Result<Self> {
-        if github.config.dry_run || !stack[start..].iter().any(|c| !c.skip) {
+        if github.config.dry_run
+            || github.config.stop_after == Some(crate::config::checkpoint::Checkpoint::Rewrite)
+            || !stack[start..].iter().any(|c| !c.skip)
+        {
             return Ok(Self::default());
         }
         let bases = selection::resolve_bases(stack, start, &github.config.repo.trunk);
         let mut plan = Self {
             bases,
             entries: Vec::new(),
+            dependant_refs: Vec::new(),
             dependant_times: Vec::new(),
             recovery: None,
+            leases: std::collections::BTreeMap::new(),
         };
         let mut recover = !github.config.transition_journal.is_empty();
         for (group, chunk) in stack.chunks(25).enumerate() {
@@ -71,6 +78,16 @@ impl Publication {
                 }
                 let reference = commit.remote_ref();
                 let pr = github.publication_pr(reference)?;
+                if let Some(number) = commit
+                    .publication
+                    .as_ref()
+                    .and_then(|binding| binding.review)
+                    && pr.as_ref().map(|pr| pr.number) != Some(number)
+                {
+                    bail!(
+                        "adopted PR #{number} differs from current head history; refusing a replacement"
+                    );
+                }
                 if let Some(pr) = &pr {
                     if pr.base.name != plan.bases[index]
                         && github.config.transition_journal.is_empty()
@@ -84,6 +101,9 @@ impl Publication {
                     }
                     recover |= pr.base.name != plan.bases[index];
                 }
+                if pr.is_none() {
+                    crate::stack::description::initial_body(&commit.message, github.template)?;
+                }
                 let identity = pr.map(|pr| Identity {
                     number: pr.number,
                     node_id: pr.node_id.clone(),
@@ -91,6 +111,7 @@ impl Publication {
                 plan.entries.push((index, reference.to_owned(), identity));
             }
         }
+        plan.observe_refs(github, stack)?;
         if recover {
             plan.recovery = Some(
                 super::recovery::Recovery::observe(github, stack, start, &plan.bases)
@@ -98,23 +119,62 @@ impl Publication {
             );
             return Ok(plan);
         }
+        // A leased push of the already published object cannot change its dependants.
+        // Use the actual push destination rather than cached tracking refs or PR heads.
+        plan.dependant_refs = plan
+            .entries
+            .iter()
+            .filter(|(index, reference, _)| {
+                plan.leases.get(reference).and_then(Option::as_ref) != Some(&stack[*index].hash)
+            })
+            .map(|(_, reference, _)| reference.clone())
+            .collect();
         let selected = plan.selected_prs();
         plan.dependant_times = plan
-            .entries
+            .dependant_refs
             .chunks(25)
             .map(|chunk| {
                 let acquired = github.now();
-                github.check_publication_dependants(
-                    &chunk
-                        .iter()
-                        .map(|(_, reference, _)| reference.clone())
-                        .collect::<Vec<_>>(),
-                    &selected,
-                )?;
+                github.check_publication_dependants(chunk, &selected)?;
                 Ok(Cell::new(acquired))
             })
             .collect::<Result<_>>()?;
         Ok(plan)
+    }
+
+    fn observe_refs(&mut self, github: &GitHub<'_>, stack: &[Commit]) -> Result<()> {
+        let git = Git {
+            commands: github.commands,
+            repo: &github.config.repo,
+        };
+        let destination = git.recovery_destination()?;
+        self.leases = git.recovery_refs(
+            &destination,
+            &self
+                .entries
+                .iter()
+                .map(|(_, reference, _)| reference.clone())
+                .collect::<Vec<_>>(),
+        )?;
+        for (index, reference, pr) in &self.entries {
+            if pr.is_none()
+                && let Some(Some(oid)) = self.leases.get(reference)
+            {
+                let commit = &stack[*index];
+                if commit
+                    .publication
+                    .as_ref()
+                    .is_some_and(|binding| !binding.adopted)
+                    && oid != &commit.hash
+                    && !git.is_ancestor(oid, &commit.hash)?
+                {
+                    bail!(
+                        "remote head {reference:?} exists without a verified review or revision association; explicitly bind it before publication"
+                    );
+                }
+            }
+        }
+        Ok(())
     }
 
     fn selected_prs(&self) -> HashMap<u64, (&str, &str)> {
@@ -221,17 +281,11 @@ impl Publication {
         }
         let mut selected = None;
         // Preserve each bounded group's own acquisition age across long rewrites.
-        for (chunk, observed) in self.entries.chunks(25).zip(&self.dependant_times) {
+        for (chunk, observed) in self.dependant_refs.chunks(25).zip(&self.dependant_times) {
             let acquired = github.now();
             if acquired.saturating_duration_since(observed.get()) > Duration::from_secs(30) {
                 let selected = selected.get_or_insert_with(|| self.selected_prs());
-                github.check_publication_dependants(
-                    &chunk
-                        .iter()
-                        .map(|(_, reference, _)| reference.clone())
-                        .collect::<Vec<_>>(),
-                    selected,
-                )?;
+                github.check_publication_dependants(chunk, selected)?;
                 observed.set(acquired);
             }
         }
@@ -254,7 +308,7 @@ impl Application {
         let missing = selection::missing_refs(state.selected());
         if !missing.is_empty() {
             bail!(
-                "ERROR: {} commit(s) have no Remote-Ref after rewrite phase: {}\n\nThis usually means the in-memory view of the stack drifted from what jj/git\nactually wrote. Re-run git-pr; if it recurs, file an issue with the output of\n\"git log -10\" and the contents of .jj/repo/op_heads (if jj is in use).",
+                "ERROR: {} commit(s) have no resolved publication identity: {}; reobserve the stack before retrying",
                 missing.len(),
                 missing.join(", ")
             );
@@ -271,11 +325,7 @@ impl Application {
             let announcement = format!(
                 "{}push {} {} {}:refs/heads/{}",
                 if config.dry_run { "[DRY-RUN] " } else { "" },
-                if publication.recovery.is_some() {
-                    "--force-with-lease"
-                } else {
-                    "-f"
-                },
+                "--force-with-lease",
                 config.repo.remote,
                 commit.short_hash(),
                 commit.remote_ref()
@@ -289,6 +339,8 @@ impl Application {
         if config.dry_run || indices.is_empty() {
             return Ok(());
         }
+        crate::identity::resolve::verify_bindings(&self.commands, &config.repo, state.selected())?;
+        git.recovery_destination()?;
         if let Some(recovery) = &publication.recovery {
             self.commands
                 .terminal
@@ -296,12 +348,13 @@ impl Application {
             recovery.apply(github, state, &publication.bases)?;
             self.commands.terminal.stage("Publishing branches");
         }
+        crate::identity::resolve::verify_anchors(&self.commands, state.selected())?;
         publication.verify(github, state, false)?;
         let commits = indices.iter().map(|&i| &state.stack[i]).collect::<Vec<_>>();
         if let Some(recovery) = &publication.recovery {
             git.push_with_leases(&commits, Some(&recovery.refs))?;
         } else {
-            git.push_all(&commits)?;
+            git.push_with_leases(&commits, Some(&publication.leases))?;
         }
         git.sync_refs(state.selected());
         if let Some(recovery) = &publication.recovery {
@@ -324,6 +377,11 @@ impl Application {
         state: &mut State,
         needs_pr: &[usize],
     ) -> Result<()> {
+        crate::identity::resolve::verify_bindings(
+            &self.commands,
+            &github.config.repo,
+            state.selected(),
+        )?;
         let lookup = needs_pr.to_vec();
         if !lookup.is_empty() {
             self.commands.detail("\nLooking up existing PRs...");
@@ -359,7 +417,34 @@ impl Application {
                 );
                 self.commands
                     .detail(&format!("  {}", shorten_title(&state.stack[i].title)));
+                let attempt = crate::identity::Attempt {
+                    id: self
+                        .files
+                        .attempt_id()
+                        .context("failed to allocate creation attempt identity")?,
+                    head: crate::identity::Head::new(
+                        &github.config.repo,
+                        state.stack[i].remote_ref(),
+                    )?,
+                    base: base.clone(),
+                };
+                crate::identity::store::begin(&self.commands, &github.config.repo, &attempt)?;
                 github.create(&mut state.stack[i], base).context(Fatal)?;
+                let commit = &state.stack[i];
+                if let Some(binding) = &commit.publication {
+                    crate::identity::store::persist(
+                        &self.commands,
+                        &github.config.repo,
+                        binding,
+                        &commit.change_id,
+                        commit.pr_number,
+                    )?;
+                }
+                crate::identity::store::finish(
+                    &self.commands,
+                    &github.config.repo,
+                    commit.remote_ref(),
+                )?;
                 self.commands.progress_prs(
                     "Created",
                     std::iter::once(state.stack[i].pr_number),
@@ -461,7 +546,7 @@ impl Application {
 }
 
 impl State {
-    pub(super) fn fill_numbers(&mut self, github: &GitHub<'_>, bases: &[String]) -> Result<()> {
+    pub(super) fn fill_numbers(&mut self, github: &GitHub<'_>, _bases: &[String]) -> Result<()> {
         if !self.selected().iter().any(|c| !c.skip) {
             return Ok(());
         }
@@ -479,7 +564,12 @@ impl State {
             },
             |i| {
                 let mut commit = self.stack[i].clone();
-                commit.pr_number = github.number(&mut commit, &bases[i]).context(Fatal)?;
+                commit.pr_number = github.find(&commit).context(Fatal)?;
+                if commit.pr_number == 0 && !commit.skip {
+                    bail!(
+                        "selected PR is missing after reconciliation; refusing unplanned creation"
+                    );
+                }
                 Ok((i, commit.pr_number, Some(commit)))
             },
         )?;
@@ -595,6 +685,8 @@ fn description_descendants(
                 .into_iter()
                 .filter(|c| !submitted.contains(&c.hash))
                 .collect();
+            let context_len = descendants.len();
+            crate::identity::resolve::prepare(github, &mut descendants, context_len)?;
             github
                 .observe(
                     &descendants

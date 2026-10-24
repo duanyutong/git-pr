@@ -149,7 +149,7 @@ fn failed_lookup_stops_all_creations_and_description_history_failure_stops_patch
 }
 
 #[test]
-fn draft_and_explicit_selection_exclusions_survive_changed_hashes_after_rewrite() {
+fn draft_and_explicit_selection_preserve_hashes_and_exclusions() {
     let w = World::new(2);
     {
         let mut m = w.0.lock().unwrap();
@@ -159,7 +159,7 @@ fn draft_and_explicit_selection_exclusions_survive_changed_hashes_after_rewrite(
     }
     w.run(&["--skip-draft", "--no-stack"]).unwrap();
     assert_eq!(w.0.lock().unwrap().prs.len(), 1);
-    assert_eq!(operation(&w.trace(), "git", "reword"), 1);
+    assert_eq!(operation(&w.trace(), "git", "reword"), 0);
     assert!(!w.trace().iter().any(|v| v["program"] == "git"
         && v["args"][0] == "push"
         && v["args"][3].as_str().unwrap().ends_with("topic/2")));
@@ -209,21 +209,20 @@ fn discovery_and_rewrite_failures_do_not_push_or_create_prs() {
     assert!(w.run(&[]).unwrap_err().to_string().contains("duplicated"));
     let w = World::new(1);
     w.0.lock().unwrap().commits[0].attrs.clear();
-    assert!(w.run(&[]).is_err());
+    w.run(&[]).unwrap();
 }
 
 #[test]
 fn push_and_creation_failures_preserve_completed_effects_and_stop_later_phases() {
     let w = World::new(2);
     w.fail(&format!(
-        "git push --porcelain --no-follow-tags -f -- origin {}:refs/heads/topic/1 {}:refs/heads/topic/2",
+        "git push --porcelain --no-follow-tags --force-with-lease=refs/heads/topic/1: --force-with-lease=refs/heads/topic/2: -- origin {}:refs/heads/topic/1 {}:refs/heads/topic/2",
         commit(1).hash,
         commit(2).hash
     ));
-    w.reply(
-        "git ls-remote --refs -- https://github.com/org/repo.git refs/heads/topic/1 refs/heads/topic/2",
-        0,
-        &format!("{} refs/heads/topic/1", commit(1).hash),
+    w.0.lock().unwrap().responses.insert(
+        "git ls-remote --refs -- https://github.com/org/repo.git refs/heads/topic/1 refs/heads/topic/2".into(),
+        vec![Response::Output(0, String::new()), Response::Output(0, format!("{}\trefs/heads/topic/1", commit(1).hash))].into(),
     );
     let error = format!("{:#}", w.run(&[]).unwrap_err());
     assert!(error.contains("1 branch(es): topic/2"));
@@ -296,7 +295,7 @@ fn author_filters_detached_restoration_descendant_history_and_native_linking() {
 }
 
 #[test]
-fn preview_reports_trailers_without_rewriting_or_changing_configuration() {
+fn preview_reports_associations_without_rewriting_or_changing_configuration() {
     for jj in [false, true] {
         let w = World::new(2);
         {
@@ -324,7 +323,7 @@ fn preview_reports_trailers_without_rewriting_or_changing_configuration() {
                 .collect::<Vec<_>>()
         );
         assert!(m.prs.is_empty());
-        assert!(m.stdout.contains("Would insert Remote-Ref"));
+        assert!(m.stdout.contains("Would associate"));
         assert!(!m.trace.iter().any(|v| v["method"].is_string()
             || v["args"][0] == "reword"
             || v["args"][0] == "describe"

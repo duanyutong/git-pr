@@ -66,6 +66,7 @@ pub(crate) fn resolve_revisions(commands: &Commands, revisions: &[String]) -> Re
     Ok(hashes)
 }
 
+#[cfg(test)]
 pub(crate) fn change_id(commands: &Commands, hash: &str) -> Result<String> {
     let output = commands.jj_data(&[
         "--ignore-working-copy",

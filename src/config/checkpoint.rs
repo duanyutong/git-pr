@@ -17,11 +17,11 @@ impl Checkpoint {
             "" => Ok(None),
             "validate" => Ok(Some(Self::Validate)),
             "get-commits" => Ok(Some(Self::GetCommits)),
-            "rewrite" => Ok(Some(Self::Rewrite)),
+            "prepare" | "rewrite" => Ok(Some(Self::Rewrite)),
             "push" => Ok(Some(Self::Push)),
             "pr-create" => Ok(Some(Self::PrCreate)),
             _ => bail!(
-                "ERROR: invalid --stop-after {value:?}; must be one of: validate, get-commits, rewrite, push, pr-create"
+                "ERROR: invalid --stop-after {value:?}; must be one of: validate, get-commits, prepare, rewrite, push, pr-create"
             ),
         }
     }

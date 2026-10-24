@@ -346,6 +346,7 @@ pub(crate) fn missing_refs(commits: &[Commit]) -> Vec<&str> {
         .collect()
 }
 
+#[cfg(test)]
 pub(crate) fn recover_tip(
     jj: bool,
     change: &str,
@@ -462,6 +463,7 @@ pub(crate) fn ignored_branch(name: &str) -> bool {
     name == "main" || name == "master" || name.starts_with("(HEAD detached ")
 }
 
+#[cfg(test)]
 pub(crate) fn local_branch(output: &str, hash: &str) -> Option<String> {
     output
         .lines()
@@ -470,6 +472,7 @@ pub(crate) fn local_branch(output: &str, hash: &str) -> Option<String> {
         .map(|(branch, _)| branch.into())
 }
 
+#[cfg(test)]
 pub(crate) fn local_branches(output: &str) -> HashMap<&str, &str> {
     let mut names = HashMap::new();
     for (name, oid) in output

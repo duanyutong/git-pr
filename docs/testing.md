@@ -40,11 +40,11 @@ Routine development may use native local checks and the CI matrix; duplicating e
 
 Native regressions require rejection of merge-resolution changes and changed commits without messages before submission effects, and acceptance of Jujutsu descriptions containing pipe characters.
 Selection-recovery regressions cover snapshot reuse, tip-relative depth offsets, empty range boundaries, missing identities and bounded fallback queries with ordered results.
-Additional regressions require preservation of explicit selections after rewriting against an advanced trunk, correct attribution, filtering and explicit selection of Jujutsu working copies, and failure when a working-copy observation is unavailable.
-Publication preflight rejects the configured trunk and duplicate destinations introduced by inferred trailers before rewriting or publication.
+Additional regressions require preservation of explicit selections against an advanced trunk, correct attribution, filtering and explicit selection of Jujutsu working copies, and failure when a working-copy observation is unavailable.
+Publication preflight rejects the configured trunk and duplicate resolved destinations before persistence or publication.
 Signature-display configuration shall neither contaminate structured Git metadata nor invoke signature verifiers during discovery.
 Named-branch regressions require correct recovery from another checkout, preservation of the excluded base, and correct publication when a tag shares the branch name.
-Unnamed-tip fallback verifies the selected first-parent position before rewriting, and an unavailable anchor or vanished range prevents successful submission.
+Trailer-free selected commits require maintained anchors; an unavailable or ambiguous anchor prevents publication.
 Explicit Git arguments are deduplicated before resolution and resolved in batches of at most 128 revisions and 64 KiB of arguments.
 Verified linear ancestry supplies selection depths even when the remote trunk has advanced independently.
 Descendant discovery uses bounded candidate reduction followed by verification against every input batch; 129 branch tips require four ancestry subprocesses, whilst divergent histories remain explicitly ambiguous.
@@ -54,8 +54,8 @@ Managed-footer regressions require explicit rejection of unmatched, reversed, ne
 Description-initialisation regressions reject reserved delimiters in commit messages and PR templates before the affected creation or content update, retain existing descriptions and permit safe repair and idempotent repetition in both footer styles and native modes.
 Malformed remote regressions include raw slashes, whitespace and line boundaries in synthetic credentials, covering parser errors, verbose output, warnings, both command-failure protocols and percent-encoded equivalents.
 Mixed-separator cases include nested scheme text and multiple `@` delimiters; diagnostic ambiguity may suppress additional text whilst successful observations retain their complete original bytes.
-Explicit Jujutsu ranges and lists require one batched identity observation and no scalar tip-identity lookup, with and without rewrite eligibility.
-An empty tip excluded from presentation retains its already observed recovery identity; an unavailable tip observation preserves fallible scalar recovery.
+Explicit Jujutsu ranges and lists require one batched identity observation and no scalar tip-identity lookup, with and without existing trailers.
+An empty tip excluded from presentation does not require a publication association.
 Safe repair and repeated successful submission are exercised with native management disabled and enabled, in both full-stack and compact presentation.
 Full-stack regressions retain multiple unnumbered commits without additional PR creation or branch publication; compact navigation continues to contain numbered PRs only.
 Synthetic credential regressions reject raw query and fragment separators whilst retaining diagnostic confidentiality and accepting their percent-encoded representation.
@@ -137,7 +137,9 @@ These gates form part of `just coverage`.
 ## Published-stack safety regressions
 
 Complete, verifiable reordered submissions shall preserve open PR identities through a safe publication transition, with native stack management both enabled and disabled.
-Unverifiable transitions shall stop before remote mutation, including inferred branch names without sufficient evidence, ambiguous open identities, exclusively closed or merged branch history, and open dependants outside the verified selection.
+Unverifiable transitions shall stop before remote mutation, including inferred branch names without sufficient evidence, ambiguous open identities, exclusively closed or merged branch history, and open dependants outside the verified selection of a topology transition or a changing publication destination.
+An unchanged five-commit prefix of a larger published stack shall remain submittable with legacy trailers and local publication associations, with native stack management both enabled and disabled, whilst preserving unselected dependent PRs, remote refs and stored commit objects.
+Destination-object regressions shall distinguish unchanged, missing and changed remote refs independently of PR-head observations, retain dependency-observation expiry for changing destinations, and reject concurrent updates through explicit expected-object leases.
 A disposable Git repository supplies actual ancestry to a host-lifecycle fixture which recognises indirect merges, optionally deletes merged heads and retargets dependent PRs.
 The regression verifies that planned reordering preserves open PRs; an explicit unsafe push in an independent disposable fixture verifies that the oracle detects the original failure mechanism.
 Synthetic insertion cases exercise every stack position with the inserted branch both present and absent on the remote.
@@ -149,7 +151,7 @@ Merged-downstack recovery regressions exercise ordinary, squash and rewritten me
 They require preservation of the open PR identity, verified retargeting before publication and an explicit expected-object lease for each published ref.
 A concurrent remote update must survive a rejected lease.
 In-memory cases exercise Git, git-branchless and Jujutsu preparation, missing and reused identities, unintegrated merge results, native membership, unselected dependants, changing metadata, lost acknowledgements and retry after a repaired base survives publication failure.
-Preview and rewrite checkpoints shall not mutate remote bases, and failed initial evidence shall prevent rewriting and publication.
+Preview and preparation checkpoints shall not mutate remote bases, and failed initial evidence shall prevent metadata writes and publication.
 Normal submissions retain their existing request budgets.
 
 Mutation-barrier tests change lifecycle state, PR identity, node identity and base relationships during a push, within the ordinary cache lifetime.
@@ -159,7 +161,7 @@ Unchanged-submission budgets retain one base plan, one analysis per observed des
 The additional safety observations are specified in the [efficiency contract](submission-efficiency.md).
 
 Native Jujutsu fixtures construct a single-parent conflict through rebasing and independently verify the backend's refusal to push it.
-Application submission shall reject that conflict before local rewriting or publication, including when the conflicted ancestor is skipped and its selected descendant resolves the conflict.
+Application submission shall reject that conflict before local metadata writes or publication, including when the conflicted ancestor is skipped and its selected descendant resolves the conflict.
 Conflicted descendants outside the selected publication ancestry shall not prevent submission of an earlier clean commit.
 In-memory protocol cases require explicit Boolean conflict observations and preserve conflict ancestry across empty commits omitted from presentation.
 A disposable Git repository with `push.followTags=true` verifies that branch publication does not also publish an unselected annotated tag.

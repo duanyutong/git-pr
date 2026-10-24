@@ -64,6 +64,7 @@ pub(crate) struct Memory {
     pub config: BTreeMap<String, String>,
     pub files: BTreeMap<PathBuf, String>,
     pub file_errors: BTreeMap<PathBuf, std::io::ErrorKind>,
+    pub attempt_error: Option<std::io::ErrorKind>,
     pub commits: Vec<Commit>,
     pub prs: BTreeMap<u64, Value>,
     pub changes_on_push: BTreeMap<u64, Option<Value>>,
@@ -304,6 +305,9 @@ impl CommandRunner for World {
                     .into_iter()
                     .fold(String::new(), |mut output, (key, value)| {
                         use std::fmt::Write as _;
+                        if view.contains(&"--show-origin") {
+                            output.push_str("local\0file:/unit/repo/.git/config\0");
+                        }
                         write!(output, "{key}\n{value}\0").unwrap();
                         output
                     }),
@@ -360,20 +364,28 @@ impl CommandRunner for World {
             (
                 "git",
                 ["config", "--replace-all", key, value]
-                | ["config", "--local", "--replace-all", key, value],
+                | ["config", "--local", "--replace-all" | "--add", key, value],
             ) => {
                 m.config.insert((*key).into(), (*value).into());
                 String::new()
             }
-            ("git", ["config", "--local", "--unset-all", key]) => {
-                m.config.remove(*key);
+            (
+                "git",
+                ["config", "--local", "--fixed-value", "--unset-all", key, _]
+                | ["config", "--local", "--unset-all", key],
+            ) => {
+                m.config
+                    .retain(|candidate, _| config_key(candidate) != config_key(key));
                 String::new()
+            }
+            ("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"]) => {
+                "/unit/repo/.git\n".into()
             }
             ("git", ["rev-parse", "--show-toplevel"]) | ("jj", ["workspace", "root"]) => {
                 "/unit/repo".into()
             }
             ("git", ["remote", "-v"]) => "origin https://github.com/org/repo.git (push)".into(),
-            ("git", ["remote", "get-url", "--push", "--all", "--", "origin"]) => {
+            ("git", ["remote", "get-url", "--push", "--all", "--", _]) => {
                 "https://github.com/org/repo.git".into()
             }
             ("git", ["ls-remote", "--refs", "--", _, refs @ ..]) => refs
@@ -635,7 +647,22 @@ impl CommandRunner for World {
     }
 }
 
+impl crate::config::files::RepositoryLock for () {}
 impl Files for World {
+    fn lock(&self, path: &Path) -> std::io::Result<Box<dyn crate::config::files::RepositoryLock>> {
+        if let Some(kind) = self.0.lock().unwrap().file_errors.get(path) {
+            return Err(std::io::Error::from(*kind));
+        }
+        Ok(Box::new(()))
+    }
+    fn attempt_id(&self) -> std::io::Result<String> {
+        let failure = self.0.lock().unwrap().attempt_error;
+        if let Some(kind) = failure {
+            return Err(kind.into());
+        }
+        Ok("00000000-0000-4000-8000-000000000001".into())
+    }
+
     fn read(&self, path: &Path) -> std::io::Result<String> {
         let mut m = self.0.lock().unwrap();
         m.trace.push(json!({"kind":"file","path":path}));

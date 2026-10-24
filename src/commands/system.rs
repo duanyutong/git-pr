@@ -48,6 +48,7 @@ impl CommandRunner for ProcessRunner {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = (read, command);
     }
 
+    #[cfg(test)]
     fn edit_messages(
         &self,
         program: &str,

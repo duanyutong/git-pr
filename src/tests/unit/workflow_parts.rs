@@ -1,5 +1,5 @@
 use super::{State, presentation::validate_duplicates};
-use crate::tests::unit::support::{World, commit, log};
+use crate::tests::unit::support::{World, commit};
 use crate::{git::Git, github::GitHub, model::Commit};
 
 fn publication_effect(event: &serde_json::Value) -> bool {
@@ -69,70 +69,6 @@ fn publication_rejects_a_different_selection_with_the_same_number_of_commits() {
     assert_eq!(state.stack[0].hash, commit(1).hash);
     assert_eq!(state.stack[1].hash, commit(2).hash);
     assert!(!world.trace().iter().any(publication_effect));
-}
-
-#[test]
-fn explicit_head_is_resolved_before_read_only_rewrite_position_preflight() {
-    use crate::{cli::Flags, config};
-    use std::collections::BTreeMap;
-
-    let world = World::new(2);
-    {
-        let mut memory = world.0.lock().unwrap();
-        memory.branchless = true;
-        memory.commits[0].attrs.clear();
-    }
-    world.reply("git rev-parse --verify HEAD^{commit}", 0, &commit(2).hash);
-    world.reply(
-        "git branch --format=%(refname:strip=2)|%(objectname)",
-        0,
-        &format!("topic/1|{}", commit(1).hash),
-    );
-    let flags = Flags::parse(vec![
-        "--dry-run".into(),
-        "--no-stack".into(),
-        "refs/remotes/origin/main..HEAD".into(),
-    ])
-    .unwrap();
-    let mut commands = world.commands();
-    let config::Loaded::Ready(mut config) = config::load(
-        &flags,
-        &BTreeMap::from([("HOME".into(), "/unit/home".into())]),
-        &mut commands,
-        world.as_ref(),
-        world.as_ref(),
-    )
-    .unwrap() else {
-        panic!("expected resolved configuration");
-    };
-    assert_eq!(config.selection.tip, commit(2).hash);
-    let mut state = State::discover(&mut config, &commands).unwrap();
-    assert_eq!(state.tip, commit(2).hash);
-    let mut prepared = false;
-    world.0.lock().unwrap().trace.clear();
-    state
-        .rewrite(&config, &commands, world.as_ref(), &mut |_, _| {
-            prepared = true;
-            Ok(())
-        })
-        .unwrap();
-    assert!(prepared);
-    let trace = world.trace();
-    assert!(trace.iter().any(|event| {
-        event["args"][0] == "rev-list" && event["args"][2] == format!("{}..HEAD", commit(2).hash)
-    }));
-    assert!(
-        trace.iter().any(|event| {
-            event["args"][0] == "rev-parse" && event["args"][2] == "HEAD~0^{commit}"
-        })
-    );
-    assert!(!trace.iter().any(|event| {
-        publication_effect(event)
-            || matches!(
-                event["args"][0].as_str(),
-                Some("reset" | "rebase" | "describe")
-            )
-    }));
 }
 
 #[test]
@@ -239,7 +175,7 @@ fn unverifiable_reorders_stop_before_rewriting_or_remote_effects_in_both_modes()
                 w.0.lock().unwrap().trace.clear();
                 let error = format!("{:#}", w.run(&flags).unwrap_err());
                 assert!(error.contains("unsafe publication"), "{error}");
-                assert!(error.contains("no local rewrites, pushes or PR changes"));
+                assert!(error.contains("no local metadata, pushes or PR changes"));
                 let memory = w.0.lock().unwrap();
                 assert_eq!(memory.commits, commits);
                 assert_eq!(memory.prs, prs);
@@ -318,6 +254,7 @@ fn publication_observes_lifecycle_changes_inside_the_cache_lifetime_and_pins_ide
                 "base" => pr["base"]["ref"] = serde_json::json!("different"),
                 "appeared" => {
                     memory.prs.remove(&101);
+                    memory.config.remove("branch.topic/1.gitPrPullRequest");
                 }
                 "missing" => {}
                 _ => unreachable!(),
@@ -355,6 +292,135 @@ fn publication_observes_lifecycle_changes_inside_the_cache_lifetime_and_pins_ide
 }
 
 #[test]
+fn partial_publication_uses_destination_objects_to_verify_unchanged_refs() {
+    for destination in ["unchanged", "different", "absent"] {
+        let world = World::new(3);
+        world.run(&["--no-stack"]).unwrap();
+        let (outside, remote) = {
+            let mut memory = world.0.lock().unwrap();
+            memory.commits.truncate(2);
+            memory.branch = "topic/2".into();
+            memory.prs.get_mut(&102).unwrap()["head"]["sha"] = serde_json::json!(commit(2).hash);
+            match destination {
+                "different" => {
+                    memory
+                        .remote_refs
+                        .insert("refs/heads/topic/2".into(), "f".repeat(40));
+                }
+                "absent" => {
+                    memory.remote_refs.remove("refs/heads/topic/2");
+                }
+                _ => {}
+            }
+            memory.trace.clear();
+            (memory.prs[&103].clone(), memory.remote_refs.clone())
+        };
+
+        let result = world.run(&["--no-stack"]);
+
+        if destination == "unchanged" {
+            result.unwrap();
+        } else {
+            assert!(
+                format!("{:#}", result.unwrap_err()).contains("outside the verified selection")
+            );
+            assert!(!world.trace().iter().any(publication_effect));
+        }
+        let memory = world.0.lock().unwrap();
+        assert_eq!(memory.prs[&103], outside);
+        assert_eq!(memory.remote_refs, remote);
+    }
+}
+
+#[test]
+fn mixed_publication_refreshes_only_changing_refs_with_unselected_dependants_above() {
+    let world = World::new(3);
+    world.run(&["--no-stack"]).unwrap();
+    world
+        .0
+        .lock()
+        .unwrap()
+        .remote_refs
+        .insert("refs/heads/topic/1".into(), "f".repeat(40));
+    let config = world.config();
+    let commands = world.commands();
+    let github = GitHub {
+        session: crate::github::Session::default(),
+        clock: Some(world.as_ref()),
+        config: &config,
+        commands: &commands,
+        transport: world.as_ref(),
+        template: "",
+    };
+    let mut selected = state(vec![commit(1), commit(2)]);
+    let plan = super::pull_requests::Publication::observe(&github, &selected.stack, 0).unwrap();
+    {
+        let mut memory = world.0.lock().unwrap();
+        memory.trace.clear();
+        memory.clock_elapsed += std::time::Duration::from_secs(31);
+    }
+
+    plan.verify(&github, &mut selected, false).unwrap();
+
+    let trace = world.trace();
+    assert_eq!(trace.len(), 1);
+    assert_eq!(trace[0]["body"]["variables"]["b0"], "topic/1");
+    assert!(trace[0]["body"]["variables"].get("b1").is_none());
+    assert!(!trace.iter().any(publication_effect));
+}
+
+#[test]
+fn unchanged_partial_publication_lease_preserves_a_concurrent_remote_update() {
+    let world = World::new(3);
+    world.run(&["--no-stack"]).unwrap();
+    let config = world.config();
+    let app = world.app();
+    let github = GitHub {
+        session: crate::github::Session::default(),
+        clock: Some(world.as_ref()),
+        config: &config,
+        commands: &app.commands,
+        transport: world.as_ref(),
+        template: "",
+    };
+    let mut selected = state(vec![commit(1), commit(2)]);
+    let plan = super::pull_requests::Publication::observe(&github, &selected.stack, 0).unwrap();
+    let (before, remote) = {
+        let mut memory = world.0.lock().unwrap();
+        memory
+            .remote_refs
+            .insert("refs/heads/topic/2".into(), "f".repeat(40));
+        memory.trace.clear();
+        (memory.prs.clone(), memory.remote_refs.clone())
+    };
+
+    let error = app
+        .push(
+            &config,
+            Git {
+                commands: &app.commands,
+                repo: &config.repo,
+            },
+            &github,
+            &mut selected,
+            &plan,
+        )
+        .unwrap_err();
+
+    assert!(format!("{error:#}").contains("stale lease"));
+    let memory = world.0.lock().unwrap();
+    assert_eq!(memory.remote_refs, remote);
+    assert_eq!(memory.prs, before);
+    assert!(
+        !memory
+            .trace
+            .iter()
+            .any(|event| { event["kind"] == "http" && publication_effect(event) })
+    );
+    drop(memory);
+}
+
+#[test]
 fn unselected_dependants_and_ambiguous_open_heads_prevent_publication() {
     for ambiguous in [false, true] {
         let w = World::new(2);
@@ -368,6 +434,7 @@ fn unselected_dependants_and_ambiguous_open_heads_prevent_publication() {
                 external["head"]["ref"] = serde_json::json!("outside");
             }
             memory.prs.insert(201, external);
+            memory.remote_refs.remove("refs/heads/topic/1");
             memory.trace.clear();
         }
         let error = format!("{:#}", w.run(&["--no-stack"]).unwrap_err());
@@ -388,6 +455,12 @@ fn expired_publication_dependants_stop_new_or_retargeted_outside_prs_before_push
     for change in ["created", "retargeted"] {
         let world = World::new(2);
         world.run(&["--no-stack"]).unwrap();
+        world
+            .0
+            .lock()
+            .unwrap()
+            .remote_refs
+            .remove("refs/heads/topic/1");
         let config = world.config();
         let app = world.app();
         let github = GitHub {
@@ -439,6 +512,12 @@ fn expired_publication_dependants_stop_new_or_retargeted_outside_prs_before_push
 fn publication_reuses_fresh_dependants_and_renews_only_expired_observations() {
     let world = World::new(2);
     world.run(&["--no-stack"]).unwrap();
+    world
+        .0
+        .lock()
+        .unwrap()
+        .remote_refs
+        .remove("refs/heads/topic/1");
     let config = world.config();
     let commands = world.commands();
     let github = GitHub {
@@ -475,6 +554,12 @@ fn publication_reuses_fresh_dependants_and_renews_only_expired_observations() {
 fn failed_dependant_refresh_stops_publication_and_does_not_renew_the_observation() {
     let world = World::new(2);
     world.run(&["--no-stack"]).unwrap();
+    world
+        .0
+        .lock()
+        .unwrap()
+        .remote_refs
+        .remove("refs/heads/topic/1");
     let config = world.config();
     let app = world.app();
     let github = GitHub {
@@ -568,6 +653,7 @@ fn slow_dependant_acquisition_preserves_the_age_of_each_groups_first_page() {
     for base in ["topic/1", "topic/26"] {
         let world = World::new(26);
         world.run(&["--no-stack"]).unwrap();
+        world.0.lock().unwrap().remote_refs.clear();
         let config = world.config();
         let commands = world.commands();
         let transport = SlowLaterGroup {
@@ -608,17 +694,8 @@ fn slow_dependant_acquisition_preserves_the_age_of_each_groups_first_page() {
 fn state(commits: Vec<Commit>) -> State {
     State {
         stack: commits,
-        validated_refs: std::collections::HashSet::default(),
         start: 0,
-        trunk: "refs/remotes/origin/main".into(),
-        trunk_hash: format!("{:040x}", 0),
-        tip: "HEAD".into(),
         observed_tip: "HEAD".into(),
-        base: "refs/remotes/origin/main".into(),
-        tip_change_id: String::new(),
-        tip_depth: 0,
-        selected_depths: Vec::new(),
-        selected_changes: Vec::new(),
     }
 }
 
@@ -1102,122 +1179,12 @@ fn missing_refs_fail_before_validation_push_or_pr_mutation() {
             &super::pull_requests::Publication::default(),
         )
         .unwrap_err();
-    assert!(error.to_string().contains("no Remote-Ref"));
-    assert_eq!(w.trace(), Vec::<serde_json::Value>::new());
-}
-
-#[test]
-fn restored_selection_preserves_drafts_and_skips_even_when_identities_change() {
-    let w = World::new(2);
-    let mut config = w.config();
-    config.skip_draft = true;
-    config.draft_patterns = crate::stack::selection::DraftPatterns::new(&["wip:*".into()]).unwrap();
-    let mut s = state(vec![
-        commit(1),
-        Commit {
-            title: "WIP: pending".into(),
-            ..commit(2)
-        },
-    ]);
-    config.repo.branchless = true;
-    s.stack[0].attrs.clear();
-    let reread = [
-        Commit {
-            hash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
-            ..commit(1)
-        },
-        Commit {
-            hash: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
-            title: "WIP: pending".into(),
-            ..commit(2)
-        },
-    ];
-    w.reply("git log --format=%H%x00%an%x00%ae%x00%aI%x00%T%x00%P%x00%B%x00 --no-decorate --no-color --encoding=UTF-8 --no-show-signature refs/remotes/origin/main..HEAD", 0, &log(&reread));
-    s.rewrite(&config, &w.commands(), w.as_ref(), &mut |_, _| Ok(()))
-        .unwrap();
-    assert_eq!(s.stack[0].hash, reread[0].hash);
-    assert!(!s.stack[0].skip && s.stack[1].skip);
-}
-
-#[test]
-fn jujutsu_conflicts_observed_after_rewriting_stop_publication() {
-    let world = World::new(2);
-    {
-        let mut memory = world.0.lock().unwrap();
-        memory.jj = true;
-        memory.commits[1].attrs.clear();
-    }
-    let mut config = world.config();
-    config.repo.jj = true;
-    let commands = world.commands();
-    let mut selected = State::discover(&mut config, &commands).unwrap();
-    assert!(selected.stack.iter().all(|commit| !commit.conflicted));
-    world.0.lock().unwrap().trace.clear();
-    let error = selected
-        .rewrite(&config, &commands, world.as_ref(), &mut |_, _| {
-            // Model a concurrent backend change after the initial observation.
-            world.0.lock().unwrap().commits[1].conflicted = true;
-            Ok(())
-        })
-        .unwrap_err();
-    assert!(format!("{error:#}").contains("unresolved Jujutsu conflicts"));
-    let trace = world.trace();
     assert!(
-        trace
-            .iter()
-            .any(|event| event["program"] == "jj" && event["args"][0] == "describe")
+        error
+            .to_string()
+            .contains("no resolved publication identity")
     );
-    assert!(!trace.iter().any(|event| event["args"][0] == "push"));
-    assert!(world.0.lock().unwrap().prs.is_empty());
-}
-
-#[test]
-fn jujutsu_selection_survives_rewriting_and_reports_failed_identity_recovery() {
-    for args in [
-        vec!["topic/2", "topic/3"],
-        vec!["topic/1", "topic/3"],
-        vec!["topic/1..topic/3"],
-    ] {
-        let w = World::new(3);
-        {
-            let mut m = w.0.lock().unwrap();
-            m.jj = true;
-            m.commits[2].attrs.clear();
-        }
-        w.run(&args).unwrap();
-        assert!(
-            w.trace()
-                .iter()
-                .any(|v| v["program"] == "jj" && v["args"][0] == "describe")
-        );
-    }
-    for id in ["change1", "change2"] {
-        let w = World::new(2);
-        {
-            let mut m = w.0.lock().unwrap();
-            m.jj = true;
-            for c in &mut m.commits {
-                c.attrs.clear();
-            }
-        }
-        let mut config = w.config();
-        config.selection.explicit = true;
-        config.selection.base = format!("{:040x}", 0);
-        config.selection.tip = commit(2).hash;
-        config.selection.selected = vec![commit(1).hash, commit(2).hash];
-        let mut s = State::discover(&mut config, &w.commands()).unwrap();
-        if id == "change1" {
-            s.selected_changes[0] = "missing".into();
-        } else {
-            w.fail(&format!(
-                "jj --ignore-working-copy log -r {id} --no-graph -T commit_id ++ \"\\n\""
-            ));
-        }
-        assert!(
-            s.rewrite(&config, &w.commands(), w.as_ref(), &mut |_, _| Ok(()))
-                .is_err()
-        );
-    }
+    assert_eq!(w.trace(), Vec::<serde_json::Value>::new());
 }
 
 #[test]
@@ -1362,50 +1329,6 @@ fn worker_panics_are_joined_and_stop_the_submission_phase() {
 }
 
 #[test]
-fn discovery_and_reread_errors_preserve_selection_context() {
-    let log_key = "git log --format=%H%x00%an%x00%ae%x00%aI%x00%T%x00%P%x00%B%x00 --no-decorate --no-color --encoding=UTF-8 --no-show-signature refs/remotes/origin/main..HEAD";
-    for key in [
-        log_key.to_owned(),
-        format!("git rev-list --count {}..HEAD", commit(1).hash),
-    ] {
-        let w = World::new(2);
-        w.0.lock().unwrap().commits[0].attrs.clear();
-        let mut config = w.config();
-        config.selection.selected = vec![commit(1).hash, commit(2).hash];
-        if key.starts_with("git rev-list") {
-            let commits = w.0.lock().unwrap().commits.clone();
-            w.reply(
-                log_key,
-                0,
-                &log(&commits).replace(&format!("\0{}\0", commit(1).hash), "\0unknown\0"),
-            );
-        }
-        w.fail(&key);
-        assert!(State::discover(&mut config, &w.commands()).is_err());
-    }
-    for key in ["git rev-parse --verify HEAD~0^{commit}", log_key] {
-        let w = World::new(2);
-        let mut config = w.config();
-        config.repo.branchless = true;
-        config.selection.explicit = true;
-        config.selection.selected = vec![commit(1).hash];
-        let mut s = state(vec![commit(1), commit(2)]);
-        s.base.clone_from(&s.trunk_hash);
-        s.stack[0].attrs.clear();
-        s.selected_depths = vec![1];
-        w.fail(key);
-        if key == log_key {
-            w.reply("git rev-parse --verify HEAD~0^{commit}", 0, "HEAD");
-        }
-        assert!(
-            s.rewrite(&config, &w.commands(), w.as_ref(), &mut |_, _| Ok(()))
-                .is_err(),
-            "{key}"
-        );
-    }
-}
-
-#[test]
 fn pr_reads_and_native_link_failures_stop_after_completed_effects() {
     let w = World::new(2);
     w.http(
@@ -1521,82 +1444,13 @@ fn descendant_discovery_accepts_missing_refs_but_propagates_failed_lookups() {
             missing
         );
         if missing {
-            assert!(!w.trace().iter().any(|event| {
-                event["path"] == "graphql"
-                    && event["body"]["query"]
-                        .as_str()
-                        .unwrap()
-                        .starts_with("query")
-            }));
-        }
-    }
-}
-
-#[test]
-fn invalid_selection_recovery_and_failed_rewrite_observations_stop_publication() {
-    let w = World::new(2);
-    let mut config = w.config();
-    config.repo.jj = true;
-    w.fail("jj --ignore-working-copy log -r @- --no-graph -T commit_id");
-    assert!(State::discover(&mut config, &w.commands()).is_err());
-    let w = World::new(2);
-    let mut config = w.config();
-    config.repo.jj = true;
-    config.selection.selected = vec![commit(1).hash];
-    w.fail(r#"jj --ignore-working-copy log -r heads(@- | (@ ~ empty())) --no-graph -T commit_id ++ "\n""#);
-    assert!(State::discover(&mut config, &w.commands()).is_err());
-    let w = World::new(2);
-    let mut config = w.config();
-    config.repo.jj = true;
-    config.selection.explicit = true;
-    config.selection.tip = "tip".into();
-    config.selection.base = "base".into();
-    w.fail("jj --ignore-working-copy log -r tip --no-graph -T change_id");
-    assert!(State::discover(&mut config, &w.commands()).is_err());
-    let mut c = commit(1);
-    c.attrs.clear();
-    config.selection.selected = vec!["missing".into()];
-    let commands = w.commands();
-    let git = Git {
-        commands: &commands,
-        repo: &config.repo,
-    };
-    assert!(
-        State::capture_selection(
-            &[c],
-            &std::collections::HashMap::new(),
-            &config,
-            git,
-            "HEAD"
-        )
-        .is_err()
-    );
-    for key in [
-        "git check-ref-format --branch topic/1",
-        "jj --ignore-working-copy log -r @- --no-graph -T commit_id",
-    ] {
-        let w = World::new(1);
-        w.0.lock().unwrap().commits[0].attrs.clear();
-        let mut config = w.config();
-        config.repo.branchless = true;
-        config.repo.jj = key.starts_with("jj ");
-        let mut s = state(w.0.lock().unwrap().commits.clone());
-        if key == "jj --ignore-working-copy log -r @- --no-graph -T commit_id" {
-            s.validated_refs.insert("topic/1".into());
-        }
-        if key.starts_with("git check-ref-format") {
-            w.reply(
-                "git branch --format=%(refname:strip=2)|%(objectname)",
-                0,
-                &format!("invalid..ref|{}", commit(1).hash),
+            assert!(w.trace().iter().any(|event| event["path"] == "graphql"));
+            assert!(
+                !w.trace()
+                    .iter()
+                    .any(|event| event["args"][0] == "config" && event["args"][1] == "--local")
             );
-        } else {
-            w.fail(key);
         }
-        assert!(
-            s.rewrite(&config, &w.commands(), w.as_ref(), &mut |_, _| Ok(()))
-                .is_err()
-        );
     }
 }
 
@@ -1691,51 +1545,6 @@ fn publication_and_description_failures_cannot_cross_completion_barriers() {
     );
     assert!(
         crate::submission::Application::update_descriptions(&config, git, &github, &s).is_err()
-    );
-}
-
-#[test]
-fn failed_depth_recovery_cannot_silently_change_an_explicit_selection() {
-    let w = World::new(1);
-    let mut config = w.config();
-    let mut c = commit(1);
-    c.attrs.clear();
-    config.selection.selected = vec![c.hash.clone()];
-    w.fail(&format!("git rev-list --count {}..HEAD", c.hash));
-    let commands = w.commands();
-    let git = Git {
-        commands: &commands,
-        repo: &config.repo,
-    };
-    assert!(
-        State::capture_selection(
-            std::slice::from_ref(&c),
-            &std::collections::HashMap::new(),
-            &config,
-            git,
-            "HEAD"
-        )
-        .is_err()
-    );
-    w.reply(&format!("git rev-list --count {}..HEAD", c.hash), 0, "2");
-    assert_eq!(
-        State::capture_selection(
-            std::slice::from_ref(&c),
-            &std::collections::HashMap::new(),
-            &config,
-            git,
-            "HEAD"
-        )
-        .unwrap()
-        .0,
-        vec![2]
-    );
-    let depths = std::collections::HashMap::from([(c.hash.clone(), 3)]);
-    assert_eq!(
-        State::capture_selection(&[c], &depths, &config, git, "HEAD")
-            .unwrap()
-            .0,
-        vec![3]
     );
 }
 
@@ -1966,110 +1775,6 @@ fn explicit_context_reuses_a_known_open_pr() {
 }
 
 #[test]
-fn selected_rewrite_reuses_snapshot_ranks_even_with_a_diverged_trunk() {
-    for (tip_depth, diverged, missing) in [
-        (0, false, false),
-        (1, false, false),
-        (0, true, false),
-        (0, false, true),
-        (1, false, true),
-    ] {
-        let w = World::new(100);
-        let mut config = w.config();
-        config.repo.branchless = true;
-        config.selection.explicit = true;
-        config.selection.selected = (1..=100 - tip_depth).map(|n| commit(n).hash).collect();
-        let mut s = state((1..=100 - tip_depth).map(commit).collect());
-        s.base.clone_from(&s.trunk_hash);
-        for c in &mut s.stack {
-            c.attrs.clear();
-        }
-        s.tip_depth = usize::try_from(tip_depth).unwrap();
-        s.selected_depths = (s.tip_depth..100).collect();
-        if missing {
-            s.selected_depths.push(if tip_depth == 0 { 101 } else { 0 });
-        }
-        if diverged {
-            s.base.clone_from(&s.trunk_hash);
-            w.reply(
-                "git show --no-show-signature -s --format=%H %T refs/remotes/origin/main",
-                0,
-                "diverged tree0",
-            );
-        }
-        w.0.lock().unwrap().trace.clear();
-        let result = s.rewrite(&config, &w.commands(), w.as_ref(), &mut |_, _| Ok(()));
-        if missing {
-            assert!(format!("{:#}", result.unwrap_err()).contains("selected commit disappeared"));
-        } else {
-            result.unwrap();
-            assert_eq!(
-                s.selected().iter().filter(|c| !c.skip).count(),
-                100 - usize::try_from(tip_depth).unwrap()
-            );
-            let reads = w
-                .trace()
-                .iter()
-                .filter(|v| v["program"] == "git" && v["args"][0] == "rev-parse")
-                .count();
-            assert_eq!(reads, 1);
-        }
-    }
-}
-
-#[test]
-fn repeated_change_ids_cannot_select_an_arbitrary_rewritten_commit() {
-    let w = World::new(3);
-    {
-        let mut m = w.0.lock().unwrap();
-        m.jj = true;
-        for c in &mut m.commits {
-            c.attrs.clear();
-        }
-        m.commits[1].change_id = m.commits[0].change_id.clone();
-    }
-    let mut config = w.config();
-    config.selection.explicit = true;
-    config.selection.selected = (1..=3).map(|n| commit(n).hash).collect();
-    let mut s = State::discover(&mut config, &w.commands()).unwrap();
-    let error = s
-        .rewrite(&config, &w.commands(), w.as_ref(), &mut |_, _| Ok(()))
-        .unwrap_err();
-    assert!(error.to_string().contains("ambiguous change identities"));
-    assert!(!w.trace().iter().any(|v| v["args"][0] == "push"));
-}
-
-#[test]
-fn failed_batched_recovery_prevents_publication() {
-    let w = World::new(2);
-    let mut config = w.config();
-    config.repo.branchless = true;
-    config.selection.explicit = true;
-    config.selection.selected = vec![commit(1).hash, commit(2).hash];
-    let mut s = state(vec![commit(1), commit(2)]);
-    s.base.clone_from(&s.trunk_hash);
-    for c in &mut s.stack {
-        c.attrs.clear();
-    }
-    s.selected_depths = vec![1, 0];
-    let rewritten: Vec<_> = (1..=2)
-        .map(|n| {
-            let mut c = commit(n);
-            c.hash = format!("b{n:039x}");
-            c
-        })
-        .collect();
-    w.reply(&format!("git log --format=%H%x00%an%x00%ae%x00%aI%x00%T%x00%P%x00%B%x00 --no-decorate --no-color --encoding=UTF-8 --no-show-signature refs/remotes/origin/main..{}", rewritten[1].hash), 0,
-        &log(&rewritten).replace(&format!("\0{}\0", rewritten[0].hash), "\0unknown\0"));
-    w.fail("git rev-parse --revs-only --end-of-options HEAD~1^{commit} HEAD~0^{commit}");
-    let error = s
-        .rewrite(&config, &w.commands(), w.as_ref(), &mut |_, _| Ok(()))
-        .unwrap_err();
-    assert!(format!("{error:#}").contains("unavailable"));
-    assert!(!w.trace().iter().any(|v| v["args"][0] == "push"));
-}
-
-#[test]
 fn explicit_selection_batches_unique_inputs_and_reuses_diverged_path_ranks() {
     for count in [100, 1000] {
         for diverged in [false, true] {
@@ -2127,8 +1832,19 @@ fn inferred_trunk_and_duplicate_destinations_stop_before_rewriting() {
                 &format!("develop|{}", commit(2).hash),
             );
         }
-        let error = s
-            .rewrite(&config, &w.commands(), w.as_ref(), &mut |_, _| Ok(()))
+        let error = w
+            .app()
+            .prepare_publication(
+                &GitHub {
+                    session: crate::github::Session::default(),
+                    clock: None,
+                    config: &config,
+                    commands: &w.commands(),
+                    transport: w.as_ref(),
+                    template: "",
+                },
+                &mut s,
+            )
             .unwrap_err();
         assert!(
             error
@@ -2160,55 +1876,6 @@ fn explicit_trunk_targets_and_failed_jujutsu_selection_reads_stop_publication() 
     let error = w.run(&["topic/1", "topic/2"]).unwrap_err();
     assert!(format!("{error:#}").contains("unavailable"));
     assert!(!w.trace().iter().any(|e| e["args"][0] == "push"));
-}
-
-#[test]
-fn rewrite_anchors_preserve_bases_and_reject_unverifiable_recovery() {
-    for failure in ["", "position", "mismatch", "count", "anchor", "range"] {
-        let w = World::new(2);
-        w.0.lock().unwrap().commits[0].attrs.clear();
-        let mut config = w.config();
-        config.repo.branchless = true;
-        config.selection.explicit = true;
-        config.selection.base = format!("{:040x}", 0);
-        config.selection.tip = commit(2).hash;
-        let mut s = State::discover(&mut config, &w.commands()).unwrap();
-        if failure != "anchor" {
-            w.reply(
-                "git branch --format=%(refname:strip=2)|%(objectname)",
-                0,
-                &format!("topic/1|{}", commit(1).hash),
-            );
-        }
-        match failure {
-            "position" => w.fail("git rev-parse --verify HEAD~0^{commit}"),
-            "mismatch" => w.reply("git rev-parse --verify HEAD~0^{commit}", 0, &commit(1).hash),
-            "count" => w.fail(&format!("git rev-list --count {}..HEAD", commit(2).hash)),
-            "anchor" => w.fail("git rev-parse --verify refs/heads/topic/2^{commit}"),
-            "range" => w.reply(&format!("git log --format=%H%x00%an%x00%ae%x00%aI%x00%T%x00%P%x00%B%x00 --no-decorate --no-color --encoding=UTF-8 --no-show-signature refs/remotes/origin/main..b{:039x}", 2), 0, ""),
-            _ => {},
-        }
-        let result = s.rewrite(&config, &w.commands(), w.as_ref(), &mut |_, _| Ok(()));
-        if failure.is_empty() {
-            result.unwrap();
-            assert_eq!(s.base, config.selection.base);
-            assert_eq!(s.selected().len(), 2);
-        } else {
-            let error = format!("{:#}", result.unwrap_err());
-            assert!(
-                error.contains(match failure {
-                    "range" => "range disappeared",
-                    "mismatch" => "current checkout",
-                    _ => "unavailable",
-                }),
-                "{error}"
-            );
-        }
-        assert!(!w.trace().iter().any(|e| e["args"][0] == "push"));
-        if matches!(failure, "position" | "mismatch" | "count") {
-            assert!(!w.trace().iter().any(|e| e["args"][0] == "reword"));
-        }
-    }
 }
 
 #[test]
@@ -2294,7 +1961,7 @@ fn merged_preflight_keeps_expired_observations_batched() {
             .into_iter()
             .filter(|event| event["kind"] == "http")
             .collect();
-        assert_eq!(requests.len(), 6);
+        assert_eq!(requests.len(), 3);
         assert!(requests.iter().all(|event| event["path"] == "graphql"));
         assert!(
             requests
@@ -2309,7 +1976,7 @@ fn merged_preflight_keeps_expired_observations_batched() {
                     .iter()
                     .filter(|event| event["kind"] == "http")
                     .count(),
-                3
+                0
             );
         }
     }
@@ -2346,7 +2013,7 @@ fn merged_preflight_uses_the_refreshed_head_identity() {
     super::pull_requests::Publication::observe(&github, &[commit(1)], 0).unwrap();
     assert_eq!(w.0.lock().unwrap().stdout, "");
     assert_eq!(github.observed_head("topic/1", "all"), 201);
-    assert_eq!(w.trace().iter().filter(|e| e["kind"] == "http").count(), 2);
+    assert_eq!(w.trace().iter().filter(|e| e["kind"] == "http").count(), 1);
 }
 
 #[test]
@@ -2495,110 +2162,7 @@ fn description_history_retains_original_identities_and_refresh_failures() {
 }
 
 #[test]
-fn explicit_jujutsu_selection_reuses_observed_tip_identities() {
-    for selection_list in [false, true] {
-        for rewrite in [false, true] {
-            let w = World::new(3);
-            {
-                let mut memory = w.0.lock().unwrap();
-                memory.jj = true;
-                if rewrite {
-                    for commit in &mut memory.commits {
-                        commit.attrs.clear();
-                    }
-                }
-            }
-            let mut config = w.config();
-            config.selection.explicit = true;
-            config.selection.base = format!("{:040x}", 0);
-            config.selection.tip = commit(3).hash;
-            if selection_list {
-                config.selection.selected = (1..=3).map(|n| commit(n).hash).collect();
-            }
-            w.fail(&format!(
-                "jj --ignore-working-copy log -r {} --no-graph -T change_id",
-                commit(3).hash
-            ));
-            w.0.lock().unwrap().trace.clear();
-            let s = State::discover(&mut config, &w.commands()).unwrap();
-            assert_eq!(s.tip_change_id, commit(3).change_id);
-            assert_eq!(s.stack.len(), 3);
-            let trace = w.trace();
-            assert_eq!(
-                trace
-                    .iter()
-                    .filter(|v| v["program"] == "jj" && v["args"][0] == "--at-operation")
-                    .count(),
-                1
-            );
-            assert!(!trace.iter().any(|v| v["program"] == "jj"
-                && v["args"].as_array().unwrap().last().unwrap() == "change_id"));
-        }
-    }
-}
-
-#[test]
-fn filtered_jujutsu_tip_keeps_its_observed_recovery_identity() {
-    let w = World::new(3);
-    w.0.lock().unwrap().jj = true;
-    let mut config = w.config();
-    config.selection.explicit = true;
-    config.selection.base = format!("{:040x}", 0);
-    config.selection.tip = commit(3).hash;
-    let observation = log(&w.0.lock().unwrap().commits).replace("\0tree3\0", "\0tree2\0");
-    w.reply(&format!("git log --format=%H%x00%an%x00%ae%x00%aI%x00%T%x00%P%x00%B%x00 --no-decorate --no-color --encoding=UTF-8 --no-show-signature refs/remotes/origin/main..{}", config.selection.tip), 0, &observation);
-    w.fail(&format!(
-        "jj --ignore-working-copy log -r {} --no-graph -T change_id",
-        config.selection.tip
-    ));
-    w.0.lock().unwrap().trace.clear();
-    let state = State::discover(&mut config, &w.commands()).unwrap();
-    assert_eq!(state.stack.len(), 2);
-    assert_eq!(state.tip_change_id, commit(3).change_id);
-    assert!(
-        !w.trace().iter().any(|v| v["program"] == "jj"
-            && v["args"].as_array().unwrap().last().unwrap() == "change_id")
-    );
-}
-
-#[test]
-fn unavailable_jujutsu_tip_observation_retains_a_fallible_identity_fallback() {
-    for fail in [false, true] {
-        let w = World::new(3);
-        w.0.lock().unwrap().jj = true;
-        let mut config = w.config();
-        config.selection.explicit = true;
-        config.selection.base = format!("{:040x}", 0);
-        // Exercise the adapter fallback for an unresolved alias, rather than a
-        // commit identity present in the structured history response.
-        config.selection.tip = "tip".into();
-        let key = "jj --ignore-working-copy log -r tip --no-graph -T change_id";
-        if fail {
-            w.fail(key);
-        } else {
-            w.reply(key, 0, &commit(3).change_id);
-        }
-        w.0.lock().unwrap().trace.clear();
-        let result = State::discover(&mut config, &w.commands());
-        assert_eq!(result.is_err(), fail);
-        if fail {
-            assert!(format!("{:#}", result.unwrap_err()).contains("unavailable"));
-        } else {
-            assert_eq!(result.unwrap().tip_change_id, commit(3).change_id);
-        }
-        assert_eq!(
-            w.trace()
-                .iter()
-                .filter(|v| v["program"] == "jj"
-                    && v["args"].as_array().unwrap().last().unwrap() == "change_id")
-                .count(),
-            1
-        );
-    }
-}
-
-#[test]
-fn cached_absence_does_not_suppress_creation_when_filling_selected_identities() {
+fn missing_selected_identity_cannot_trigger_unplanned_creation() {
     let w = World::new(1);
     let config = w.config();
     let app = w.app();
@@ -2613,15 +2177,15 @@ fn cached_absence_does_not_suppress_creation_when_filling_selected_identities() 
     github.observe(&["topic/1".into()]).unwrap();
     let mut selected = state(vec![commit(1)]);
     w.0.lock().unwrap().trace.clear();
-    selected.fill_numbers(&github, &["main".into()]).unwrap();
-    assert_eq!(selected.stack[0].pr_number, 101);
-    assert!(selected.stack[0].newly_created);
+    assert!(selected.fill_numbers(&github, &["main".into()]).is_err());
+    assert_eq!(selected.stack[0].pr_number, 0);
+    assert!(!selected.stack[0].newly_created);
     assert_eq!(
         w.trace()
             .iter()
             .filter(|v| v["method"] == "POST" && v["path"] == "pulls")
             .count(),
-        1
+        0
     );
 }
 
@@ -2734,4 +2298,209 @@ fn stack_orientation_controls_preview_and_results_without_reordering_submission(
         );
         assert!(!w.trace().iter().any(publication_effect));
     }
+}
+
+#[test]
+fn preserved_selection_keeps_middle_boundaries_and_rejects_an_unreadable_tip() {
+    let w = World::new(3);
+    let mut config = w.config();
+    config.selection.explicit = true;
+    config.selection.selected = vec![commit(2).hash, commit(3).hash];
+    let selected = State::discover(&mut config, &w.commands()).unwrap();
+    assert_eq!(config.selection.base, commit(1).hash);
+    assert_eq!(selected.selected().len(), 2);
+    let invalid = state(vec![Commit {
+        attrs: vec![("remote-ref".into(), "main".into())],
+        ..commit(1)
+    }]);
+    assert!(invalid.validate_refs("main").is_err());
+    let mut config = w.config();
+    config.repo.jj = true;
+    w.fail("jj --ignore-working-copy log -r @- --no-graph -T commit_id");
+    assert!(State::discover(&mut config, &w.commands()).is_err());
+}
+
+#[test]
+fn publication_checks_the_adopted_review_again_after_resolution() {
+    let w = World::new(1);
+    w.run(&["--no-stack"]).unwrap();
+    let config = w.config();
+    let commands = w.commands();
+    let github = GitHub {
+        session: crate::github::Session::default(),
+        clock: None,
+        config: &config,
+        commands: &commands,
+        transport: w.as_ref(),
+        template: "",
+    };
+    let mut commits = vec![commit(1)];
+    crate::identity::resolve::prepare(&github, &mut commits, 0).unwrap();
+    commits[0].publication.as_mut().unwrap().review = Some(999);
+    assert!(super::pull_requests::Publication::observe(&github, &commits, 0).is_err());
+    assert!(crate::identity::resolve::persist(&github, &mut commits).is_err());
+}
+
+#[test]
+fn creation_requires_an_attempt_identifier_and_valid_head_even_without_an_anchor() {
+    for case in ["entropy-unavailable", "invalid-head", "legacy"] {
+        let w = World::new(1);
+        if case == "entropy-unavailable" {
+            w.0.lock().unwrap().attempt_error = Some(std::io::ErrorKind::Other);
+        }
+        let config = w.config();
+        let app = w.app();
+        let github = GitHub {
+            session: crate::github::Session::default(),
+            clock: None,
+            config: &config,
+            commands: &app.commands,
+            transport: w.as_ref(),
+            template: "",
+        };
+        let mut s = state(vec![commit(1)]);
+        if case == "invalid-head" {
+            s.stack[0].attrs[0].1 = "bad..head".into();
+        }
+        let result = app.reconcile_prs(&["main".into()], &github, &mut s, &[0]);
+        assert_eq!(result.is_ok(), case == "legacy");
+        assert_eq!(w.0.lock().unwrap().prs.len(), usize::from(case == "legacy"));
+        assert!(
+            !w.0.lock()
+                .unwrap()
+                .config
+                .contains_key("git-pr.pendingCreate")
+        );
+    }
+}
+
+#[test]
+fn an_unavailable_remote_ancestry_check_does_not_authorise_a_head_collision() {
+    let w = World::new(1);
+    w.0.lock().unwrap().commits[0].attrs.clear();
+    w.0.lock()
+        .unwrap()
+        .remote_refs
+        .insert("refs/heads/topic/1".into(), commit(2).hash);
+    w.fail(&format!(
+        "git merge-base --is-ancestor {} {}",
+        commit(2).hash,
+        commit(1).hash
+    ));
+    assert!(w.run(&["--no-stack"]).is_err());
+    assert!(!w.trace().iter().any(publication_effect));
+}
+
+#[test]
+fn unpublished_unanchored_descendants_remain_description_context() {
+    let w = World::new(2);
+    w.run(&["--no-stack", "topic/1"]).unwrap();
+    {
+        let mut memory = w.0.lock().unwrap();
+        memory.commits[1].attrs.clear();
+        memory
+            .config
+            .retain(|key, _| !key.starts_with("branch.topic/2."));
+        memory.prs.remove(&102);
+    }
+    w.reply(
+        "git branch --format=%(refname:strip=2)|%(objectname)",
+        0,
+        &format!("topic/1|{}", commit(1).hash),
+    );
+    w.reply(
+        "git for-each-ref --contains HEAD --format=%(objectname) refs/heads/",
+        0,
+        &commit(2).hash,
+    );
+    let config = w.config();
+    let app = w.app();
+    let github = GitHub {
+        session: crate::github::Session::default(),
+        clock: None,
+        config: &config,
+        commands: &app.commands,
+        transport: w.as_ref(),
+        template: "",
+    };
+    let mut s = state(vec![commit(1)]);
+    s.stack[0].pr_number = 101;
+    let git = Git {
+        commands: &app.commands,
+        repo: &config.repo,
+    };
+    crate::submission::Application::update_descriptions(&config, git, &github, &s).unwrap();
+    let memory = w.0.lock().unwrap();
+    assert_eq!(memory.prs.len(), 1);
+    assert!(
+        memory.prs[&101]["body"]
+            .as_str()
+            .unwrap()
+            .contains(&commit(2).hash)
+    );
+    drop(memory);
+}
+
+#[test]
+fn recovered_descendant_heads_require_observation_before_description_changes() {
+    #[derive(Debug)]
+    struct RefuseDescendant(std::sync::Arc<World>);
+    impl crate::github::http::Transport for RefuseDescendant {
+        fn request(&self, request: crate::github::http::Request<'_>) -> anyhow::Result<Vec<u8>> {
+            let body: serde_json::Value = request
+                .body
+                .map(serde_json::from_slice)
+                .transpose()?
+                .unwrap_or_default();
+            if body["variables"]
+                .as_object()
+                .is_some_and(|variables| variables.values().any(|v| v == "topic/2"))
+            {
+                anyhow::bail!("recovered descendant unavailable");
+            }
+            self.0.request(request)
+        }
+    }
+    let w = World::new(2);
+    w.run(&["--no-stack"]).unwrap();
+    {
+        let mut memory = w.0.lock().unwrap();
+        memory.commits[1].attrs.clear();
+        memory
+            .config
+            .retain(|key, _| !key.starts_with("branch.topic/2."));
+        memory.prs.get_mut(&102).unwrap()["head"]["sha"] = serde_json::json!(commit(2).hash);
+    }
+    w.reply(
+        "git branch --format=%(refname:strip=2)|%(objectname)",
+        0,
+        &format!("topic/1|{}\nrenamed|{}", commit(1).hash, commit(2).hash),
+    );
+    w.reply(
+        "git for-each-ref --contains HEAD --format=%(objectname) refs/heads/",
+        0,
+        &commit(2).hash,
+    );
+    let before = w.0.lock().unwrap().prs.clone();
+    let config = w.config();
+    let app = w.app();
+    let transport = RefuseDescendant(w.clone());
+    let github = GitHub {
+        session: crate::github::Session::default(),
+        clock: None,
+        config: &config,
+        commands: &app.commands,
+        transport: &transport,
+        template: "",
+    };
+    let mut s = state(vec![commit(1)]);
+    s.stack[0].pr_number = 101;
+    let git = Git {
+        commands: &app.commands,
+        repo: &config.repo,
+    };
+    let error =
+        crate::submission::Application::update_descriptions(&config, git, &github, &s).unwrap_err();
+    assert!(format!("{error:#}").contains("recovered descendant unavailable"));
+    assert_eq!(w.0.lock().unwrap().prs, before);
 }

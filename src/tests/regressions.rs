@@ -24,7 +24,6 @@ fn merged_downstack_recovery_uses_real_ancestry_and_preserves_the_open_pr() {
                 2,
                 true,
                 Service {
-                    recovery_destination: true,
                     indirect_merges: Some(false),
                     ..Service::default()
                 },
@@ -133,7 +132,7 @@ fn recovery_publication_lease_rejects_a_concurrent_remote_update() {
 }
 
 #[test]
-fn failed_publication_verifies_every_push_destination_instead_of_the_fetch_url() {
+fn publication_requires_one_verified_repository_destination_before_effects() {
     let f = Fixture::new(1, true);
     let fetch = f.git(&["remote", "get-url", "origin"]);
     f.git(&["push", &fetch, "HEAD:refs/heads/topic/1"]);
@@ -163,16 +162,21 @@ fn failed_publication_verifies_every_push_destination_instead_of_the_fetch_url()
         (1, "connection lost during push".into()),
     );
     let error = f.run(&["--no-stack"]).unwrap_err();
-    assert!(format!("{error:#}").contains("failed to push 1 branch"));
+    assert!(format!("{error:#}").contains("single verified push destination"));
     assert!(f.service.prs.lock().unwrap().is_empty());
     assert!(
         f.git(&["ls-remote", second, "refs/heads/topic/1"])
             .starts_with(&f.trunk)
     );
 
-    f.git(&["push", "-f", second, "HEAD:refs/heads/topic/1"]);
+    f.git(&["config", "--unset-all", "remote.origin.pushurl"]);
+    f.git(&["remote", "set-url", "--push", "origin", second]);
     f.run(&["--no-stack"]).unwrap();
     assert_eq!(f.service.prs.lock().unwrap().len(), 1);
+    assert!(
+        f.git(&["ls-remote", second, "refs/heads/topic/1"])
+            .starts_with(&f.hashes[0])
+    );
 }
 
 #[test]
@@ -257,12 +261,12 @@ fn branchless_rewriting_preserves_single_character_and_pipe_branches() {
         f.git(&["branch", "-m", reference]);
         f.run(&["--no-stack", reference]).unwrap();
         let rewritten = f.git(&["rev-parse", "HEAD"]);
-        assert_ne!(rewritten, f.hashes[0]);
+        assert_eq!(rewritten, f.hashes[0]);
         f.run(&["--no-stack", reference]).unwrap();
         assert_eq!(f.git(&["rev-parse", "HEAD"]), rewritten);
         assert!(
-            f.git(&["show", "-s", "--format=%B", "HEAD"])
-                .contains(&format!("Remote-Ref: {reference}"))
+            !f.git(&["show", "-s", "--format=%B", "HEAD"])
+                .contains("Remote-Ref")
         );
         assert!(
             f.git(&["ls-remote", "origin", &format!("refs/heads/{reference}")])
@@ -323,7 +327,6 @@ fn reordered_stack_preserves_open_prs_with_the_hosts_indirect_merge_lifecycle() 
                 3,
                 true,
                 Service {
-                    recovery_destination: true,
                     indirect_merges: Some(delete),
                     ..Service::default()
                 },
@@ -406,7 +409,6 @@ fn insertion_at_every_position_supports_missing_and_published_new_branches() {
                 3,
                 true,
                 Service {
-                    recovery_destination: true,
                     indirect_merges: Some(true),
                     ..Service::default()
                 },

@@ -4,7 +4,6 @@ pub(crate) mod policy;
 mod presentation;
 mod pull_requests;
 mod recovery;
-mod rewrite;
 mod runtime;
 mod state;
 
@@ -38,7 +37,7 @@ pub(crate) struct Application {
 
 impl Application {
     pub(crate) fn execute(mut self, flags: &Flags, env: &BTreeMap<String, String>) -> Result<()> {
-        // Publication transfers stored objects, so every observation and rewrite
+        // Publication transfers stored objects, so every observation
         // must use those same objects rather than a local replacement view.
         self.commands
             .env
@@ -113,8 +112,14 @@ impl Application {
             transport: self.transport.as_ref(),
             template: &template,
         };
-        let publication = diagnostics.phase("commit preparation", || self.prepare_publication(&github, &mut state))
-            .context("commit preparation failed; inspect Git or Jujutsu status before retrying because local history may already have changed")?;
+        let _guard = self.lock_repository(&config)?;
+        let publication = diagnostics
+            .phase("commit preparation", || {
+                self.prepare_publication(&github, &mut state)
+            })
+            .context(
+                "commit preparation failed; inspect the reported identity evidence before retrying",
+            )?;
         if self.checkpoint(&config, Checkpoint::Rewrite) {
             return Ok(());
         }
@@ -128,17 +133,12 @@ impl Application {
             "Publishing branches"
         });
         diagnostics.phase("publication and PR reconciliation", || self.push(&config, git, &github, &mut state, &publication))
-            .context("publication or PR reconciliation failed; any completed local rewrites, pushed refs and PR changes are retained. Inspect the reported operation before retrying")?;
+            .context("publication or PR reconciliation failed; any completed local metadata writes, pushed refs and PR changes are retained. Inspect the reported operation before retrying")?;
         if self.checkpoint(&config, Checkpoint::Push) {
             return Ok(());
         }
         if config.dry_run {
-            self.commands
-                .out("[DRY-RUN] Would update PR descriptions for:");
-            for commit in state.selected().iter().filter(|c| !c.skip) {
-                self.commands
-                    .out(&format!("  - {}: {}", commit.short_hash(), commit.title));
-            }
+            self.preview_descriptions(&state);
             return Ok(());
         }
         diagnostics.phase("PR-number recovery", || state.fill_numbers(&github, &publication.bases))
@@ -147,6 +147,7 @@ impl Application {
             return Ok(());
         }
         self.commands.terminal.stage("Updating PR descriptions");
+        crate::identity::resolve::verify_bindings(&self.commands, &config.repo, state.selected())?;
         diagnostics.phase("PR descriptions and stack sections", || Self::update_descriptions(&config, git, &github, &state))
             .context("PR content reconciliation failed after publication; pushed refs and completed PR changes are retained")?;
         diagnostics.phase("native stack links", || Self::native_stack(&config, &github, &state, &publication.bases))
@@ -158,6 +159,33 @@ impl Application {
         self.commands.terminal.finish(true);
         self.print_results(&config, state.selected());
         Ok(())
+    }
+
+    fn preview_descriptions(&self, state: &State) {
+        self.commands
+            .out("[DRY-RUN] Would update PR descriptions for:");
+        for commit in state.selected().iter().filter(|c| !c.skip) {
+            self.commands
+                .out(&format!("  - {}: {}", commit.short_hash(), commit.title));
+        }
+    }
+
+    fn lock_repository(
+        &self,
+        config: &Config,
+    ) -> Result<Option<Box<dyn config::files::RepositoryLock>>> {
+        if config.dry_run || config.stop_after == Some(Checkpoint::Rewrite) {
+            return Ok(None);
+        }
+        let path = self.commands.git_data(
+            &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+            &[],
+        )?;
+        let path =
+            std::path::Path::new(path.strip_suffix('\n').unwrap_or(&path)).join("git-pr.lock");
+        Ok(Some(self.files.lock(&path).context(
+            "another submission is active, or the repository lock could not be acquired",
+        )?))
     }
 
     fn prepare_publication(
@@ -176,12 +204,17 @@ impl Application {
         } else {
             "Preparing commits"
         });
-        let mut publication = pull_requests::Publication::default();
-        state.rewrite(github.config, &self.commands, self.clock.as_ref(), &mut |stack, start| {
-            publication = self.commands.diagnostics.phase("publication safety preflight", || pull_requests::Publication::observe(github, stack, start)).context(Fatal)
-                .context("publication safety preflight failed; no local rewrites, pushes or PR changes were performed")?;
-            Ok(())
-        })?;
+        state.validate_conflicts()?;
+        if !state.selected().iter().any(|commit| !commit.skip) {
+            return Ok(pull_requests::Publication::default());
+        }
+        crate::identity::resolve::prepare(github, &mut state.stack, state.start)?;
+        let publication = self.commands.diagnostics.phase("publication safety preflight", || pull_requests::Publication::observe(github, &state.stack, state.start)).context(Fatal)
+            .context("publication safety preflight failed; no local metadata, pushes or PR changes were performed")?;
+        if !config.dry_run && config.stop_after != Some(Checkpoint::Rewrite) {
+            crate::identity::resolve::verify_anchors(&self.commands, state.selected())?;
+            crate::identity::resolve::persist(github, state.selected_mut())?;
+        }
         Ok(publication)
     }
 

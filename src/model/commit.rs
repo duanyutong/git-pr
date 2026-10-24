@@ -1,5 +1,6 @@
 use std::fmt;
 
+#[cfg(test)]
 use crate::model::trailers;
 
 pub(crate) const REMOTE_REF: &str = "remote-ref";
@@ -16,6 +17,7 @@ pub(crate) struct Commit {
     pub title: String,
     pub message: String,
     pub attrs: Vec<(String, String)>,
+    pub publication: Option<crate::identity::Binding>,
     pub pr_number: u64,
     pub skip: bool,
     /// Conflict state of this commit or an observed local ancestor.
@@ -39,9 +41,13 @@ impl Commit {
     }
 
     pub(crate) fn remote_ref(&self) -> &str {
-        self.attr(REMOTE_REF)
+        self.publication.as_ref().map_or_else(
+            || self.attr(REMOTE_REF),
+            |binding| binding.head.reference.as_str(),
+        )
     }
 
+    #[cfg(test)]
     pub(crate) fn set_attr(&mut self, key: &str, value: &str) {
         if let Some((_, v)) = self.attrs.iter_mut().find(|(k, _)| k == key) {
             value.clone_into(v);
@@ -60,6 +66,7 @@ impl Commit {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn full_message(&self) -> String {
         #[cfg(test)]
         crate::tests::unit::support::MESSAGE_SERIALISATIONS.update(|count| count + 1);

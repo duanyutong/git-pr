@@ -337,6 +337,7 @@ impl GitHub<'_> {
             .map_or(0, |p| p.number))
     }
 
+    #[cfg(test)]
     pub(crate) fn number(&self, commit: &mut Commit, base: &str) -> Result<u64> {
         if commit.skip && commit.remote_ref().is_empty() {
             return Ok(0);

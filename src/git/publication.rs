@@ -37,9 +37,11 @@ impl Git<'_> {
             &self.repo.remote,
         ])?;
         let mut lines = destinations.lines();
-        let destination = lines.next().context("missing recovery push destination")?;
+        let destination = lines
+            .next()
+            .context("missing publication push destination")?;
         if lines.next().is_some() {
-            bail!("base recovery requires a single verified push destination");
+            bail!("publication requires a single verified push destination");
         }
         let repository = policy::parse_remote_patterns(
             &format!("remote {destination}"),
@@ -48,7 +50,7 @@ impl Git<'_> {
         if !repository.host.eq_ignore_ascii_case(&self.repo.host)
             || !repository.name.eq_ignore_ascii_case(&self.repo.name)
         {
-            bail!("base recovery push destination does not match the observed GitHub repository");
+            bail!("publication push destination does not match the observed GitHub repository");
         }
         Ok(destination.to_owned())
     }

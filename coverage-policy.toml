@@ -43,7 +43,9 @@ unit = [
   "src/submission/presentation.rs",
   "src/submission/pull_requests.rs",
   "src/submission/recovery.rs",
-  "src/submission/rewrite.rs",
+  "src/identity/mod.rs",
+  "src/identity/resolve.rs",
+  "src/identity/store.rs",
   "src/submission/state.rs",
 ]
 mixed = []

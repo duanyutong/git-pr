@@ -945,3 +945,57 @@ fn rewrite_prepares_each_message_once_and_preserves_literal_execution_order() {
         }
     }
 }
+
+#[test]
+fn retained_literal_editor_failure_does_not_fall_through_to_a_bulk_rewrite() {
+    let w = World::new(1);
+    let commands = w.commands();
+    let repo = Repository {
+        branchless: true,
+        ..Repository::default()
+    };
+    let git = Git {
+        commands: &commands,
+        repo: &repo,
+    };
+    let c = commit(1);
+    w.fail(&format!("git reword {} -m {}", c.hash, c.full_message()));
+    assert!(git.reword_all(&[&c]).is_err());
+}
+
+#[test]
+fn non_linear_observations_do_not_supply_fabricated_selection_depths() {
+    let w = World::new(2);
+    let config = w.config();
+    let commands = w.commands();
+    let git = Git {
+        commands: &commands,
+        repo: &config.repo,
+    };
+    git.observe_stack("origin/main", "HEAD", false).unwrap();
+    let trace = w.trace();
+    let args = trace
+        .iter()
+        .find(|event| event["args"][0] == "log")
+        .unwrap()["args"]
+        .as_array()
+        .unwrap();
+    let key = format!(
+        "git {}",
+        args.iter()
+            .map(|v| v.as_str().unwrap())
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
+    let data = log(&[commit(1), commit(2)]).replace(
+        &format!("tree2\0{}\0", commit(1).hash),
+        &format!("tree2\0{:040x}\0", 0),
+    );
+    w.reply(&key, 0, &data);
+    assert!(
+        git.observe_stack("origin/main", "HEAD", false)
+            .unwrap()
+            .depths
+            .is_empty()
+    );
+}

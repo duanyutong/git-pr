@@ -69,7 +69,7 @@ pub(super) struct Service {
     pub branchless: bool,
     pub indirect_merges: Option<bool>,
     pub stack_base: Mutex<Option<String>>,
-    pub recovery_destination: bool,
+    pub resolved_destinations: Mutex<BTreeMap<String, String>>,
     pub git_context: Mutex<Option<(PathBuf, BTreeMap<OsString, OsString>)>>,
 }
 impl Service {
@@ -240,15 +240,6 @@ impl CommandRunner for Service {
         if program == "git" && args == ["remote", "-v"] {
             return Ok(CommandOutput{status:0,text:"origin\thttps://github.com/org/repo.git (fetch)\norigin\thttps://github.com/org/repo.git (push)".into()});
         }
-        if self.recovery_destination
-            && program == "git"
-            && args == ["remote", "get-url", "--push", "--all", "--", "origin"]
-        {
-            return Ok(CommandOutput {
-                status: 0,
-                text: "https://github.com/org/repo.git".into(),
-            });
-        }
         if program == "git" && args == ["branchless", "--version"] && !self.branchless {
             return Ok(CommandOutput {
                 status: 199,
@@ -280,23 +271,18 @@ impl CommandRunner for Service {
             }),
         );
         isolated_args.push(program.into());
-        if self.recovery_destination
-            && program == "git"
-            && args.starts_with(&[
-                "ls-remote".into(),
-                "--refs".into(),
-                "--".into(),
-                "https://github.com/org/repo.git".into(),
-            ])
+        if program == "git"
+            && args.starts_with(&["ls-remote".into(), "--refs".into(), "--".into()])
+            && args.len() > 3
         {
-            // The fixture's simulated hosting URL resolves to its disposable bare repository.
-            isolated_args.extend([
-                "ls-remote".into(),
-                "--refs".into(),
-                "--".into(),
-                "origin".into(),
-            ]);
-            isolated_args.extend_from_slice(&args[4..]);
+            let destinations = self.resolved_destinations.lock().unwrap();
+            if let Some(destination) = destinations.get(&args[3]) {
+                isolated_args.extend_from_slice(&args[..3]);
+                isolated_args.push(destination.clone());
+                isolated_args.extend_from_slice(&args[4..]);
+            } else {
+                isolated_args.extend_from_slice(args);
+            }
         } else {
             isolated_args.extend_from_slice(args);
         }
@@ -306,6 +292,33 @@ impl CommandRunner for Service {
             cwd,
             &BTreeMap::new(),
         )?;
+        if result.status == 0
+            && program == "git"
+            && args.starts_with(&[
+                "remote".into(),
+                "get-url".into(),
+                "--push".into(),
+                "--all".into(),
+                "--".into(),
+            ])
+        {
+            let mut destinations = self.resolved_destinations.lock().unwrap();
+            let mut urls = Vec::new();
+            for (index, target) in result.text.lines().enumerate() {
+                let url = if index == 0 {
+                    "https://github.com/org/repo.git".to_owned()
+                } else {
+                    format!("https://github.com/org/repo-{index}.git")
+                };
+                destinations.insert(url.clone(), target.to_owned());
+                urls.push(url);
+            }
+            drop(destinations);
+            return Ok(CommandOutput {
+                status: 0,
+                text: urls.join("\n"),
+            });
+        }
         if result.status == 0 && program == "git" && args.first().is_some_and(|arg| arg == "push") {
             for spec in args.iter().filter(|arg| arg.contains(":refs/heads/")) {
                 let (oid, reference) = spec.split_once(':').unwrap();

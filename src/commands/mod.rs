@@ -68,6 +68,7 @@ pub(crate) trait CommandRunner: Debug + Send + Sync {
         })
     }
 
+    #[cfg(test)]
     fn edit_messages(
         &self,
         program: &str,

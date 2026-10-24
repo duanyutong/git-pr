@@ -105,7 +105,8 @@ src/
 | `src/git/`, `src/github/`, `src/jj/` | Backend adapters in `mod.rs`, backend-specific policy and protocol interpretation; GitHub owns its HTTP adapter in `http.rs`. |
 | `src/model/` | Shared commit, pull-request and repository values in `commit.rs`, `pull_request.rs` and `repository.rs`, with commit-trailer interpretation in `trailers.rs`; `mod.rs` declares the children. |
 | `src/stack/` | Selection and ancestry policy in `selection.rs` and managed description rendering in `description.rs`; `mod.rs` declares the children. |
-| `src/submission/` | Workflow sequencing in `mod.rs`, with runtime construction, state, rewriting, pull-request operations, presentation and deterministic policy in child modules. |
+| `src/identity/` | Publication association schema, Git configuration persistence and evidence reconciliation. |
+| `src/submission/` | Workflow sequencing in `mod.rs`, with runtime construction, state, pull-request operations, presentation and deterministic policy in child modules. |
 
 The executable entry point delegates to the library's submission runtime; `lib.rs` declares application modules and exposes the supported library interface.
 Repository and pull-request value types are independent of configuration loading and external execution.

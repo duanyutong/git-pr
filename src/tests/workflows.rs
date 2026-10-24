@@ -102,15 +102,15 @@ fn selections_retain_existing_bases_or_fail_before_publication() {
         let before = f.service.prs.lock().unwrap().clone();
         let remote = f.git(&["ls-remote", "--heads", "origin"]);
         f.service.trace.lock().unwrap().clear();
-        if selection == ["topic/1..topic/3"] {
-            f.run(&selection).unwrap();
-            assert_eq!(commands(&f.trace(), "git", "push").len(), 1);
-        } else {
+        if selection == ["topic/3", "topic/1"] {
             let error = format!("{:#}", f.run(&selection).unwrap_err());
             assert!(error.contains("unsafe publication"), "{error}");
             assert_eq!(commands(&f.trace(), "git", "push"), [] as [Value; 0]);
             assert_eq!(*f.service.prs.lock().unwrap(), before);
             assert_eq!(f.git(&["ls-remote", "--heads", "origin"]), remote);
+        } else {
+            f.run(&selection).unwrap();
+            assert_eq!(commands(&f.trace(), "git", "push").len(), 1);
         }
         let prs = f.service.prs.lock().unwrap();
         assert_eq!(prs[&102]["base"]["ref"], "topic/1");
@@ -121,10 +121,63 @@ fn selections_retain_existing_bases_or_fail_before_publication() {
 }
 
 #[test]
+fn unchanged_five_commit_prefix_preserves_unselected_dependants() {
+    for trailers in [false, true] {
+        for native in [false, true] {
+            let f = Fixture::new(6, trailers);
+            let flags = if native {
+                vec!["--github-stack", "--yes"]
+            } else {
+                vec!["--no-stack"]
+            };
+            f.run(&flags).unwrap();
+            f.git(&["checkout", "topic/5"]);
+            let before = f.service.prs.lock().unwrap().clone();
+            let remote = f.git(&["ls-remote", "--heads", "origin"]);
+            let messages = f.git(&["log", "--format=%H%n%B", "main..HEAD"]);
+            f.service.trace.lock().unwrap().clear();
+
+            f.run(&flags).unwrap();
+
+            let trace = f.trace();
+            let pushes = commands(&trace, "git", "push");
+            assert_eq!(pushes.len(), 1);
+            let args = pushes[0]["args"].as_array().unwrap();
+            for (index, hash) in f.hashes.iter().take(5).enumerate() {
+                assert!(args.contains(&json!(format!(
+                    "--force-with-lease=refs/heads/topic/{}:{hash}",
+                    index + 1
+                ))));
+            }
+            assert!(
+                !args
+                    .iter()
+                    .any(|arg| arg.as_str().unwrap().contains("topic/6"))
+            );
+            assert!(!trace.iter().any(|event| {
+                event["body"]["query"]
+                    .as_str()
+                    .is_some_and(|query| query.contains("baseRefName:"))
+            }));
+            assert_eq!(f.service.prs.lock().unwrap()[&106], before[&106]);
+            assert_eq!(f.git(&["ls-remote", "--heads", "origin"]), remote);
+            assert_eq!(f.git(&["log", "--format=%H%n%B", "main..HEAD"]), messages);
+            assert_eq!(f.git(&["branch", "--show-current"]), "topic/5");
+        }
+    }
+}
+
+#[test]
 fn middle_branch_publication_refuses_unselected_dependants() {
     let f = Fixture::new(3, true);
     f.run(&[]).unwrap();
     f.git(&["checkout", "topic/2"]);
+    f.git(&[
+        "commit",
+        "--amend",
+        "-m",
+        "Amended middle\n\nRemote-Ref: topic/2",
+    ]);
     let before = f.service.prs.lock().unwrap().clone();
     f.service.trace.lock().unwrap().clear();
     let error = format!("{:#}", f.run(&[]).unwrap_err());
@@ -185,18 +238,27 @@ fn branchless_rewriting_dry_run_and_selection_recovery() {
             hash
         );
     }
-    assert!(f.output().contains("Would insert Remote-Ref"));
+    assert!(f.output().contains("Would associate"));
     f.run(&["topic/3", "topic/1"]).unwrap();
-    assert_eq!(commands(&f.trace(), "git", "reword").len(), 1);
+    assert_eq!(commands(&f.trace(), "git", "reword").len(), 0);
     for i in [1, 3] {
         let body = f.git(&["show", "-s", "--format=%B", &format!("topic/{i}")]);
-        assert!(body.contains(&format!("Remote-Ref: topic/{i}")));
+        assert!(!body.contains("Remote-Ref"));
+        assert_eq!(
+            f.git(&[
+                "config",
+                "--local",
+                "--get",
+                &format!("branch.topic/{i}.gitPrHead")
+            ]),
+            format!("github.com/org/repo refs/heads/topic/{i}")
+        );
     }
     assert!(
         !f.git(&["show", "-s", "--format=%B", "topic/2"])
             .contains("Remote-Ref")
     );
-    assert_ne!(f.git(&["rev-parse", "topic/3"]), original[2]);
+    assert_eq!(f.git(&["rev-parse", "topic/3"]), original[2]);
     let prs = f.service.prs.lock().unwrap();
     assert_eq!(prs.len(), 2);
     assert_eq!(prs[&102]["base"]["ref"], "topic/1");
@@ -258,9 +320,9 @@ fn failures_preserve_completed_pushes_and_report_exact_postcondition() {
     let f = Fixture::new(2, true);
     f.run(&["--stop-after=push"]).unwrap();
     f.service.trace.lock().unwrap().clear();
-    let key = format!(
-        "git push --porcelain --no-follow-tags -f -- origin {}:refs/heads/topic/1 {}:refs/heads/topic/2",
-        f.hashes[0], f.hashes[1]
+    let mut key = format!(
+        "git push --porcelain --no-follow-tags --force-with-lease=refs/heads/topic/1:{} --force-with-lease=refs/heads/topic/2:{} -- origin {}:refs/heads/topic/1 {}:refs/heads/topic/2",
+        f.hashes[0], f.hashes[1], f.hashes[0], f.hashes[1]
     );
     f.service
         .command_errors
@@ -268,14 +330,22 @@ fn failures_preserve_completed_pushes_and_report_exact_postcondition() {
         .unwrap()
         .insert(key.clone(), (1, "reference already exists".into()));
     f.run(&["--stop-after=push"]).unwrap();
-    assert_eq!(commands(&f.trace(), "git", "ls-remote").len(), 1);
+    assert_eq!(commands(&f.trace(), "git", "ls-remote").len(), 2);
     f.git(&["push", "-f", "origin", "main:refs/heads/topic/1"]);
+    f.service.command_errors.lock().unwrap().remove(&key);
+    key = key.replacen(
+        &format!("topic/1:{}", f.hashes[0]),
+        &format!("topic/1:{}", f.trunk),
+        1,
+    );
+    f.service
+        .command_errors
+        .lock()
+        .unwrap()
+        .insert(key.clone(), (1, "reference already exists".into()));
     let error = f.run(&["--stop-after=push"]).unwrap_err();
     assert!(format!("{error:#}").contains("failed to push 1 branch"));
-    let verification = format!(
-        "git ls-remote --refs -- {} refs/heads/topic/1 refs/heads/topic/2",
-        f.git(&["remote", "get-url", "--push", "origin"])
-    );
+    let verification = "git ls-remote --refs -- https://github.com/org/repo.git refs/heads/topic/1 refs/heads/topic/2".to_owned();
     f.service
         .command_errors
         .lock()
@@ -334,7 +404,7 @@ fn empty_invalid_duplicate_unbranched_and_detached_submissions() {
         "-m",
         "Feature 2\n\nRemote-Ref: bad..branch",
     ]);
-    assert!(format!("{:#}", f.run(&[]).unwrap_err()).contains("refusing to push"));
+    assert!(format!("{:#}", f.run(&[]).unwrap_err()).contains("invalid Remote-Ref"));
     assert_eq!(
         commands(&f.trace(), "git", "push"),
         [] as [serde_json::Value; 0]
@@ -517,7 +587,7 @@ fn branchless_submission_shares_body_analysis_and_bases_with_native_linking() {
         } else {
             &[]
         };
-        for first in [true, false] {
+        for _ in 0..2 {
             f.service.trace.lock().unwrap().clear();
             BODY_ANALYSES.set(0);
             BASE_PLANS.set(0);
@@ -526,7 +596,7 @@ fn branchless_submission_shares_body_analysis_and_bases_with_native_linking() {
             assert_eq!(BASE_PLANS.get(), 1);
             let trace = f.trace();
             assert_eq!(commands(&trace, "git", "push").len(), 1);
-            assert_eq!(commands(&trace, "git", "reword").len(), usize::from(first));
+            assert_eq!(commands(&trace, "git", "reword").len(), 0);
             assert!(!trace.iter().any(|v| v["program"] == "gh"));
         }
     }

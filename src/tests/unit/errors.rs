@@ -400,16 +400,19 @@ fn failed_publication_verification_retains_both_failures_and_uncertainty() {
     let w = World::new(1);
     w.reply(
         &format!(
-            "git push --porcelain --no-follow-tags -f -- origin {}:refs/heads/topic/1",
+            "git push --porcelain --no-follow-tags --force-with-lease=refs/heads/topic/1: -- origin {}:refs/heads/topic/1",
             commit(1).hash
         ),
         128,
         "connection lost during push",
     );
-    w.reply(
-        "git ls-remote --refs -- https://github.com/org/repo.git refs/heads/topic/1",
-        128,
-        "remote verification unavailable",
+    w.0.lock().unwrap().responses.insert(
+        "git ls-remote --refs -- https://github.com/org/repo.git refs/heads/topic/1".into(),
+        vec![
+            super::support::Response::Output(0, String::new()),
+            super::support::Response::Output(128, "remote verification unavailable".into()),
+        ]
+        .into(),
     );
     let diagnostic = error(&w, &[]);
     for expected in [
@@ -429,13 +432,21 @@ fn failed_publication_requires_resolvable_push_destinations() {
         let w = World::new(1);
         w.reply(
             &format!(
-                "git push --porcelain --no-follow-tags -f -- origin {}:refs/heads/topic/1",
+                "git push --porcelain --no-follow-tags --force-with-lease=refs/heads/topic/1: -- origin {}:refs/heads/topic/1",
                 commit(1).hash
             ),
             128,
             "connection lost during push",
         );
-        w.reply("git remote get-url --push --all -- origin", status, output);
+        w.0.lock().unwrap().responses.insert(
+            "git remote get-url --push --all -- origin".into(),
+            vec![
+                super::support::Response::Output(0, "https://github.com/org/repo.git".into()),
+                super::support::Response::Output(0, "https://github.com/org/repo.git".into()),
+                super::support::Response::Output(status, output.into()),
+            ]
+            .into(),
+        );
         let diagnostic = error(&w, &[]);
         for expected in [
             "connection lost during push",

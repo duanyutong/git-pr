@@ -30,6 +30,7 @@ fn number(value: &Value) -> u64 {
 fn commit(value: &Value) -> Commit {
     Commit {
         conflicted: false,
+        publication: None,
         hash: text(&value["Hash"]).into(),
         change_id: text(&value["ChangeID"]).into(),
         date: value["Date"]
