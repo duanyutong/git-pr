@@ -6,11 +6,12 @@ use policy::{CommitDisposition, short_hash};
 
 use std::collections::HashSet;
 
+#[cfg(test)]
+use crate::diagnostics::errors::Fatal;
 use anyhow::{Context, Result, bail};
 
 use crate::{
     commands::Commands,
-    diagnostics::errors::Fatal,
     jj,
     model::{Commit, Repository, shorten_title},
     stack::selection::{self, RefSync},
@@ -68,16 +69,11 @@ pub(crate) fn resolve_refs(commands: &Commands, references: &[String]) -> Result
 pub(crate) struct StackObservation {
     pub(crate) commits: Vec<Commit>,
     pub(crate) depths: std::collections::HashMap<String, usize>,
-    pub(crate) tip_change_id: String,
     pub(crate) tip_hash: String,
     pub(crate) base_hash: String,
 }
 
 impl Git<'_> {
-    pub(crate) fn resolve(&self, reference: &str) -> Result<String> {
-        resolve_ref(self.commands, reference)
-    }
-
     pub(crate) fn head(&self) -> Result<String> {
         if self.repo.jj {
             self.commands
@@ -96,6 +92,7 @@ impl Git<'_> {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn depth(&self, from: &str, to: &str) -> Result<usize> {
         let output = self
             .commands
@@ -106,10 +103,7 @@ impl Git<'_> {
             .with_context(|| format!("ERROR: failed to parse commit count for {from}..{to}"))
     }
 
-    pub(crate) fn at_depth(&self, head: &str, depth: usize) -> Result<String> {
-        self.resolve(&format!("{head}~{depth}"))
-    }
-
+    #[cfg(test)]
     pub(crate) fn at_depths(&self, head: &str, depths: &[usize]) -> Result<Vec<String>> {
         resolve_refs(
             self.commands,
@@ -164,17 +158,9 @@ impl Git<'_> {
             parents,
         } = snapshot;
         let depths = snapshot::linear_depths(&commits, &parents);
-        let tip_change_id = if self.repo.jj {
+        if self.repo.jj {
             jj::fill_change_ids(self.commands, &mut commits)?;
-            // Presentation filtering may remove an empty tip, but recovery must
-            // retain the identity already obtained by the batched observation.
-            commits
-                .iter()
-                .find(|commit| commit.hash == tip)
-                .map_or_else(String::new, |commit| commit.change_id.clone())
-        } else {
-            String::new()
-        };
+        }
         let mut tip_hash = commits
             .first()
             .map_or_else(|| tip.to_owned(), |c| c.hash.clone());
@@ -190,7 +176,6 @@ impl Git<'_> {
         Ok(StackObservation {
             commits,
             depths,
-            tip_change_id,
             tip_hash,
             base_hash,
         })
@@ -326,6 +311,7 @@ impl Git<'_> {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn local_branch(&self, commit: &Commit, output: &str) -> String {
         if let Some(branch) = selection::local_branch(output, &commit.hash) {
             return branch;
@@ -345,6 +331,7 @@ impl Git<'_> {
         String::new()
     }
 
+    #[cfg(test)]
     pub(crate) fn reword_all(&self, commits: &[&Commit]) -> Result<()> {
         if commits.is_empty() {
             return Ok(());
@@ -399,6 +386,7 @@ impl Git<'_> {
         self.reword_message(commit, &commit.full_message())
     }
 
+    #[cfg(test)]
     fn reword_message(&self, commit: &Commit, message: &str) -> Result<String> {
         if self.repo.jj {
             if commit.change_id.is_empty() {
@@ -433,6 +421,7 @@ impl Git<'_> {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn push_all(&self, commits: &[&Commit]) -> Result<()> {
         self.push_with_leases(commits, None)
     }
@@ -675,7 +664,11 @@ impl Git<'_> {
         branches: &std::collections::HashMap<&str, &str>,
         checked_out: &HashSet<String>,
     ) {
-        let name = commit.remote_ref();
+        let name = commit
+            .publication
+            .as_ref()
+            .and_then(|binding| binding.anchor.as_deref())
+            .unwrap_or_else(|| commit.remote_ref());
         let Some(&local) = branches.get(name) else {
             return;
         };
@@ -724,7 +717,11 @@ impl Git<'_> {
         bookmarks: &std::collections::HashMap<String, jj::Bookmark>,
         branches: &std::collections::HashMap<&str, &str>,
     ) -> bool {
-        let name = commit.remote_ref();
+        let name = commit
+            .publication
+            .as_ref()
+            .and_then(|binding| binding.anchor.as_deref())
+            .unwrap_or_else(|| commit.remote_ref());
         let Some(bookmark) = bookmarks.get(name) else {
             return false;
         };

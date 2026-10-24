@@ -161,7 +161,7 @@ fn all_three_step_workflow_sequences_preserve_identity_and_human_text() {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Boundary {
     Discovery,
-    Rewrite,
+    Binding,
     Push,
     Create,
     Content,
@@ -199,10 +199,12 @@ impl CommandRunner for BoundaryFault {
         let targeted = program == "git"
             && matches!(
                 (self.boundary, args.first().map(String::as_str)),
-                (Boundary::Discovery, Some("symbolic-ref"))
-                    | (Boundary::Rewrite, Some("reword"))
-                    | (Boundary::Push, Some("push"))
+                (Boundary::Discovery, Some("symbolic-ref")) | (Boundary::Push, Some("push"))
             );
+        let targeted = targeted
+            || (program == "git"
+                && self.boundary == Boundary::Binding
+                && args.starts_with(&["config".into(), "--local".into(), "--add".into()]));
         let failed = targeted && self.inject();
         if failed && !self.after_effect {
             self.record();
@@ -251,7 +253,7 @@ impl Transport for BoundaryFault {
 fn before_effect_and_lost_acknowledgement_failures_converge_without_duplicate_prs() {
     for boundary in [
         Boundary::Discovery,
-        Boundary::Rewrite,
+        Boundary::Binding,
         Boundary::Push,
         Boundary::Create,
         Boundary::Content,
@@ -265,8 +267,8 @@ fn before_effect_and_lost_acknowledgement_failures_converge_without_duplicate_pr
                 1
             };
             for fail_at in 1..=positions {
-                let world = World::new(if boundary == Boundary::Rewrite { 1 } else { 3 });
-                if boundary == Boundary::Rewrite {
+                let world = World::new(if boundary == Boundary::Binding { 1 } else { 3 });
+                if boundary == Boundary::Binding {
                     let mut m = world.0.lock().unwrap();
                     m.branchless = true;
                     m.commits[0].attrs.clear();
@@ -308,12 +310,24 @@ fn before_effect_and_lost_acknowledgement_failures_converge_without_duplicate_pr
                 if !after_effect
                     && matches!(
                         boundary,
-                        Boundary::Discovery | Boundary::Rewrite | Boundary::Push
+                        Boundary::Discovery | Boundary::Binding | Boundary::Push
                     )
                 {
                     assert!(initial.is_err());
                     assert!(world.0.lock().unwrap().prs.is_empty());
                     assert!(world.0.lock().unwrap().remote_refs.is_empty());
+                }
+                if boundary == Boundary::Create && !after_effect {
+                    assert!(
+                        format!("{:#}", run(&app, &flags).unwrap_err()).contains("unknown outcome")
+                    );
+                    // The injected fixture proves that this request was never dispatched.
+                    world
+                        .0
+                        .lock()
+                        .unwrap()
+                        .config
+                        .remove("git-pr.pendingCreate");
                 }
                 // Completed effects are retained. A fresh invocation observes before replay.
                 run(&app, &flags).unwrap_or_else(|error| {
@@ -328,14 +342,14 @@ fn before_effect_and_lost_acknowledgement_failures_converge_without_duplicate_pr
                     for (index, commit) in m.commits.iter().enumerate() {
                         let number = 101 + u64::try_from(index).unwrap();
                         let pr = &m.prs[&number];
-                        assert_eq!(pr["head"]["ref"], commit.remote_ref());
+                        assert_eq!(pr["head"]["ref"], format!("topic/{}", index + 1));
                         assert_eq!(pr["title"], commit.title);
                         assert_eq!(
                             pr["base"]["ref"],
                             if index == 0 {
-                                "main"
+                                "main".into()
                             } else {
-                                m.commits[index - 1].remote_ref()
+                                format!("topic/{index}")
                             }
                         );
                         assert!(
@@ -346,7 +360,7 @@ fn before_effect_and_lost_acknowledgement_failures_converge_without_duplicate_pr
                         );
                         assert_eq!(
                             m.remote_refs
-                                .get(&format!("refs/heads/{}", commit.remote_ref())),
+                                .get(&format!("refs/heads/topic/{}", index + 1)),
                             Some(&commit.hash)
                         );
                         if boundary == Boundary::Content {
@@ -451,11 +465,14 @@ fn alternate_remote_mock_answers_and_publication_follow_the_selected_name() {
     let trace = world.trace();
     assert!(trace.iter().any(|event| event["args"][0] == "symbolic-ref"
         && event["args"][1] == "refs/remotes/publish/HEAD"));
-    assert!(
-        trace
-            .iter()
-            .any(|event| event["args"][0] == "push" && event["args"][5] == "publish")
-    );
+    assert!(trace.iter().any(|event| {
+        event["args"][0] == "push"
+            && event["args"]
+                .as_array()
+                .unwrap()
+                .windows(2)
+                .any(|pair| pair == [json!("--"), json!("publish")])
+    }));
     assert_eq!(world.0.lock().unwrap().prs.len(), 2);
 }
 

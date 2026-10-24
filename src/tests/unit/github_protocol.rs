@@ -8,6 +8,63 @@ use serde_json::json;
 use std::sync::{Arc, Mutex};
 
 #[test]
+fn unpublished_commit_associations_accept_missing_commit_statuses_only() {
+    for status in [404, 422] {
+        with_github(|g, w| {
+            let mut unpublished = commit(3);
+            unpublished.attrs.clear();
+            let path = format!("commits/{}/pulls", unpublished.hash);
+            w.http(
+                &format!("GET {path}"),
+                vec![Reply::Output(
+                    status,
+                    json!({"message":format!("No commit found for SHA: {}", unpublished.hash),"status":status.to_string()}).to_string(),
+                )],
+            );
+            assert_eq!(
+                g.identity_heads(&unpublished.hash).unwrap(),
+                Vec::<String>::new()
+            );
+            assert_eq!(g.find(&unpublished).unwrap(), 0);
+            assert_eq!(
+                w.trace()
+                    .iter()
+                    .filter(|event| event["path"] == path)
+                    .count(),
+                1
+            );
+        });
+    }
+    for (status, message) in [
+        (404, "Not Found"),
+        (422, "Validation Failed"),
+        (401, "No commit found"),
+        (403, "No commit found"),
+    ] {
+        with_github(|g, w| {
+            let hash = commit(3).hash;
+            let path = format!("commits/{hash}/pulls");
+            w.http(
+                &format!("GET {path}"),
+                vec![
+                    Reply::Output(status, json!({"message":message}).to_string()),
+                    Reply::Output(200, "[]".into()),
+                ],
+            );
+            assert!(g.identity_heads(&hash).is_err());
+            assert_eq!(g.identity_heads(&hash).unwrap(), Vec::<String>::new());
+            assert_eq!(
+                w.trace()
+                    .iter()
+                    .filter(|event| event["path"] == path)
+                    .count(),
+                2
+            );
+        });
+    }
+}
+
+#[test]
 fn publication_dependants_require_complete_paginated_identity_observations() {
     with_github(|g, w| {
         let selected = std::collections::HashMap::from([(102, ("topic/2", "topic/1"))]);

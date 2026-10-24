@@ -189,6 +189,7 @@ impl CommandRunner for TimedRunner {
         result
     }
 
+    #[cfg(test)]
     fn edit_messages(
         &self,
         program: &str,

@@ -256,7 +256,7 @@ fn recovery_refuses_unproven_or_unsafe_evidence_without_effects() {
         }
         let error = format!("{:#}", w.run(&["--no-stack", "--yes"]).unwrap_err());
         assert!(
-            error.contains("no local rewrites, pushes or PR changes"),
+            error.contains("no local metadata, pushes or PR changes"),
             "{case}: {error}"
         );
         assert!(!w.trace().iter().any(effect), "{case}: {error}");
@@ -1006,6 +1006,7 @@ fn transitions_resume_after_interruption_at_every_mutation_boundary() {
                         }
                     }
                 }
+                resolve_undispatched_creation(&w, &flags);
                 w.run(&flags).unwrap_or_else(|error| {
                     panic!("native={native}, order={order:?}, boundary={boundary}: {error:#}")
                 });
@@ -1442,4 +1443,26 @@ fn repeated_recovery_can_recreate_an_anchor_deleted_before_journal_cleanup() {
         .remove("refs/heads/git-pr/transition/101");
     w.run(&["--no-stack"]).unwrap();
     assert!(!w.0.lock().unwrap().config.contains_key(JOURNAL));
+}
+
+fn resolve_undispatched_creation(w: &Arc<World>, flags: &[&str]) {
+    let pending_without_review = {
+        let memory = w.0.lock().unwrap();
+        memory
+            .config
+            .get("git-pr.pendingCreate")
+            .is_some_and(|value| {
+                let head = value
+                    .split(' ')
+                    .nth(3)
+                    .unwrap()
+                    .trim_start_matches("refs/heads/");
+                !memory.prs.values().any(|pr| pr["head"]["ref"] == head)
+            })
+    };
+    if pending_without_review {
+        assert!(format!("{:#}", w.run(flags).unwrap_err()).contains("unknown outcome"));
+        // The prefix oracle knows that no creation request reached the service.
+        w.0.lock().unwrap().config.remove("git-pr.pendingCreate");
+    }
 }

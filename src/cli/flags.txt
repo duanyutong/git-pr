@@ -31,7 +31,7 @@
   -skip-draft
     	Skip commits with [draft] in title
   -stop-after string
-    	Stop after phase: validate|get-commits|rewrite|push|pr-create
+    	Stop after phase: validate|get-commits|prepare|push|pr-create (rewrite is an alias)
   -t string
     	Set tags for current stack, ignore default (comma separated)
   -timeout int

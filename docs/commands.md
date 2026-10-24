@@ -13,16 +13,11 @@ gh auth login
 
 ## Repository initialisation
 
-The following initialisation applies only to Git repositories using git-branchless for trailer insertion:
-
-```sh
-git branchless init
-```
-
-Commits without a `Remote-Ref` message trailer require a local branch or bookmark.
-The tool inserts the trailer through git-branchless or Jujutsu and force-pushes the recorded destination.
-Git can operate without either rewrite backend when all required trailers already exist.
-Jujutsu does not require git-branchless initialisation.
+Plain Git requires no additional initialisation.
+Commits without a `Remote-Ref` message trailer require a maintained local branch or Jujutsu bookmark.
+Submission stores their publication associations in repository-local Git configuration and publishes their original objects with expected-object leases.
+Existing trailers remain compatible and are preserved verbatim.
+Git-branchless may manage the local stack, but is not required for submission.
 
 ## Submission
 
@@ -36,12 +31,13 @@ git pr feature-a feature-c          # Individual commits in ancestry order.
 
 Subsequent invocations update the existing PRs for the selected commits.
 
-Existing PRs must retain their published base relationships.
-Reordering published commits, inserting a commit below an existing PR, or selecting commits in a manner which would change an existing PR's base is currently rejected before trailer rewriting or publication.
-This restriction prevents GitHub from recognising an unintended indirect merge whilst branch references and PR relationships disagree.
-Restore the published order or arrange a separately verified transition before retrying; `--yes`, `--no-stack` and native stack mode do not bypass this requirement.
+Changes to published base relationships require a verified transition before publication.
+The transition procedure prevents GitHub from recognising an unintended indirect merge whilst branch references and PR relationships disagree.
+Incomplete evidence stops submission; `--yes`, `--no-stack` and native stack mode do not bypass these checks.
 
-Publication also stops if an open PR outside the verified selection targets a branch which would be pushed.
+Publication also stops if an open PR outside the verified selection targets a branch whose published object would change.
+An unchanged selected prefix may be resubmitted whilst later PRs remain outside the selection, provided that no publication-base transition is required.
+Unchanged objects are verified against the actual push destination and published with explicit expected-object leases; tracking refs and PR-head observations alone do not establish this exception.
 Include the complete dependent stack where appropriate.
 A head with only closed or merged PR history is rejected; retrying does not create a replacement PR automatically.
 A recorded merge may target another stack branch rather than the repository trunk, so the diagnostic shall not prescribe an unconditional rebase onto the trunk.
@@ -86,8 +82,8 @@ git pr --help
 ```
 
 The [configuration reference](configuration.md) describes precedence and execution checkpoints.
-A dry run previews missing trailers and subsequent operations without changing local or remote state.
-Draft filtering applies before rewriting and is reapplied when the rewritten stack is read.
+A dry run previews publication associations and subsequent operations without changing local or remote state.
+Submission preserves commit identities and stores associations in [repository-local Git configuration](publication-identity.md).
 
 ## Console presentation and GitHub waits
 

@@ -351,11 +351,15 @@ fn real_push_url_rewriting_and_explicit_push_urls_recover_lost_acknowledgements(
         assert_eq!(f.git(&["ls-remote", &fetch, "refs/heads/topic/1"]), "");
         f.run(&["--no-stack"]).unwrap();
         assert_eq!(f.service.prs.lock().unwrap().len(), 1);
-        assert!(
-            f.trace()
-                .iter()
-                .any(|event| event["args"][0] == "ls-remote" && event["args"][3] == push)
-        );
+        assert!(f.trace().iter().any(|event| event["args"][0] == "ls-remote"
+            && event["args"][3].as_str().is_some_and(|url| {
+                f.service
+                    .resolved_destinations
+                    .lock()
+                    .unwrap()
+                    .get(url)
+                    .is_some_and(|target| target == push)
+            })));
     }
 }
 

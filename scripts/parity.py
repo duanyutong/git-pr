@@ -225,6 +225,15 @@ class Service:
                         "status": 0,
                         "output": "origin\thttps://github.com/org/repo.git (fetch)\norigin\thttps://github.com/org/repo.git (push)\n",
                     }
+                if program == "git" and args == [
+                    "remote",
+                    "get-url",
+                    "--push",
+                    "--all",
+                    "--",
+                    "origin",
+                ]:
+                    return 200, {"status": 0, "output": "https://github.com/org/repo.git\n"}
                 if (
                     program == "git"
                     and args == ["branchless", "--version"]
@@ -957,6 +966,8 @@ def configuration_reads(event: Record) -> list[list[str]]:
     args = event.get("args", [])
     if event.get("program") != "git" or args[:1] != ["config"]:
         return []
+    if "--show-origin" in args:
+        return []  # Publication records have an independent persistence contract.
     if "--get-regexp" not in args:
         return [list(args)] if "--get" in args else []
     known = NEW_GIT_SETTINGS | frozenset(
@@ -1002,12 +1013,17 @@ def comparable_trace(trace: list[Record], *, reference: bool = False) -> collect
             continue
         program, args = event["program"], event["args"]
         if program == "git" and args[:1] == ["push"]:
-            assert "-f" in args
+            assert "-f" in args or any(arg.startswith("--force-with-lease=") for arg in args)
             offset = args.index("origin")
             for spec in args[offset + 1 :]:
                 oid, destination = spec.split(":", 1)
                 result.append(["publish", "origin", oid[:8], destination])
         elif program == "git" and args[:1] == ["config"]:
+            if "--show-origin" in args or (
+                "--local" in args
+                and any("gitPr" in arg or "pendingCreate" in arg or "gitpr" in arg for arg in args)
+            ):
+                continue
             reads = configuration_reads(event)
             for logical in reads or [list(args)]:
                 if logical[-1] in NEW_GIT_SETTINGS:
@@ -1045,6 +1061,7 @@ def comparable_output(output: Record) -> Record:
         result["stdout"],
     )
     result["stdout"] = result["stdout"].replace("Waiting for GitHub to sync...\n", "")
+    result["stdout"] = result["stdout"].replace("push --force-with-lease ", "push -f ")
     result["stdout"] = re.sub(
         r"(?m)^((?:https://github\.com/|\[#\d+\]\(|[0-9a-f]{8} #\d+: )[^\n]+) \(updated\)$",
         r"\1",
@@ -1211,19 +1228,26 @@ def operation_budgets(candidate: Record) -> None:
             assert event["program"] != "gh", "the application must own API effects"
             if event["program"] == "git" and event["args"][:1] == ["push"]:
                 args = event["args"]
-                assert args[:6] == [
+                assert args[:3] == [
                     "push",
                     "--porcelain",
                     "--no-follow-tags",
-                    "-f",
-                    "--",
-                    "origin",
                 ]
-                assert 1 <= len(args[6:]) <= 128
-                assert sum(len(spec.encode()) + 1 for spec in args[6:]) <= 64 * 1024
+                split = args.index("--")
+                assert args[split + 1] == "origin"
+                specs = args[split + 2 :]
+                leases = args[3:split]
+                assert len(leases) == len(specs)
                 assert all(
-                    re.fullmatch(r"[0-9a-f]{40,64}:refs/heads/.+", spec) for spec in args[6:]
+                    re.fullmatch(r"--force-with-lease=refs/heads/.+:(?:[0-9a-f]{40,64})?", lease)
+                    for lease in leases
                 )
+                assert {lease.split("=", 1)[1].rsplit(":", 1)[0] for lease in leases} == {
+                    spec.split(":", 1)[1] for spec in specs
+                }
+                assert 1 <= len(specs) <= 128
+                assert sum(len(spec.encode()) + 1 for spec in specs) <= 64 * 1024
+                assert all(re.fullmatch(r"[0-9a-f]{40,64}:refs/heads/.+", spec) for spec in specs)
         elif event["event"] == "http" and event["path"] == "/graphql":
             variables = event["body"]["variables"]
             count = sum(key.startswith(("h", "p", "b")) for key in variables)
@@ -1250,6 +1274,70 @@ def operation_budgets(candidate: Record) -> None:
             assert phase["scheduled_wait_seconds"] == 0
 
 
+def compare_preserved_identity(name: str, reference: Record, candidate: Record) -> None:
+    """Check the declared transition from generated trailers to local associations."""
+    initial = comparable_snapshot(candidate["initial_snapshot"])
+    initial_refs = dict(line.split("|", 1) for line in initial["refs"].splitlines())
+    assert all(output["status"] == 0 for output in candidate["outputs"])
+    assert not any(
+        event["event"] == "start" and event["args"][:1] in (["reword"], ["describe"], ["rebase"])
+        for event in candidate["trace"]
+    ), "publication must not rewrite history"
+    for index, (before, after) in enumerate(
+        zip(reference["snapshot"], candidate["snapshot"], strict=True)
+    ):
+        expected, actual = comparable_snapshot(before), comparable_snapshot(after)
+        refs = dict(line.split("|", 1) for line in actual["refs"].splitlines())
+        prior_refs = dict(line.split("|", 1) for line in expected["refs"].splitlines())
+        assert initial["commits"].items() <= actual["commits"].items()
+        if index == 0:
+            assert all(
+                refs[key] == oid
+                for key, oid in initial_refs.items()
+                if key.startswith("refs/heads/")
+            )
+            assert actual["checkout"] == initial["checkout"]
+            assert actual["working_copy"] == initial["working_copy"]
+        assert actual["branch"] == initial["branch"]
+        if name == "no-rewrite-backend":
+            assert expected["prs"] == {}
+            assert set(actual["prs"]) == {"101"}
+        else:
+            assert expected["prs"].keys() == actual["prs"].keys()
+        replacements = {
+            oid: refs[key]
+            for key, oid in prior_refs.items()
+            if key.startswith("refs/heads/") and key in refs
+        }
+        for number, pr in actual["prs"].items():
+            local = "refs/heads/" + pr["head"]["ref"]
+            assert refs["refs/remotes/origin/" + pr["head"]["ref"]] == refs[local]
+            assert actual["commits"][refs[local]][2].startswith(pr["title"])
+            assert pr["state"] == "open" and pr["draft"] is True
+            if name == "no-rewrite-backend":
+                assert pr["base"]["ref"] == "main"
+                continue
+            prior = expected["prs"][number]
+            assert {k: v for k, v in prior.items() if k != "body"} == {
+                k: v for k, v in pr.items() if k != "body"
+            }
+            body = prior["body"]
+            for old, new in replacements.items():
+                body = body.replace(old, new).replace(old[:8], new[:8])
+            if name == "jj-workspace":
+                # The candidate retains the unselected, unnumbered predecessor as context.
+                base = initial_refs["refs/heads/topic/1"]
+                row = re.search(r"\* #101 👈 This PR \([0-9a-f]{8}\)", body)
+                assert row is not None
+                start, end = "<!-- git-pr-stack-start -->", "<!-- git-pr-stack-end -->"
+                old_footer = f"{start}\n{row.group()}\n\n{end}"
+                context = f"* [Feature 1 ({base[:8]})](https://github.com/org/repo/commit/{base}) — fixture&#x200B;@example.com"
+                new_footer = f"{start}\nThis PR is entry **2 of 2** in a stack (newest at the top)\n\n{row.group()}\n{context}\n\n{end}"
+                body = body.replace(old_footer, new_footer)
+            assert body == pr["body"], (name, index, body, pr["body"])
+    operation_budgets(candidate)
+
+
 def compare(
     name: str,
     reference: Record,
@@ -1259,7 +1347,7 @@ def compare(
     rust_reference: bool = False,
 ) -> None:
     """Compare effects exactly, with an explicit ledger of efficiency changes."""
-    if name in {"partial", "middle-descendants", "native-rebuild", "native-partial-unstack"}:
+    if name in {"partial", "native-rebuild", "native-partial-unstack"}:
         compare_refused_publication(
             name, reference, candidate, directory, rust_reference=rust_reference
         )
@@ -1267,13 +1355,16 @@ def compare(
     if name == "branchless-rewrite":
         assert candidate["snapshot"] == [candidate["initial_snapshot"]]
         assert candidate["outputs"][0]["status"] == 0
-        assert "Would insert Remote-Ref" in candidate["outputs"][0]["stdout"]
+        assert "Would associate" in candidate["outputs"][0]["stdout"]
         assert not any(
             e["event"] == "http"
             or (e["event"] == "start" and e["args"][0] in {"reword", "describe", "push"})
             for e in candidate["trace"]
         )
         assert reference["snapshot"] != [reference["initial_snapshot"]]
+        return
+    if name in {"no-rewrite-backend", "jj-rewrite", "jj-workspace", "changed-branchless"}:
+        compare_preserved_identity(name, reference, candidate)
         return
     differences = []
     if [
@@ -1406,15 +1497,10 @@ def compare_refused_publication(
     rust_reference: bool,
 ) -> None:
     """Require exact safe-prefix parity and zero effects for newly rejected transitions."""
-    prefix = 2 if name == "partial" else 1
+    prefix = 3 if name == "partial" else 1
     assert len(candidate["outputs"]) == len(reference["outputs"]) == (4 if name == "partial" else 2)
     expected = json.loads(json.dumps(candidate["snapshot"][prefix - 1]))
-    if name == "middle-descendants":
-        expected["branch"] = "topic/2"
-        expected["checkout"] = dict(line.split("|", 1) for line in expected["refs"].splitlines())[
-            "refs/heads/topic/2"
-        ]
-    elif name != "partial":
+    if name != "partial":
         for pr in expected["prs"].values():
             pr["stack"] = {"number": 9}
             pr["base"]["ref"] = "stale"
@@ -1422,7 +1508,7 @@ def compare_refused_publication(
         output = candidate["outputs"][index]
         assert output["status"] == 2
         assert (
-            "publication safety preflight failed; no local rewrites, pushes or PR changes were performed"
+            "publication safety preflight failed; no local metadata, pushes or PR changes were performed"
             in output["stderr"]
         )
         assert "unsafe publication:" in output["stderr"]
@@ -1506,11 +1592,27 @@ def cli_parity(release: bool = False) -> int:
                         result.stdout.replace(ADDED_HELP, "")
                         .replace(STACK_UP_HELP, LEGACY_REVERSE_HELP)
                         .replace(BRANCH_HELP, LEGACY_BRANCH_HELP)
-                        .replace(VERBOSE_HELP, LEGACY_VERBOSE_HELP),
+                        .replace(VERBOSE_HELP, LEGACY_VERBOSE_HELP)
+                        .replace(
+                            "validate|get-commits|prepare|push|pr-create (rewrite is an alias)",
+                            "validate|get-commits|rewrite|push|pr-create",
+                        )
+                        .replace(
+                            "validate, get-commits, prepare, rewrite, push, pr-create",
+                            "validate, get-commits, rewrite, push, pr-create",
+                        ),
                         stderr.replace(ADDED_HELP, "")
                         .replace(STACK_UP_HELP, LEGACY_REVERSE_HELP)
                         .replace(BRANCH_HELP, LEGACY_BRANCH_HELP)
-                        .replace(VERBOSE_HELP, LEGACY_VERBOSE_HELP),
+                        .replace(VERBOSE_HELP, LEGACY_VERBOSE_HELP)
+                        .replace(
+                            "validate|get-commits|prepare|push|pr-create (rewrite is an alias)",
+                            "validate|get-commits|rewrite|push|pr-create",
+                        )
+                        .replace(
+                            "validate, get-commits, prepare, rewrite, push, pr-create",
+                            "validate, get-commits, rewrite, push, pr-create",
+                        ),
                     )
                 )
         if results[0] != results[1]:
@@ -1625,9 +1727,9 @@ def main() -> None:
             "size": 3,
             "runs": [
                 [],
+                ["topic/2"],
                 ["topic/1..topic/3"],
                 {"args": ["topic/3", "topic/1"], "candidate_status": 2},
-                {"args": ["topic/2"], "candidate_status": 2},
             ],
         },
         "dry-run": {"args": ["--dry-run"]},
@@ -1671,7 +1773,7 @@ def main() -> None:
             "stack_error": "! [rejected] topic/2 (non-fast-forward)",
         },
         "api-failure": {"size": 1, "api_error": True, "status": 2},
-        "no-rewrite-backend": {"size": 1, "rewrite": True, "status": 1},
+        "no-rewrite-backend": {"size": 1, "rewrite": True, "status": 1, "candidate_status": 0},
         "invalid-range": {"args": ["main...HEAD"], "status": 1},
         "display-formats": {
             "size": 1,
@@ -1683,7 +1785,7 @@ def main() -> None:
         },
         "middle-descendants": {
             "size": 3,
-            "runs": [[], {"args": [], "checkout": "topic/2", "candidate_status": 2}],
+            "runs": [[], {"args": [], "checkout": "topic/2"}],
         },
         "changed-branchless": {
             "backend": "branchless",

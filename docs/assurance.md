@@ -108,7 +108,7 @@ The function now resides in `src/stack/selection.rs`; the historical mutation id
 The reviewed exclusion matches only the current source path, function and operator replacement, permitting line and column numbers to change without excluding other mutations.
 It shall be reported as an excluded equivalent operator, not as a caught executable mutation.
 
-Both production callers, `State::discover` in `src/submission/state.rs` and `State::rewrite` in `src/submission/rewrite.rs`, obtain the depth map from `Git::observe_stack`.
+The production caller, `State::discover` in `src/submission/state.rs`, obtains the depth map from `Git::observe_stack`.
 That observation obtains depths from `snapshot::linear_depths`, which verifies the complete single-parent path before assigning a unique rank to each commit identity and its base.
 An unverified path produces no ranks rather than ambiguous or duplicate ranks.
 Within `slice_start`, the depth comparison is reached only after the function has established that the requested base is absent from the visible stack.

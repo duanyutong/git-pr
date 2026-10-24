@@ -7,6 +7,7 @@ pub(crate) mod credentials;
 pub(crate) mod diagnostics;
 pub(crate) mod git;
 pub(crate) mod github;
+pub(crate) mod identity;
 pub(crate) mod jj;
 pub(crate) mod model;
 pub(crate) mod stack;

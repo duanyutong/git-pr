@@ -1,5 +1,7 @@
+#[cfg(test)]
 use std::fmt::Write as _;
 
+#[cfg(test)]
 use crate::model::REMOTE_REF;
 
 pub(crate) fn parse(lines: &[&str]) -> (String, Vec<(String, String)>) {
@@ -39,6 +41,7 @@ fn parse_attr(line: &str) -> Option<(String, String)> {
     Some((key.to_ascii_lowercase(), value.into()))
 }
 
+#[cfg(test)]
 pub(crate) fn format_key(key: &str) -> String {
     key.to_lowercase()
         .split('-')
@@ -52,6 +55,7 @@ pub(crate) fn format_key(key: &str) -> String {
         .join("-")
 }
 
+#[cfg(test)]
 pub(crate) fn serialise(title: &str, message: &str, attrs: &[(String, String)]) -> String {
     let mut text = format!("{title}\n\n");
     if !message.is_empty() {

@@ -30,8 +30,16 @@ if "status" in response:
     output = response.get("output", "")
     status = response["status"]
 else:
+    execution_args = list(args)
+    if program == "git" and args[:4] == [
+        "ls-remote",
+        "--refs",
+        "--",
+        "https://github.com/org/repo.git",
+    ]:
+        execution_args[3] = "origin"
     result = subprocess.run(
-        [os.environ["GIT_PR_REAL_" + program.upper()], *args],
+        [os.environ["GIT_PR_REAL_" + program.upper()], *execution_args],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         check=False,

@@ -17,9 +17,9 @@ Valid revision expressions continue to resolve after the initial Jujutsu snapsho
 | `--github-stack` | Authorises routine native stack creation and extension without a confirmation prompt. Explicit CLI values precede the environment and Git configuration. |
 | `--no-stack` | Disables native stack management regardless of other enabling sources. |
 | `--yes`, `-y` | Accept confirmation prompts, including native stack dissolution and rebuilding, automatically; otherwise non-interactive input declines. Routine native linking requires no prompt. |
-| `--dry-run` | Reports proposed trailer, publication and PR operations without rewriting commits, updating refs, snapshotting Jujutsu or changing configuration. |
+| `--dry-run` | Reports proposed association, publication and PR operations without rewriting commits, updating refs, snapshotting Jujutsu or changing configuration. |
 | `--include-other-authors` | Includes commits whose author email differs from `user.email`; disabled by default. |
-| `--skip-draft`, `--include-draft` | Excludes matching titles or overrides that exclusion. Filtering remains applicable after rewriting. |
+| `--skip-draft`, `--include-draft` | Excludes matching titles or overrides that exclusion. Filtering does not alter commit identities. |
 | `--draft-pattern` | Comma-separated, case-insensitive wildcard patterns; CLI precedes `git-pr.draftPattern`. Defaults to `wip:*,draft:*,*[wip]*,*[draft]*`. |
 | `--default-tags` | Saves comma-separated `git-pr.tags` and exits when supplied a non-empty value. |
 | `-t` | Overrides default tags for the invocation when non-empty; per-commit `Tags` trailers remain applicable. |
@@ -47,7 +47,8 @@ Unrelated non-Unicode environment entries are ignored by application configurati
 
 ## Git configuration
 
-Persistent application settings reside exclusively in the `[git-pr]` section of Git configuration.
+Policy preferences reside in the `[git-pr]` section of Git configuration.
+Publication associations reside under `[branch]`, as specified in the [identity and recovery contract](publication-identity.md).
 Configuration keys use camelCase, whilst command-line flags use kebab-case.
 Git treats section and variable names as case-insensitive; punctuation remains significant.
 The application queries `git config`; Git parses the files, processes `include` and `includeIf`, resolves configuration scopes and converts Boolean values.
@@ -57,7 +58,7 @@ GitHub CLI authentication files remain part of the separate credential lookup de
 The [Git configuration rules](https://git-scm.com/docs/git-config) determine precedence: command configuration overrides worktree, repository, user and system configuration, in that order.
 Worktree configuration applies when Git's `extensions.worktreeConfig` facility is enabled.
 Within the resolved configuration, the last value for each supported key wins.
-All application keys are single-valued, including comma-separated label lists; repeated label keys do not accumulate across scopes.
+All policy preference keys are single-valued, including comma-separated label lists; repeated label keys do not accumulate across scopes.
 An empty label value clears inherited labels, and an empty output value selects the default format.
 Malformed Git configuration and invalid Boolean values are reported as errors.
 
@@ -132,7 +133,7 @@ The same rule applies when `--draft=false` supplies the false value.
 Existing PRs retain their draft or ready-for-review state on subsequent submissions.
 
 The separate `skipDraft` setting requests exclusion of titles matching `draftPattern`, regardless of `defaultDraft` or an existing PR's state.
-This exclusion is reapplied when the rewritten stack is read; `--include-draft` overrides draft-title exclusion without restoring commits excluded by other selection rules.
+`--include-draft` overrides draft-title exclusion without restoring commits excluded by other selection rules.
 
 ### Execution checkpoints
 
@@ -140,7 +141,7 @@ This exclusion is reapplied when the rewritten stack is read; `--include-draft` 
 | --- | --- |
 | `validate` | Configuration, repository discovery and working-tree validation; credentials are unnecessary. |
 | `get-commits` | Selection, commit listing and initial title-pattern filtering. |
-| `rewrite` | Missing trailers inserted and rewritten selection recovered. |
+| `prepare` (`rewrite` alias) | Local publication associations resolved without writes or remote requests. |
 | `push` | Pushes, local ref reconciliation, PR creation and base updates. |
 | `pr-create` | Publication, ref reconciliation, PR creation, base updates and PR-number recovery; no propagation sleep. |
 
@@ -172,8 +173,8 @@ Git hooks run normally for each publication batch.
 Pull-request observations and content mutations use at most 25 GraphQL aliases per request, with complete REST pagination where required.
 Native linking uses the GitHub stack API directly and does not invoke the `gh-stack` extension.
 An unchanged submission still verifies publication through Git and obtains fresh PR observations, but performs no metadata mutation or fixed visibility wait.
-Ordinary Git operations may succeed without a rewrite backend when every required trailer already exists.
-Missing trailers require git-branchless or Jujutsu; each rewritten commit must already have a local branch or bookmark.
+Plain Git submissions require no rewrite backend.
+Each trailer-free change must have a maintained local branch or bookmark; publication identity is stored separately from its message.
 Unrelated, conflicted and protected checked-out refs are preserved.
 If worktree discovery fails, local ref reconciliation is omitted and a warning reports that the completed push remains effective.
 PR lookup errors stop reconciliation rather than indicating that no PR exists.
@@ -187,7 +188,7 @@ A failed submission can leave completed pushes or PR updates in place; the diagn
 ## Preview and compact presentation
 
 A dry run uses recorded repository history and does not snapshot uncommitted Jujutsu working-copy changes.
-Missing `Remote-Ref` trailers are proposed in memory; displayed source identities precede any proposed rewrite.
+Publication associations are resolved or proposed in memory, whilst displayed commit identities remain unchanged.
 Remote state is neither queried nor modified, and PR reconciliation is consequently reported as proposed work rather than a prediction of individual remote mutations.
 Combining `--dry-run` with `--default-tags` previews the setting without writing it.
 Checkpoints continue to limit the preview to their respective phases.

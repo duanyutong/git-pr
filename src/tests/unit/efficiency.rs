@@ -23,7 +23,7 @@ fn unchanged_submission_observes_each_safety_barrier_without_mutations_or_waits(
         );
         assert_eq!(
             count(&trace, |v| v["path"] == "graphql"),
-            3 * usize::try_from(size).unwrap().div_ceil(25)
+            2 * usize::try_from(size).unwrap().div_ceil(25)
         );
         assert_eq!(count(&trace, |v| v["kind"] == "wait"), 0);
         assert_eq!(
@@ -38,7 +38,7 @@ fn unchanged_submission_observes_each_safety_barrier_without_mutations_or_waits(
         assert_eq!(
             count(&trace, |v| v["program"] == "git"
                 && v["args"][0] == "config"),
-            3
+            9
         );
         assert_eq!(
             count(&trace, |v| v["program"] == "git"

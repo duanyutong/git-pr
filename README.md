@@ -13,7 +13,7 @@ Native stack linking requires no GitHub CLI extension.
 
 Supported VCS backends are:
 
-- Git, optionally using [git-branchless](https://github.com/arxanas/git-branchless) for message rewriting.
+- Git, optionally using [git-branchless](https://github.com/arxanas/git-branchless) to manage local stacks.
 - [Jujutsu](https://jj-vcs.github.io/jj/), with either a colocated Git repository or a separate workspace backed by Git.
 
 GitHub.com is the supported hosting target.

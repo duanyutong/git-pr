@@ -115,6 +115,6 @@ fn checkpoints_parse_once_and_preserve_their_external_names() {
     }
     assert_eq!(
         Checkpoint::parse("unknown").unwrap_err().to_string(),
-        "ERROR: invalid --stop-after \"unknown\"; must be one of: validate, get-commits, rewrite, push, pr-create"
+        "ERROR: invalid --stop-after \"unknown\"; must be one of: validate, get-commits, prepare, rewrite, push, pr-create"
     );
 }

@@ -60,7 +60,7 @@ fn enable_jj(fixture: &mut Fixture) {
 }
 
 #[test]
-fn jj_colocated_rewrite_exports_bookmarks_and_preserves_checkout() {
+fn jj_colocated_publication_preserves_bookmarks_commits_and_checkout() {
     let mut f = Fixture::new(3, false);
     enable_jj(&mut f);
     let before = f
@@ -79,9 +79,10 @@ fn jj_colocated_rewrite_exports_bookmarks_and_preserves_checkout() {
     for i in 1..=3 {
         let branch = format!("topic/{i}");
         let hash = f.git(&["rev-parse", &branch]);
+        assert_eq!(hash, f.hashes[i - 1]);
         assert!(
-            f.git(&["show", "-s", "--format=%B", &branch])
-                .contains(&format!("Remote-Ref: {branch}"))
+            !f.git(&["show", "-s", "--format=%B", &branch])
+                .contains("Remote-Ref")
         );
         assert!(
             f.git(&["ls-remote", "origin", &format!("refs/heads/{branch}")])
@@ -130,6 +131,7 @@ fn jj_separate_workspace_discovers_backing_git_and_resolves_selected_tip() {
     let prs = f.service.prs.lock().unwrap();
     assert_eq!(prs.len(), 1);
     assert_eq!(prs[&101]["head"]["ref"], "topic/2");
+    assert_eq!(prs[&101]["base"]["ref"], "main");
     assert_eq!(prs[&101]["draft"], false);
     assert_eq!(prs[&101]["labels"], serde_json::json!(["workspace-label"]));
 }
@@ -521,4 +523,34 @@ fn jj_batched_revision_resolution_preserves_aliases_and_individual_cardinality()
         crate::jj::resolve_revisions(&f.app.commands, &arguments).unwrap(),
         vec![first, third]
     );
+}
+
+#[test]
+fn jujutsu_bookmark_renames_recover_the_existing_review_without_rewriting() {
+    let mut f = Fixture::new(1, false);
+    enable_jj(&mut f);
+    f.run(&["--no-stack"]).unwrap();
+    let nested = f.cwd.join("nested");
+    std::fs::create_dir_all(&nested).unwrap();
+    f.app.commands.cwd = nested;
+    let mut previous = "topic/1";
+    for name in ["renamed", "renamed-again"] {
+        f.app
+            .commands
+            .jj(&["bookmark", "rename", previous, name])
+            .unwrap();
+        f.run(&["--no-stack"]).unwrap();
+        assert_eq!(f.git(&["rev-parse", name]), f.hashes[0]);
+        assert_eq!(
+            f.git(&[
+                "config",
+                "--local",
+                "--get",
+                &format!("branch.{name}.gitPrHead")
+            ]),
+            "github.com/org/repo refs/heads/topic/1"
+        );
+        assert_eq!(f.service.prs.lock().unwrap().len(), 1);
+        previous = name;
+    }
 }

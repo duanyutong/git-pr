@@ -16,7 +16,7 @@ The workflow retains the following dependency order:
 5. Require existing PR bases to remain unchanged, gather complete description context, reconcile changed content and labels, then reconcile native topology if enabled and print the completion listing.
 
 Local validation checkpoints and dry runs do not require credentials.
-Dry runs compute missing trailer assignments in memory and report proposed operations; they perform no rewrite, publication, configuration write or Jujutsu working-copy snapshot.
+Dry runs compute publication associations in memory and report proposed operations; they perform no rewrite, publication, configuration write or Jujutsu working-copy snapshot.
 The historical `push` checkpoint includes PR creation and verification of existing bases.
 No checkpoint authorises later phases after an earlier failure.
 
@@ -34,10 +34,10 @@ Literal branch validation performs linear work in the reference bytes without la
 Checkout-history expressions such as `@{-1}` are rejected as publication destinations rather than expanded.
 A native Git comparison corpus verifies the literal naming rules.
 The configured remote trunk is rejected as a publication destination, including destinations inferred from local branches.
-Inferred destinations undergo duplicate validation before rewriting, and publication preflights the complete destination set before its first batch.
+Resolved destinations undergo duplicate validation before persistence, and publication preflights the complete destination set before its first batch.
 
-Existing trailers bypass rewriting and the corresponding recovery reads.
-Author exclusions are applied before rewriting and publication observations, then reapplied after changed commit identities are recovered.
+Existing trailers constrain publication identity and require agreement with local associations.
+Author exclusions are applied before identity persistence and publication.
 Related commits may remain necessary as description context even when they are not publication targets.
 
 ## Observations and mutation planning
@@ -45,21 +45,16 @@ Related commits may remain necessary as description context even when they are n
 Git history is acquired through a NUL-framed protocol carrying full object identities, author metadata, trees, parents and messages.
 Structured history and tree queries explicitly disable signature display, preventing presentation settings from contaminating metadata or launching signature verifiers.
 The former 100-commit truncation is removed.
-Merge commits in the discovered history are rejected before remote observation or local rewriting, because submission requires a linear stack.
+Merge commits in the discovered history are rejected before remote observation or local metadata writes, because submission requires a linear stack.
 Commits without a message remain subject to tree validation; a changed commit without a title prevents submission.
 Known parent trees establish ordinary single-parent emptiness without per-commit subprocesses; unknown boundary trees retain an authoritative Git comparison.
 The initial visible snapshot also supplies explicit selection and verified linear depths.
 Its base commit/tree observation supplies the resolved trunk identity, avoiding a separate resolution command.
 Descendant discovery consumes the immutable observed tip directly rather than resolving that identity again.
-After rewriting, explicit selection reuses depths from the refreshed snapshot or Jujutsu change identities from the refreshed commit inventory.
-Missing or ambiguous recovered identities prevent publication.
+Explicit selection retains the original observed commit identities throughout submission.
+Missing or ambiguous publication associations prevent mutation.
 Verified single-parent paths supply depths from their actual fork point, including when the remote trunk has advanced independently.
-The excluded range base remains unchanged when its selected descendants are rewritten and therefore requires no recovery query.
-Git recovery follows the local branch at the selected tip where available, including submissions from another checkout.
-Inventories retain literal branch names, and recovery resolves fully qualified branch refs so equally named tags cannot redirect it.
-Without a tip branch, recovery uses the current checkout only after verifying the selected tip's exact first-parent position; an unverifiable or vanished selection fails explicitly.
 Empty commits remain valid range boundaries after their exclusion from the displayed stack.
-Unverified paths retain bounded recovery queries with complete identity validation.
 Initial explicit Git arguments are deduplicated before resolution and resolved in batches of at most 128 revisions and 64 KiB of revision arguments.
 The 1,000-commit selection regression requires eight initial resolution commands and no per-commit depth commands for a verified linear path.
 
@@ -67,7 +62,7 @@ Jujutsu takes one deliberate initial working-copy snapshot.
 Its cleanliness protocol contains fixed status markers; description text cannot introduce delimiters or impersonate an absent description.
 Working-copy metadata retains the commit's actual author identity, and an incomplete observation prevents submission.
 Existing batched change-identity and working-copy reads also retain explicit Jujutsu conflict markers, without additional subprocesses.
-Unresolved conflicts in a selected publication head's ancestry prevent rewriting and publication, including where the conflicted ancestor is excluded from PR creation.
+Unresolved conflicts in a selected publication head's ancestry prevent metadata writes and publication, including where the conflicted ancestor is excluded from PR creation.
 An excluded conflicted descendant outside that ancestry does not prevent submission of its resolved ancestors.
 An explicit list may include a described, non-empty working-copy commit; its discovery uses the same number of Jujutsu queries as an ordinary explicit list.
 Discovery reads suppress incidental snapshots, and bulk change-ID queries use an explicit operation identity.
@@ -99,8 +94,8 @@ Foreign and deleted source repositories are excluded before PR selection, includ
 An unsupported GraphQL stack field is recorded once per invocation, after which reduced queries retain the same 25-head batching.
 Reduced observations retain complete description and label content but explicitly leave native membership unknown.
 Native topology reconciliation requires an additional authoritative membership observation when that field is unavailable.
-Descendant history is read only beyond the immutable tip identity retained by the initial or post-rewrite observation.
-These description-only reads omit recovery depths, Jujutsu operation identities and change-ID queries, which are required only for selected commits subject to rewriting.
+Descendant history is read only beyond the immutable tip identity retained by the initial observation.
+These description-only reads omit recovery depths, Jujutsu operation identities and change-ID queries, which are required only for selected publication identities.
 The submitted prefix is reused, including when an empty tip has been excluded from presentation or a live checkout reference subsequently moves.
 Description context borrows submitted commits and owns only newly discovered descendants; collecting context references does not copy commit messages.
 Descendant description context is observed collectively before its cached identities are consumed, without one request or worker per descendant.
@@ -116,8 +111,10 @@ The 51-PR expiry regressions require three refresh requests, whilst fresh repeat
 Publication preflight refreshes selected branch observations in groups of at most 25.
 A single open identity may be selected notwithstanding older closed history; multiple open identities or exclusively closed or merged history prevent publication.
 The planner pins PR numbers and node identities, and constructs a verified transition whenever published bases differ from the intended predecessors.
-A separate paginated query observes open PRs targeting each publication destination and rejects dependants outside the verified selection.
-The publication plan retains a separate acquisition timestamp for each group of at most 25 destinations, using the invocation's monotonic clock.
+A separate paginated query observes open PRs targeting each publication destination whose object would change and rejects dependants outside the verified selection.
+For ordinary submissions without a publication-base transition, destinations already identifying the selected objects require no incoming-dependency query, even where open PRs above the selection target those destinations.
+The actual push destination establishes object equality, and explicit expected-object leases prevent an intervening update from being overwritten.
+The publication plan retains the changing destinations and a separate acquisition timestamp for each group of at most 25 such destinations, using the invocation's monotonic clock.
 Each timestamp precedes acquisition of its group's first page, so request delays and pagination contribute to the observation age.
 Before publication, dependant observations older than 30 seconds are reacquired; fresh groups require no additional request.
 Slow acquisition of a later group does not renew the earlier groups, and failed reacquisition prevents publication without renewing the affected observation.
@@ -141,7 +138,7 @@ Retries require the same selection and prepared commits, reacquire live observat
 Unknown concurrent changes stop recovery whilst retaining the journal.
 Temporary branches are removed with an explicit lease only after fresh observation confirms that no open PR depends upon them.
 The journal is cleared after successful reconciliation and cleanup.
-Dry runs and rewrite checkpoints do not create a journal or mutate remote relationships.
+Dry runs and preparation checkpoints do not create a journal or mutate remote relationships.
 
 An obsolete base may be repaired before publication when its unique merged PR has a verified merge result in the live configured trunk, its original head is present in the surviving published history, and any remaining obsolete ref still identifies that generation.
 Recovery obtains strict individual PR observations, complete historical identity observations and live refs from a single resolved push destination matching the observed hosting repository.
@@ -241,14 +238,14 @@ This interpretation follows the [GitHub stacks API contract](https://docs.github
 Publication batches contain at most 128 full-object refspecs and at most 64 KiB of refspec arguments.
 Git performs its normal hooks and transport negotiation once per batch.
 Progress output retains one logical publication line per ref; verbose command traces expose the actual batched invocation.
-An up-to-date push is retained as the normal fresh publication check; a separate unconditional `ls-remote` preflight would add a transport to changed submissions.
+An up-to-date push remains the normal fresh publication check.
+A batched authoritative `ls-remote` observation supplies expected-object leases before any publication mutation, including absence leases for new heads.
 After a failed push, one targeted remote observation identifies incomplete refs without replaying known completed publication.
 
-Missing trailers ordinarily use one backend bulk editor transaction.
-The editor receives task-owned message files as literal data, indexes commit-hash prefixes, and rejects ambiguous or incomplete editor sections.
-Single-message changes and messages containing reserved backend delimiters use the literal-message compatibility path.
-Every rewritten message is serialised once; scalar commands reuse the prepared bytes in the existing reverse execution order.
-Bulk transactions preserve published commit contents and identities while changing backend undo granularity and unpublished intermediate recovery objects.
+Publication identity resides in repository-local Git configuration; commit messages and hashes remain unchanged.
+Ordinary repeats read the association inventory in batches and perform no redundant configuration writes.
+A new association uses key-specific observations around each Git-owned update; creation attempts are persisted before their requests and retired after adoption.
+This avoids repeatedly decoding the complete association inventory for each new PR.
 
 Explicit rate-limit rejection may be retried at most three times, subject to a fifteen-minute cumulative server-wait budget per request.
 Retry-After and exhausted primary-reset metadata are honoured, including GraphQL errors conveyed by HTTP 200.
@@ -299,7 +296,7 @@ The bounds below exclude Git's own graph traversal and the bytes that must be re
 | Literal branch validation | O(R) for R reference bytes, without subprocesses. |
 | Configuration discovery | Three ordinary queries, independent of stack size; failed typed conversions retain scalar diagnostic fallback. |
 | Selection and identity deduplication | Expected O(N + S), using indices and sets; initial Git resolution uses bounded batches rather than one process per selection. |
-| Predecessor/base resolution | O(N), using one prefix pass before rewriting; PR creation, number recovery and native management share the resulting bases. |
+| Predecessor/base resolution | O(N), using one prefix pass before association persistence; PR creation, number recovery and native management share the resulting bases. |
 | Local branch-name assignment | Expected O(B + N), using one branch inventory and an identity index. |
 | Descendant-tip choice | One `merge-base --independent` call for at most 128 candidates; larger inventories require at most ceil((B − 1)/127) + ceil(B/127) bounded calls. Failed discovery commands stop description updates. |
 | Rewrite message lookup | O(LN) prefix indexing, where L is the bounded object-identity length. |
@@ -309,7 +306,7 @@ The bounds below exclude Git's own graph traversal and the bytes that must be re
 | Initial Jujutsu explicit-list resolution | One operation read and at least ceil(A/128) bounded queries, with additional groups when the 64 KiB command budget applies; at most 128 membership predicates per returned record, with independent cardinality validation. |
 | Cached description storage | One shared immutable body per observation; unchanged rendering allocates no complete footer, wrapped footer or replacement body. Changed descriptions use one final output buffer. |
 | Output formatting | One template parse followed by work proportional to emitted output. |
-| Draft matching | Patterns compiled once into an anchored byte matcher; title classifications shared across selection, rewrite recovery and creation. |
+| Draft matching | Patterns compiled once into an anchored byte matcher; title classifications shared across selection and creation. |
 
 Large descendant inventories first reduce bounded candidate groups, then verify the remaining candidate against every input group.
 A unique global leaf, if present, wins its group and all subsequent groups; otherwise verification detects an incomparable discarded candidate.
@@ -330,12 +327,13 @@ A persistent cache, daemon and embedded VCS implementation remain conditional de
 
 The strict unit gate covers every declared application policy module completely for lines, regions and functions.
 Scale tests exercise 1, 5, 10, 50, 100, 101 and 1,000 commits, including full discovery, bounded request/publication counts and a mutation-free unchanged pass.
-Regression counters enforce one body analysis per unchanged observation and one predecessor-base calculation per active submission in both native modes, including rewritten selections and compact presentation.
+Regression counters enforce one body analysis per unchanged observation and one predecessor-base calculation per active submission in both native modes, including trailer-free selections and compact presentation.
 Protocol tests cover pagination, malformed identities, lost responses, partial mutation results, stale observations, ref guards, literal editor inputs and process deadlines.
 Disposable backend tests and differential fixtures verify published objects and completed remote effects.
 The [validation contract](testing.md) enumerates permitted differences from the inefficient reference workflow.
 
-For N unchanged conventional PRs with complete observations, ordinary-size names, no additional descendants and a submission shorter than 30 seconds, the normal budget is 3 × ceil(N/25) observation requests, comprising initial head observations, incoming-dependency observations and fresh post-publication head observations, and ceil(N/128) up-to-date push batches, with zero metadata mutations, rewrites or sleeps.
+For N unchanged conventional PRs with complete observations, ordinary-size names, unchanged description context and a submission shorter than 30 seconds, the normal budget is 2 × ceil(N/25) observation requests, comprising initial head observations and fresh post-publication head observations, and ceil(N/128) up-to-date push batches, with zero metadata mutations, rewrites or sleeps.
+The normal repeat uses nine batched configuration reads, including association checks before publication, PR reconciliation and description changes.
 Native mode adds one topology read for the selected existing stack.
 Pagination, capability fallback, descendant context, recovery and long-submission refresh are explicit additional work.
 These bounds establish removal of identified duplication; they do not establish a universal optimum or a live-service latency guarantee.
@@ -355,5 +353,5 @@ For one literal pattern, preparation and matching take O(P + T) time and O(P) pr
 Only patterns containing `?` require an anchored, non-backtracking [byte regex set](https://docs.rs/regex/latest/regex/bytes/struct.RegexSet.html); literals are escaped, `?` consumes one byte and `*` includes newline bytes.
 Their matching retains the dependency's O(P × T) worst-case bound for compiled pattern size P and title length T.
 Raw pattern bytes are limited to 1 MiB in aggregate, and regex compilation additionally retains the dependency's resource limits.
-Excessive patterns produce configuration guidance before rewriting, publication or PR mutation.
-Each distinct original title is classified once per invocation, with results shared across configuration clones and rewrite recovery.
+Excessive patterns produce configuration guidance before association persistence, publication or PR mutation.
+Each distinct original title is classified once per invocation, with results shared across configuration clones.

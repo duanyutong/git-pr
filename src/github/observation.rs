@@ -103,6 +103,7 @@ pub(super) struct Association {
     pub number: u64,
     pub state: String,
     pub head: String,
+    pub head_oid: String,
 }
 
 pub(super) type Associations = Arc<[Association]>;
@@ -118,6 +119,8 @@ struct AssociationObservation {
 
 #[derive(Debug, Deserialize)]
 struct AssociationHead {
+    #[serde(default)]
+    sha: String,
     #[serde(default, rename = "ref")]
     name: String,
     #[serde(deserialize_with = "Option::deserialize")]
@@ -539,6 +542,15 @@ impl GitHub<'_> {
         Ok(())
     }
 
+    pub(crate) fn identity_heads(&self, hash: &str) -> Result<Vec<String>> {
+        Ok(self
+            .commit_prs(hash)?
+            .iter()
+            .filter(|pr| pr.head_oid == hash)
+            .map(|pr| pr.head.clone())
+            .collect())
+    }
+
     pub(super) fn commit_prs(&self, hash: &str) -> Result<Associations> {
         let mut cache = guard(&self.session.commit_prs);
         if let Some((time, prs)) = cache.get(hash)
@@ -551,8 +563,12 @@ impl GitHub<'_> {
                 if error
                     .downcast_ref::<crate::github::http::HttpStatusError>()
                     .is_some_and(|e| {
-                        e.status == reqwest::StatusCode::NOT_FOUND
-                            && e.body.contains("No commit found")
+                        // Unpublished local commits may be reported as either status.
+                        matches!(
+                            e.status,
+                            reqwest::StatusCode::NOT_FOUND
+                                | reqwest::StatusCode::UNPROCESSABLE_ENTITY
+                        ) && e.body.contains("No commit found")
                     }) =>
             {
                 Ok(Vec::new())
@@ -599,6 +615,7 @@ impl GitHub<'_> {
                         number: pr.number,
                         state: pr.state,
                         head: pr.head.name,
+                        head_oid: pr.head.sha,
                     });
                 }
             }
@@ -610,7 +627,10 @@ impl GitHub<'_> {
                     "commit PR pagination did not advance for {path} at page {page}; refusing repeated results"
                 );
             }
-            page = page.saturating_add(1);
+            if page >= 100 {
+                bail!("commit PR discovery exceeded its page limit; absence remains unknown");
+            }
+            page += 1;
         }
     }
 }

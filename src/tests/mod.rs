@@ -4,6 +4,7 @@ mod adapters;
 mod assurance;
 mod backends;
 mod differential;
+mod identity;
 mod regressions;
 mod support;
 pub(crate) mod unit;
