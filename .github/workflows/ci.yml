@@ -39,9 +39,9 @@ jobs:
             ~/.cargo/git
             ~/.cache/prek
             target
-          key: acceptance-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'scripts/dev-tools.env', 'pyproject.toml', 'uv.lock', 'prek.toml') }}-release
+          key: rust-acceptance-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'scripts/dev-tools.env', 'pyproject.toml', 'uv.lock', 'prek.toml') }}-release
           restore-keys: |
-            acceptance-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml') }}-
+            rust-acceptance-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml') }}-
       - name: Host prerequisites
         id: prerequisites
         shell: bash
@@ -109,9 +109,9 @@ jobs:
             ~/.cargo/git
             ~/.cache/prek
             target
-          key: boundary-${{ matrix.gate }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'scripts/dev-tools.env', 'pyproject.toml', 'uv.lock', 'prek.toml') }}-release
+          key: rust-boundary-${{ matrix.gate }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'scripts/dev-tools.env', 'pyproject.toml', 'uv.lock', 'prek.toml') }}-release
           restore-keys: |
-            boundary-${{ matrix.gate }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml') }}-
+            rust-boundary-${{ matrix.gate }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml') }}-
       - name: Host prerequisites
         id: prerequisites
         run: |

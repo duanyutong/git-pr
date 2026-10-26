@@ -147,17 +147,36 @@ impl Application {
             return Ok(());
         }
         self.commands.terminal.stage("Updating PR descriptions");
-        crate::identity::resolve::verify_bindings(&self.commands, &config.repo, state.selected())?;
+        let associations = crate::identity::resolve::verify_bindings(
+            &self.commands,
+            &config.repo,
+            state.selected(),
+        )?;
         diagnostics.phase("PR descriptions and stack sections", || Self::update_descriptions(&config, git, &github, &state))
             .context("PR content reconciliation failed after publication; pushed refs and completed PR changes are retained")?;
         diagnostics.phase("native stack links", || Self::native_stack(&config, &github, &state, &publication.bases))
             .context("native stack reconciliation failed after publication; pushed refs and completed PR changes are retained")?;
-        publication.finish(&github, &state)?;
+        self.finish_submission(&github, &mut state, &publication, &associations)
+    }
+
+    fn finish_submission(
+        &self,
+        github: &GitHub<'_>,
+        state: &mut State,
+        publication: &pull_requests::Publication,
+        associations: &crate::identity::store::Records,
+    ) -> Result<()> {
+        publication.finish(github, state)?;
+        if let Err(error) = crate::identity::resolve::cleanup(github, associations, &state.stack) {
+            self.commands.warn(&format!(
+                "could not finish merged publication metadata cleanup; retained associations may be retried: {error:#}"
+            ));
+        }
         for commit in state.selected_mut() {
-            commit.metadata_updated = github.was_updated(commit.pr_number);
+            commit.metadata_updated |= github.was_updated(commit.pr_number);
         }
         self.commands.terminal.finish(true);
-        self.print_results(&config, state.selected());
+        self.print_results(github.config, state.selected());
         Ok(())
     }
 

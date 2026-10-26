@@ -51,7 +51,6 @@ Optimisation level 3 is already the [Cargo release default](https://doc.rust-lan
 
 Measured validation recipes record elapsed time and exit status under `target/validation/`; failed attempts remain in the record.
 Coverage reports remain under `coverage/`; neither output directory supplies development-tool executables.
-Historical evidence from the former top-level validation directory has been retained under `target/validation/`.
 The default test concurrency is six and may be overridden with `RUST_TEST_THREADS`.
 Formatter rewrites require review and a subsequent clean hygiene run.
 

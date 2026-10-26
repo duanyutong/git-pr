@@ -58,6 +58,13 @@ A changed remote ref stops publication rather than being overwritten using an ob
 Successful earlier effects remain in place after a later failure; retry observes and completes the remaining work.
 An unchanged successful run performs no redundant association writes or PR metadata changes.
 
+Git carries branch configuration through `git branch --move` and removes the branch's configuration section through `git branch --delete`.
+Jujutsu bookmark deletion and lower-level Git ref deletion can leave orphaned associations in the shared repository configuration.
+After a complete successful submission, the application removes its exact `gitPrHead`, `gitPrPullRequest` and `gitPrChangeId` values for absent local anchors whose adopted reviews are confirmed merged by a batched service observation.
+Selected anchors, pending creation attempts, unmerged or unverifiable reviews, inherited definitions and unrelated branch settings are retained.
+Failed cleanup emits a diagnostic and permits a subsequent invocation to retry the remaining associations.
+Dry runs, preparation checkpoints and unsuccessful submissions do not perform this cleanup.
+
 Before creating a PR, submission writes a repository-local `git-pr.pendingCreate` value.
 Its format is `v1 <attempt-id> <head-repository> <full-head-ref> <review-repository> <full-base-ref>`.
 The UUID identifies a local attempt and is not a GitHub idempotency token.

@@ -220,18 +220,17 @@ def snapshot(destination: pathlib.Path) -> dict[str, str]:
             }
             or relative.parts[0] == "src"
             and relative.suffix == ".rs"
-            or name in {"tests/fixtures/reference.jsonl"}
         ):
             continue
         source = ROOT / name
-        if (
-            not source.resolve().is_relative_to(ROOT.resolve())
-            or not source.is_file()
-            or any(
-                ROOT.joinpath(*relative.parts[:index]).is_symlink()
-                for index in range(1, len(relative.parts) + 1)
-            )
+        if not source.resolve().is_relative_to(ROOT.resolve()) or any(
+            ROOT.joinpath(*relative.parts[:index]).is_symlink()
+            for index in range(1, len(relative.parts) + 1)
         ):
+            raise AssertionError(f"snapshot requires an ordinary source file: {name}")
+        if not source.exists():
+            continue
+        if not source.is_file():
             raise AssertionError(f"snapshot requires an ordinary source file: {name}")
         target = destination / name
         target.parent.mkdir(parents=True, exist_ok=True)

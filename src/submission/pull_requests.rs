@@ -319,8 +319,20 @@ impl Application {
         let indices: Vec<_> = (state.start..state.stack.len())
             .filter(|&i| !state.stack[i].skip)
             .collect();
+        let changing: Vec<_> = indices
+            .iter()
+            .copied()
+            .filter(|&index| {
+                publication.recovery.is_some()
+                    || publication
+                        .leases
+                        .get(state.stack[index].remote_ref())
+                        .and_then(Option::as_ref)
+                        != Some(&state.stack[index].hash)
+            })
+            .collect();
         state.validate_refs(&config.repo.trunk)?;
-        for &i in &indices {
+        for &i in &changing {
             let commit = &state.stack[i];
             let announcement = format!(
                 "{}push {} {} {}:refs/heads/{}",
@@ -350,18 +362,33 @@ impl Application {
         }
         crate::identity::resolve::verify_anchors(&self.commands, state.selected())?;
         publication.verify(github, state, false)?;
-        let commits = indices.iter().map(|&i| &state.stack[i]).collect::<Vec<_>>();
-        if let Some(recovery) = &publication.recovery {
-            git.push_with_leases(&commits, Some(&recovery.refs))?;
-        } else {
-            git.push_with_leases(&commits, Some(&publication.leases))?;
+        if !changing.is_empty() {
+            let commits = changing
+                .iter()
+                .map(|&i| &state.stack[i])
+                .collect::<Vec<_>>();
+            if let Some(recovery) = &publication.recovery {
+                git.push_with_leases(&commits, Some(&recovery.refs))?;
+            } else {
+                git.push_with_leases(&commits, Some(&publication.leases))?;
+            }
+            git.sync_refs(state.selected());
+            if let Some(recovery) = &publication.recovery {
+                recovery.complete(github, state)?;
+            }
+            // A real push can change the lifecycle of any selected PR. An
+            // unchanged destination needs no publication-triggered observation.
+            publication.verify(github, state, true)
+                .context("PR state changed or could not be verified after publication; pushed refs are retained, and PR creation and updates have been stopped")?;
+            for &index in &changing {
+                let commit = &mut state.stack[index];
+                commit.metadata_updated = publication
+                    .leases
+                    .get(commit.remote_ref())
+                    .and_then(Option::as_ref)
+                    != Some(&commit.hash);
+            }
         }
-        git.sync_refs(state.selected());
-        if let Some(recovery) = &publication.recovery {
-            recovery.complete(github, state)?;
-        }
-        publication.verify(github, state, true)
-            .context("PR state changed or could not be verified after publication; pushed refs are retained, and PR creation and updates have been stopped")?;
         self.commands.terminal.stage("Reconciling pull requests");
         self.reconcile_prs(&publication.bases, github, state, &indices)?;
         if config.no_stack {

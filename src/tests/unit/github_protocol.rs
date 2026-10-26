@@ -364,9 +364,19 @@ fn label_freshness_checks_scale_with_targets_and_expiry_retains_batching() {
             transport: w.as_ref(),
             template: "",
         };
-        for pr in w.0.lock().unwrap().prs.values_mut() {
-            pr["labels"] = json!(["ready"]);
-            g.observed(serde_json::from_value(pr.clone()).unwrap());
+        let observed = {
+            let mut memory = w.0.lock().unwrap();
+            memory
+                .prs
+                .values_mut()
+                .map(|pr| {
+                    pr["labels"] = json!(["ready"]);
+                    serde_json::from_value(pr.clone()).unwrap()
+                })
+                .collect::<Vec<_>>()
+        };
+        for pr in observed {
+            g.observed(pr);
         }
         let commits: Vec<_> = (1..=100)
             .map(|i| {
@@ -731,7 +741,7 @@ fn stale_cache_is_refreshed_before_planning_human_content() {
         w.0.lock().unwrap().prs.get_mut(&101).unwrap()["body"] = json!("Human edit");
         g.session.head_times.lock().unwrap().insert(
             "topic/1".into(),
-            std::time::Instant::now()
+            g.now()
                 .checked_sub(std::time::Duration::from_secs(31))
                 .unwrap(),
         );
@@ -1016,10 +1026,53 @@ fn declined_rebuild_never_reports_completion_and_keeps_stale_base_warning() {
 }
 
 #[test]
+fn observation_freshness_uses_injected_clock_at_cache_boundaries() {
+    use std::time::Duration;
+
+    with_github(|g, w| {
+        w.0.lock().unwrap().clock_elapsed += Duration::from_hours(24);
+        let observed = g.now();
+        let hash = commit(1).hash;
+        g.observe(&["topic/1".into()]).unwrap();
+        g.commit_prs(&hash).unwrap();
+        assert_eq!(super::guard(&g.session.head_times)["topic/1"], observed);
+        assert_eq!(super::guard(&g.session.pr_times)[&101], observed);
+        assert_eq!(super::guard(&g.session.commit_prs)[&hash].0, observed);
+
+        for advance in [
+            Duration::from_secs(30) - Duration::from_nanos(1),
+            Duration::from_nanos(1),
+        ] {
+            w.0.lock().unwrap().clock_elapsed += advance;
+            w.0.lock().unwrap().trace.clear();
+            assert_eq!(g.find_head("topic/1", "open").unwrap(), 101);
+            g.get(101).unwrap();
+            g.commit_prs(&hash).unwrap();
+            g.refresh_observations(&["topic/1".into()]).unwrap();
+            assert_eq!(w.trace(), [] as [serde_json::Value; 0]);
+        }
+
+        w.0.lock().unwrap().clock_elapsed += Duration::from_nanos(1);
+        w.0.lock().unwrap().prs.get_mut(&101).unwrap()["body"] = json!("New human text");
+        g.refresh_observations(&["topic/1".into()]).unwrap();
+        assert_eq!(g.get(101).unwrap().body.as_ref(), "New human text");
+        g.commit_prs(&hash).unwrap();
+        let trace = w.trace();
+        assert_eq!(trace.len(), 2);
+        assert_eq!(trace[0]["path"], "graphql");
+        assert_eq!(trace[1]["path"], format!("commits/{hash}/pulls"));
+        assert_eq!(super::guard(&g.session.pr_times)[&101], g.now());
+        assert_eq!(super::guard(&g.session.head_times)["topic/1"], g.now());
+        assert_eq!(super::guard(&g.session.commit_prs)[&hash].0, g.now());
+    });
+}
+
+#[test]
 fn observation_age_preserves_fresh_entries_and_partial_mutations_do_not_renew_them() {
     with_github(|g, w| {
         g.observe(&["topic/1".into(), "topic/2".into()]).unwrap();
-        let old = std::time::Instant::now()
+        let old = g
+            .now()
             .checked_sub(std::time::Duration::from_secs(31))
             .unwrap();
         g.session
@@ -1194,7 +1247,7 @@ fn description_mutations_render_from_refreshed_human_content_and_skip_noops() {
         w.0.lock().unwrap().prs.get_mut(&101).unwrap()["body"] = json!(edited);
         super::guard(&g.session.pr_times).insert(
             101,
-            std::time::Instant::now()
+            g.now()
                 .checked_sub(std::time::Duration::from_secs(31))
                 .unwrap(),
         );
@@ -1405,7 +1458,8 @@ fn expired_content_observations_refresh_in_bounded_batches() {
     g.observe(&(1..=51).map(|n| format!("topic/{n}")).collect::<Vec<_>>())
         .unwrap();
     for time in super::guard(&g.session.pr_times).values_mut() {
-        *time = std::time::Instant::now()
+        *time = g
+            .now()
             .checked_sub(std::time::Duration::from_secs(31))
             .unwrap();
     }
@@ -1442,7 +1496,8 @@ fn expired_content_refresh_preserves_identity_and_stops_on_observation_failure()
         w.0.lock().unwrap().prs.get_mut(&101).unwrap()["head"]["ref"] = json!("renamed");
         w.0.lock().unwrap().prs.get_mut(&102).unwrap()["head"]["ref"] = json!("topic/1");
         for time in super::guard(&g.session.pr_times).values_mut() {
-            *time = std::time::Instant::now()
+            *time = g
+                .now()
                 .checked_sub(std::time::Duration::from_secs(31))
                 .unwrap();
         }
@@ -1486,7 +1541,8 @@ fn native_expiry_refreshes_in_bounded_batches() {
             .unwrap();
         if stale {
             for time in super::guard(&g.session.pr_times).values_mut() {
-                *time = std::time::Instant::now()
+                *time = g
+                    .now()
                     .checked_sub(std::time::Duration::from_secs(31))
                     .unwrap();
             }
@@ -1571,7 +1627,7 @@ fn historical_status_queries_are_batched_deduplicated_and_use_fresh_observations
     w.0.lock().unwrap().prs.get_mut(&102).unwrap()["merged"] = json!(true);
     super::guard(&g.session.pr_times).insert(
         102,
-        std::time::Instant::now()
+        g.now()
             .checked_sub(std::time::Duration::from_secs(31))
             .unwrap(),
     );
@@ -1643,7 +1699,7 @@ fn context_lookup_reuses_open_heads_and_caches_historical_fallbacks() {
         w.0.lock().unwrap().prs.get_mut(&101).unwrap()["state"] = json!("closed");
         super::guard(&g.session.head_times).insert(
             c.remote_ref().into(),
-            std::time::Instant::now()
+            g.now()
                 .checked_sub(std::time::Duration::from_secs(31))
                 .unwrap(),
         );
@@ -1661,7 +1717,8 @@ fn context_lookup_reuses_open_heads_and_caches_historical_fallbacks() {
         super::guard(&g.session.commit_prs)
             .get_mut(&c.hash)
             .unwrap()
-            .0 = std::time::Instant::now()
+            .0 = g
+            .now()
             .checked_sub(std::time::Duration::from_secs(31))
             .unwrap();
         w.http(
@@ -1722,7 +1779,8 @@ fn base_reconciliation_batches_expired_observations_and_reuses_fresh_ones() {
     for expired in [true, false] {
         if expired {
             for time in super::guard(&g.session.pr_times).values_mut() {
-                *time = std::time::Instant::now()
+                *time = g
+                    .now()
                     .checked_sub(std::time::Duration::from_secs(31))
                     .unwrap();
             }
@@ -1985,7 +2043,7 @@ fn label_reconciliation_refreshes_expired_plans_and_remembers_partial_success() 
         w.0.lock().unwrap().prs.get_mut(&101).unwrap()["labels"] = json!(["tip /label", "human"]);
         super::guard(&g.session.pr_times).insert(
             101,
-            std::time::Instant::now()
+            g.now()
                 .checked_sub(std::time::Duration::from_secs(31))
                 .unwrap(),
         );
@@ -2039,7 +2097,8 @@ fn labels_refresh_in_bounded_groups_and_fail_before_mutation_on_observation_erro
     g.observe(&(1..=51).map(|n| format!("topic/{n}")).collect::<Vec<_>>())
         .unwrap();
     for time in super::guard(&g.session.pr_times).values_mut() {
-        *time = std::time::Instant::now()
+        *time = g
+            .now()
             .checked_sub(std::time::Duration::from_secs(31))
             .unwrap();
     }

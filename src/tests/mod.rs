@@ -1,9 +1,8 @@
-// Fixture tables keep the reference cases together for auditability.
+// Integration fixture tables remain grouped for auditability.
 #![allow(clippy::too_many_lines)]
 mod adapters;
 mod assurance;
 mod backends;
-mod differential;
 mod identity;
 mod regressions;
 mod support;
@@ -11,5 +10,3 @@ pub(crate) mod unit;
 mod workflows;
 
 mod http_service;
-
-mod legacy;

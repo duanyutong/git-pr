@@ -30,7 +30,7 @@ fn commit(number: u64) -> Commit {
 }
 
 #[test]
-fn cli_preserves_go_boundaries_and_boolean_values() {
+fn cli_preserves_argument_boundaries_and_boolean_values() {
     for value in ["1", "t", "T", "TRUE", "true", "True"] {
         assert!(flags(&[&format!("--dry-run={value}")]).boolean("dry-run"));
     }
@@ -235,50 +235,6 @@ fn trailers_round_trip_and_body_separation() {
 }
 
 #[test]
-fn log_parsing_dates_headers_and_multiline_messages() {
-    let hash = "abc123def456789012345678901234567890abcd";
-    for date in [
-        "Mon Jan 1 00:00:00 2024 +0000",
-        "Fri Nov 30 18:30:16 2025 -0300",
-        "2024-01-01 12:34:56 +0000",
-    ] {
-        let log = format!(
-            "commit {hash}\nAuthor: Test User <test@example.com>\nDate:   {date}\n\n    Title 🛠️\n\n    Body\n    continued\n\n    Remote-Ref: test/topic\n"
-        );
-        let parsed = crate::tests::legacy::parse_logs(&log).unwrap();
-        assert_eq!(parsed.len(), 1);
-        assert_eq!(parsed[0].hash, hash);
-        assert_eq!(parsed[0].title, "Title 🛠️");
-        assert_eq!(parsed[0].message, "Body\ncontinued");
-        assert_eq!(parsed[0].remote_ref(), "test/topic");
-        assert!(parsed[0].date.is_some());
-        assert_eq!(
-            crate::tests::legacy::parse_logs(&format!("{log}\n{log}"))
-                .unwrap()
-                .len(),
-            2
-        );
-    }
-    assert_eq!(
-        crate::tests::legacy::parse_logs(" \n \n").unwrap(),
-        [] as [model::Commit; 0]
-    );
-    for log in [
-        "bad",
-        "commit 123\nAuthor: X <a@b>\n",
-        "Author: X <a@b>\n",
-        "commit abc123def456789012345678901234567890abcd\nAuthor: X <a@b>\nDate: invalid",
-    ] {
-        assert!(crate::tests::legacy::parse_logs(log).is_err());
-    }
-    let empty = crate::tests::legacy::parse_logs(&format!(
-        "commit {hash}\nAuthor: Test <test@example.com>\n"
-    ))
-    .unwrap();
-    assert_eq!(empty[0].title, "");
-}
-
-#[test]
 fn output_presets_custom_templates_and_validation() {
     let cm = Commit {
         hash: "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678".into(),
@@ -317,8 +273,7 @@ fn output_presets_custom_templates_and_validation() {
         ("- [ ] {url}", "- [ ] https://github.com/org/repo/pull/1234"),
     ] {
         assert_eq!(
-            crate::tests::legacy::format_pr(
-                &output::resolve_format(spec).unwrap(),
+            output::Template::new(&output::resolve_format(spec).unwrap()).render(
                 &cm,
                 "github.com",
                 "org/repo"
@@ -340,7 +295,7 @@ fn output_presets_custom_templates_and_validation() {
         ..cm
     };
     assert_eq!(
-        crate::tests::legacy::format_pr("{title}", &cm, "github.com", "org/repo"),
+        output::Template::new("{title}").render(&cm, "github.com", "org/repo"),
         "{number}"
     );
 }
@@ -380,24 +335,12 @@ fn selection_ranges_skips_and_reference_policy() {
         selection::slice_start(&stack, "missing", "trunk", &HashMap::new()),
         5
     );
-    assert_eq!(
-        crate::tests::legacy::resolve_base(&stack, 0, 0, "main"),
-        "main"
-    );
-    assert_eq!(
-        crate::tests::legacy::resolve_base(&stack, 1, 1, "main"),
-        "test/1"
-    );
+    assert_eq!(selection::resolve_bases(&stack, 0, "main")[0], "main");
+    assert_eq!(selection::resolve_bases(&stack, 1, "main")[1], "test/1");
     stack[0].attrs.clear();
-    assert_eq!(
-        crate::tests::legacy::resolve_base(&stack, 1, 1, "main"),
-        "main"
-    );
+    assert_eq!(selection::resolve_bases(&stack, 1, "main")[1], "main");
     stack[2].skip = true;
-    assert_eq!(
-        crate::tests::legacy::resolve_base(&stack, 0, 3, "main"),
-        "test/2"
-    );
+    assert_eq!(selection::resolve_bases(&stack, 0, "main")[3], "test/2");
     let selected = vec![stack[0].hash.clone(), stack[4].hash.clone()];
     assert_eq!(selection::mark_unselected(&mut stack, &selected).len(), 2);
     assert_eq!(
@@ -488,13 +431,13 @@ fn stack_history_rendering_order_markers_and_duplicates() {
                 host: "github.com",
                 repo: "org/repo",
             };
-            let info = crate::tests::legacy::generate_stack(
-                &stack,
-                &stack[1],
+            let info = description::StackRenderer::new(
+                stack.iter(),
                 &history,
                 &HashSet::from([101]),
                 style,
-            );
+            )
+            .render(&stack[1]);
             assert!(info.contains("PR **4 of 5**"));
             assert!(info.contains("#102 👈 This PR"));
             assert_eq!(info.matches("#99").count(), 1);
@@ -554,6 +497,10 @@ fn stack_history_rendering_order_markers_and_duplicates() {
         description::render_commit(&without_pr, &stack[0], false, style)
             .contains("test&#x200B;@example.com")
     );
+    assert!(
+        description::render_commit(&without_pr, &stack[0], false, style)
+            .contains("[Feature 9](https://github.com/org/repo/commit/")
+    );
     let without_email = Commit {
         author_email: "unknown".into(),
         ..without_pr.clone()
@@ -563,23 +510,18 @@ fn stack_history_rendering_order_markers_and_duplicates() {
             .contains("unknown&#x200B;")
     );
     assert!(
-        !crate::tests::legacy::generate_stack(
-            &[without_pr],
-            &stack[0],
-            &[],
-            &HashSet::new(),
-            style
-        )
-        .contains("PR **")
+        !description::StackRenderer::new([without_pr].iter(), &[], &HashSet::new(), style)
+            .render(&stack[0])
+            .contains("PR **")
     );
     assert_eq!(
-        crate::tests::legacy::generate_stack(
-            &[stack[0].clone(), stack[0].clone()],
-            &stack[0],
+        description::StackRenderer::new(
+            [stack[0].clone(), stack[0].clone()].iter(),
             &[],
             &HashSet::new(),
-            style
+            style,
         )
+        .render(&stack[0])
         .lines()
         .count(),
         1
@@ -643,6 +585,59 @@ fn description_preserves_sentinels_bots_crlf_and_legacy_sections() {
             description::END
         )
     );
+}
+
+#[test]
+fn numbered_footers_omit_hashes_and_migrate_old_annotations_once() {
+    for stack_up in [false, true] {
+        for emoji in [false, true] {
+            let style = Style {
+                stack_up,
+                emoji,
+                host: "github.com",
+                repo: "org/repo",
+            };
+            let stack: Vec<_> = (1..=3).map(commit).collect();
+            let merged = HashSet::new();
+            let renderer = description::StackRenderer::new(stack.iter(), &[], &merged, style);
+            let current = &stack[1];
+            let footer = renderer.render(current);
+            assert!(footer.contains("#2 👈 This PR\n"));
+            assert!(!footer.contains("This PR ("));
+            let old = footer.replace(" 👈 This PR\n", " 👈 This PR (deadbeef)\n");
+            let before = "Human summary (deadbeef)";
+            let after = "<!-- CURSOR_SUMMARY -->\n> Reviewed deadbeef.  \n<!-- /CURSOR_SUMMARY -->";
+            let source = format!(
+                "{before}\n\n{}\n{old}\n{}\n\n{after}",
+                description::START,
+                description::END
+            );
+            let updated = description::Body::parse(&source)
+                .unwrap()
+                .render_footer("Ignored", &renderer.footer(current), "")
+                .unwrap()
+                .unwrap();
+            assert!(updated.starts_with(before) && updated.ends_with(after));
+            assert!(!updated.contains("This PR ("));
+            let rebased: Vec<_> = stack
+                .iter()
+                .enumerate()
+                .map(|(index, commit)| Commit {
+                    hash: format!("abcdef12{index:032x}"),
+                    ..commit.clone()
+                })
+                .collect();
+            let renderer = description::StackRenderer::new(rebased.iter(), &[], &merged, style);
+            assert_eq!(renderer.render(&rebased[1]), footer);
+            assert_eq!(
+                description::Body::parse(&updated)
+                    .unwrap()
+                    .render_footer("Ignored", &renderer.footer(&rebased[1]), "")
+                    .unwrap(),
+                None
+            );
+        }
+    }
 }
 
 #[test]
@@ -752,13 +747,6 @@ fn malformed_history_markers_and_literal_output_braces() {
     for output in ["{", "{ }", "{}", "{{title}}", "{!}"] {
         assert!(crate::cli::output::resolve_format(output).is_ok());
     }
-    let invalid_hash = "Z".repeat(40);
-    assert!(
-        crate::tests::legacy::parse_logs(&format!(
-            "commit {invalid_hash}\nAuthor: Test <test@example.com>\n"
-        ))
-        .is_err()
-    );
 }
 
 #[test]
@@ -1097,4 +1085,22 @@ fn stack_direction_cli_aliases_reject_only_conflicting_effective_values() {
     assert!(!flags(&["--stack-up", "--stack-up=false"]).boolean("stack-up"));
     assert!(!flags(&["--reverse=false"]).boolean("reverse"));
     assert!(flags(&[]).boolean("reverse"));
+}
+
+#[test]
+fn shortened_titles_preserve_utf8_and_word_boundaries() {
+    let exact = "a".repeat(36);
+    assert_eq!(model::shorten_title(&exact), exact);
+    assert_eq!(
+        model::shorten_title(&"a".repeat(37)),
+        format!("{}...", "a".repeat(36))
+    );
+    assert_eq!(
+        model::shorten_title(&format!("first {}", "x".repeat(40))),
+        "first ..."
+    );
+    assert_eq!(
+        model::shorten_title(&"🦀".repeat(10)),
+        format!("{}...", "🦀".repeat(9))
+    );
 }

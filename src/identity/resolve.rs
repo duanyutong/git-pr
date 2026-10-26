@@ -493,11 +493,90 @@ pub(crate) fn verify_anchors(commands: &Commands, commits: &[Commit]) -> Result<
     Ok(())
 }
 
+/// Retire only orphaned associations whose adopted reviews are confirmed merged.
+pub(crate) fn cleanup(github: &GitHub<'_>, records: &Records, commits: &[Commit]) -> Result<()> {
+    let anchors: BTreeSet<_> = records
+        .anchors()
+        .filter(|anchor| {
+            !crate::stack::selection::ignored_branch(anchor)
+                && !commits.iter().any(|commit| {
+                    commit
+                        .publication
+                        .as_ref()
+                        .and_then(|binding| binding.anchor.as_deref())
+                        == Some(*anchor)
+                })
+        })
+        .collect();
+    if anchors.is_empty() {
+        return Ok(());
+    }
+    // Ordinary repeats need no further commands. Orphans require fresh pending
+    // creation evidence before their exact configuration values may retire.
+    let current = Records::read(github.commands)?;
+    let branches = inventory(github.commands)?;
+    let attempts = current.attempts(&github.config.repo)?;
+    let mut candidates = Vec::new();
+    for anchor in anchors {
+        if branches.contains_key(anchor) {
+            continue;
+        }
+        let (Ok(head), Ok(Some(review))) = (
+            records.head(anchor, &github.config.repo),
+            records.review(anchor, &github.config.repo),
+        ) else {
+            continue;
+        };
+        if attempts
+            .iter()
+            .any(|attempt| head.as_ref().is_none_or(|head| attempt.head == *head))
+        {
+            continue;
+        }
+        // Included definitions remain under their owner's control.
+        if let Ok(mut values) = records.relocation(github.commands, anchor) {
+            // Keep the merged review identity until every other field has retired,
+            // so interrupted cleanup remains eligible without a head association.
+            values.sort_by_key(|(key, _)| key.ends_with(".gitprpullrequest"));
+            candidates.push((anchor, review, head, values));
+        }
+    }
+    if candidates.is_empty() {
+        return Ok(());
+    }
+    let numbers: Vec<_> = candidates.iter().map(|(_, review, _, _)| *review).collect();
+    let merged = github.merged_prs(&numbers)?;
+    let branches = inventory(github.commands)?;
+    for (anchor, review, head, values) in candidates {
+        if merged.contains(&review) && !branches.contains_key(anchor) {
+            let current = Records::read(github.commands)?;
+            if ["gitprhead", "gitprpullrequest", "gitprchangeid"]
+                .iter()
+                .any(|field| {
+                    let key = format!("branch.{anchor}.{field}");
+                    records.0.get(&key) != current.0.get(&key)
+                })
+            {
+                continue;
+            }
+            if current
+                .attempts(&github.config.repo)?
+                .iter()
+                .any(|attempt| head.as_ref().is_none_or(|head| attempt.head == *head))
+            {
+                continue;
+            }
+            super::store::retire(github.commands, &values)?;
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn verify_bindings(
     commands: &Commands,
     repo: &Repository,
     commits: &[Commit],
-) -> Result<()> {
+) -> Result<Records> {
     let records = Records::read(commands)?;
     for commit in commits.iter().filter(|commit| !commit.skip) {
         if let Some(binding) = &commit.publication
@@ -517,7 +596,8 @@ pub(crate) fn verify_bindings(
             }
         }
     }
-    validate_unique(commits, 0, &records, &inventory(commands)?)
+    validate_unique(commits, 0, &records, &inventory(commands)?)?;
+    Ok(records)
 }
 
 #[cfg(test)]

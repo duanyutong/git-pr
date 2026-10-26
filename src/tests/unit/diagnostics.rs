@@ -78,7 +78,7 @@ fn diagnostics_preserve_submission_effects_in_both_native_modes() {
             let measured = timed.0.lock().unwrap();
             assert_eq!(
                 measured.stderr.matches("start command: git push").count(),
-                1
+                0
             );
             assert_eq!(measured.stderr.matches("start wait:").count(), 0);
             assert_eq!(

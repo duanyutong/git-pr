@@ -10,9 +10,9 @@ The implementation follows GitHub's [stack API](https://docs.github.com/en/rest/
 The workflow retains the following dependency order:
 
 1. Load effective Git configuration, validate the working tree and discover the selected history.
-2. Apply selection, draft and author exclusions; validate references before publication and before inserting new reference trailers.
-3. Infer missing branch names in memory, calculate predecessor bases once, and verify existing PR identities, lifecycle states, base relationships and incoming dependencies before inserting trailers.
-4. Insert missing trailers in a backend transaction, verify recovered selection identities, publish the selected refs, invalidate affected observations and confirm pinned PR identities before creating any new PRs.
+2. Apply selection, draft and author exclusions; validate references before publication and before persisting publication associations.
+3. Resolve publication associations in memory, calculate predecessor bases once, and verify existing PR identities, lifecycle states, base relationships and incoming dependencies before persistence.
+4. Persist verified associations, confirm that selected objects remain unchanged, publish changing refs, invalidate affected observations and confirm pinned PR identities before creating any new PRs.
 5. Require existing PR bases to remain unchanged, gather complete description context, reconcile changed content and labels, then reconcile native topology if enabled and print the completion listing.
 
 Local validation checkpoints and dry runs do not require credentials.
@@ -238,8 +238,12 @@ This interpretation follows the [GitHub stacks API contract](https://docs.github
 Publication batches contain at most 128 full-object refspecs and at most 64 KiB of refspec arguments.
 Git performs its normal hooks and transport negotiation once per batch.
 Progress output retains one logical publication line per ref; verbose command traces expose the actual batched invocation.
-An up-to-date push remains the normal fresh publication check.
 A batched authoritative `ls-remote` observation supplies expected-object leases before any publication mutation, including absence leases for new heads.
+Ordinary publication omits refs whose observed destination objects already equal their selected commits.
+An entirely unchanged publication performs no push, Git hooks or local ref synchronisation and reuses the invocation's fresh PR observations without a publication-triggered refresh.
+Mixed publication pushes only changing refs with their exact expected-object leases and retains the complete post-publication PR identity and lifecycle barrier.
+The successful result marks a confirmed change to a published head as updated even when its PR description requires no amendment.
+Verified recovery transitions retain their complete publication procedure.
 After a failed push, one targeted remote observation identifies incomplete refs without replaying known completed publication.
 
 Publication identity resides in repository-local Git configuration; commit messages and hashes remain unchanged.
@@ -313,6 +317,8 @@ A unique global leaf, if present, wins its group and all subsequent groups; othe
 The 129-tip regression requires four ancestry commands, compared with 256 in the former scalar fallback.
 
 Full-stack footers necessarily emit O(U(N + H)) entries.
+Numbered PR rows and context labels omit displayed commit hashes, so a changed PR head object does not by itself amend its description.
+Existing generated hash annotations are removed during one reconciliation; subsequent unchanged navigation remains stable.
 Unnumbered commits remain visible as escaped commit links with their author identity, including commits excluded from publication by author or draft policy.
 Their links use full commit identities, and their inclusion does not create PRs or publish additional branch destinations.
 PR-number deduplication applies only to numbered entries; distinct unnumbered commits shall not collapse into a shared zero identity.
@@ -326,11 +332,20 @@ A persistent cache, daemon and embedded VCS implementation remain conditional de
 ## Verification and interpretation
 
 The strict unit gate covers every declared application policy module completely for lines, regions and functions.
-Scale tests exercise 1, 5, 10, 50, 100, 101 and 1,000 commits, including full discovery, bounded request/publication counts and a mutation-free unchanged pass.
+Routine unchanged-submission tests exercise 1, 5, 24, 25, 26, 100 and 101 commits, including full discovery, bounded request/publication counts and a mutation-free unchanged pass.
+An optional 1,000-commit operation-count regression is available through `cargo test --locked unchanged_submission_at_large_scale -- --ignored`.
+These assertions use controlled observation time and impose no elapsed-time performance threshold.
 Regression counters enforce one body analysis per unchanged observation and one predecessor-base calculation per active submission in both native modes, including trailer-free selections and compact presentation.
 Protocol tests cover pagination, malformed identities, lost responses, partial mutation results, stale observations, ref guards, literal editor inputs and process deadlines.
-Disposable backend tests verify published objects and completed remote effects.
-The [validation contract](testing.md) specifies fixture isolation and behavioural expectations.
+Disposable backend tests independently verify published objects and completed remote effects.
+The [validation contract](testing.md) specifies direct behavioural assertions, fixture isolation and platform obligations.
+
+For N unchanged conventional PRs with complete observations, ordinary-size names, unchanged description context and a submission shorter than 30 seconds, the normal budget is ceil(N/25) initial head observation requests and ceil(N/128) authoritative destination-ref reads, with zero pushes, metadata mutations, local ref synchronisations, rewrites or sleeps.
+The normal repeat uses nine batched configuration reads, including association checks before publication, PR reconciliation and description changes.
+Native mode adds one topology read for the selected existing stack.
+Pagination, capability fallback, descendant context, recovery and long-submission refresh are explicit additional work.
+These bounds establish removal of identified duplication; they do not establish a universal optimum or a live-service latency guarantee.
+The [validation evidence guide](validation.md) specifies how acceptance results and performance measurements shall be recorded and interpreted.
 
 ## Preparation and byte reuse
 

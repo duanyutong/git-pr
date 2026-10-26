@@ -81,7 +81,7 @@ fn first_repeat_and_unchanged_submission_preserve_bases_bodies_and_draft_choice(
         f.trace().iter().filter(|v| v["method"] == "PATCH").count(),
         0
     );
-    assert_eq!(commands(&f.trace(), "git", "push").len(), 1);
+    assert_eq!(commands(&f.trace(), "git", "push"), [] as [Value; 0]);
     assert_eq!(
         f.output()
             .matches("https://github.com/org/repo/pull/101")
@@ -110,7 +110,7 @@ fn selections_retain_existing_bases_or_fail_before_publication() {
             assert_eq!(f.git(&["ls-remote", "--heads", "origin"]), remote);
         } else {
             f.run(&selection).unwrap();
-            assert_eq!(commands(&f.trace(), "git", "push").len(), 1);
+            assert_eq!(commands(&f.trace(), "git", "push"), [] as [Value; 0]);
         }
         let prs = f.service.prs.lock().unwrap();
         assert_eq!(prs[&102]["base"]["ref"], "topic/1");
@@ -141,19 +141,7 @@ fn unchanged_five_commit_prefix_preserves_unselected_dependants() {
 
             let trace = f.trace();
             let pushes = commands(&trace, "git", "push");
-            assert_eq!(pushes.len(), 1);
-            let args = pushes[0]["args"].as_array().unwrap();
-            for (index, hash) in f.hashes.iter().take(5).enumerate() {
-                assert!(args.contains(&json!(format!(
-                    "--force-with-lease=refs/heads/topic/{}:{hash}",
-                    index + 1
-                ))));
-            }
-            assert!(
-                !args
-                    .iter()
-                    .any(|arg| arg.as_str().unwrap().contains("topic/6"))
-            );
+            assert_eq!(pushes, [] as [Value; 0]);
             assert!(!trace.iter().any(|event| {
                 event["body"]["query"]
                     .as_str()
@@ -280,7 +268,7 @@ fn labels_move_with_tip_and_author_filtering() {
     f.service.trace.lock().unwrap().clear();
     f.run(&["--add-label", "all", "--add-tip-label", "tip"])
         .unwrap();
-    assert_eq!(commands(&f.trace(), "git", "push").len(), 1);
+    assert_eq!(commands(&f.trace(), "git", "push"), [] as [Value; 0]);
     f.run(&[
         "--include-other-authors",
         "--add-label",
@@ -330,13 +318,13 @@ fn failures_preserve_completed_pushes_and_report_exact_postcondition() {
         .unwrap()
         .insert(key.clone(), (1, "reference already exists".into()));
     f.run(&["--stop-after=push"]).unwrap();
-    assert_eq!(commands(&f.trace(), "git", "ls-remote").len(), 2);
+    assert_eq!(commands(&f.trace(), "git", "ls-remote").len(), 1);
+    assert_eq!(commands(&f.trace(), "git", "push"), [] as [Value; 0]);
     f.git(&["push", "-f", "origin", "main:refs/heads/topic/1"]);
     f.service.command_errors.lock().unwrap().remove(&key);
-    key = key.replacen(
-        &format!("topic/1:{}", f.hashes[0]),
-        &format!("topic/1:{}", f.trunk),
-        1,
+    key = format!(
+        "git push --porcelain --no-follow-tags --force-with-lease=refs/heads/topic/1:{} -- origin {}:refs/heads/topic/1",
+        f.trunk, f.hashes[0]
     );
     f.service
         .command_errors
@@ -345,7 +333,8 @@ fn failures_preserve_completed_pushes_and_report_exact_postcondition() {
         .insert(key.clone(), (1, "reference already exists".into()));
     let error = f.run(&["--stop-after=push"]).unwrap_err();
     assert!(format!("{error:#}").contains("failed to push 1 branch"));
-    let verification = "git ls-remote --refs -- https://github.com/org/repo.git refs/heads/topic/1 refs/heads/topic/2".to_owned();
+    let verification =
+        "git ls-remote --refs -- https://github.com/org/repo.git refs/heads/topic/1".to_owned();
     f.service
         .command_errors
         .lock()
@@ -587,7 +576,7 @@ fn branchless_submission_shares_body_analysis_and_bases_with_native_linking() {
         } else {
             &[]
         };
-        for _ in 0..2 {
+        for submission in 0..2 {
             f.service.trace.lock().unwrap().clear();
             BODY_ANALYSES.set(0);
             BASE_PLANS.set(0);
@@ -595,7 +584,10 @@ fn branchless_submission_shares_body_analysis_and_bases_with_native_linking() {
             assert_eq!(BODY_ANALYSES.get(), 3);
             assert_eq!(BASE_PLANS.get(), 1);
             let trace = f.trace();
-            assert_eq!(commands(&trace, "git", "push").len(), 1);
+            assert_eq!(
+                commands(&trace, "git", "push").len(),
+                usize::from(submission == 0)
+            );
             assert_eq!(commands(&trace, "git", "reword").len(), 0);
             assert!(!trace.iter().any(|v| v["program"] == "gh"));
         }

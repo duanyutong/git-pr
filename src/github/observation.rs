@@ -7,9 +7,8 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
 
-use super::{GitHub, Ordering, fresh, guard};
+use super::{GitHub, Ordering, guard};
 use crate::model::PullRequest;
-use std::time::Instant;
 
 const BATCH_SIZE: usize = 25;
 
@@ -182,7 +181,7 @@ impl GitHub<'_> {
                     continue;
                 }
                 if let Some(pr) = prs.get(&number)
-                    && times.get(&number).is_some_and(fresh)
+                    && times.get(&number).is_some_and(|time| self.fresh(time))
                 {
                     if pr.is_merged() {
                         merged.insert(number);
@@ -326,7 +325,7 @@ impl GitHub<'_> {
         {
             let mut times = guard(&self.session.head_times);
             for reference in references {
-                if times.get(reference).is_some_and(|time| !fresh(time)) {
+                if times.get(reference).is_some_and(|time| !self.fresh(time)) {
                     times.remove(reference);
                     heads.remove(reference);
                 }
@@ -407,7 +406,7 @@ impl GitHub<'_> {
                     }
                 }
                 heads.insert(head.reference.clone(), numbers);
-                guard(&self.session.head_times).insert(head.reference.clone(), Instant::now());
+                guard(&self.session.head_times).insert(head.reference.clone(), self.now());
             }
         }
         drop(heads);
@@ -554,7 +553,7 @@ impl GitHub<'_> {
     pub(super) fn commit_prs(&self, hash: &str) -> Result<Associations> {
         let mut cache = guard(&self.session.commit_prs);
         if let Some((time, prs)) = cache.get(hash)
-            && fresh(time)
+            && self.fresh(time)
         {
             return Ok(Arc::clone(prs));
         }
@@ -576,7 +575,7 @@ impl GitHub<'_> {
             result => result,
         }?;
         let prs: Associations = prs.into();
-        cache.insert(hash.into(), (Instant::now(), Arc::clone(&prs)));
+        cache.insert(hash.into(), (self.now(), Arc::clone(&prs)));
         drop(cache);
         Ok(prs)
     }

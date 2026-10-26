@@ -494,12 +494,11 @@ fn remote_base_and_lifecycle_changes_stop_publication_before_any_further_pr_effe
                     _ => unreachable!(),
                 }
                 if after_push {
-                    world
-                        .0
-                        .lock()
-                        .unwrap()
-                        .changes_on_push
-                        .insert(number, Some(changed));
+                    let mut memory = world.0.lock().unwrap();
+                    memory.changes_on_push.insert(number, Some(changed));
+                    memory
+                        .remote_refs
+                        .insert("refs/heads/topic/1".into(), "f".repeat(40));
                 } else {
                     world.0.lock().unwrap().prs.insert(number, changed);
                 }

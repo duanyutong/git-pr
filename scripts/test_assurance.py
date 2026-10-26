@@ -354,7 +354,7 @@ class SensitivityTests(unittest.TestCase):
                 unittest.mock.patch.object(assurance, "ROOT", source),
                 unittest.mock.patch.object(assurance.subprocess, "check_output") as listing,
             ):
-                listing.return_value = b"src/example.rs\0src/example.rs\0.env\0build.rs\0src/cli/usage.txt\0src/cli/flags.txt\0src/commands/editor.sh\0"
+                listing.return_value = b"src/example.rs\0src/example.rs\0src/deleted.rs\0.env\0build.rs\0src/cli/usage.txt\0src/cli/flags.txt\0src/commands/editor.sh\0"
                 digests = assurance.snapshot(destination)
                 self.assertEqual(
                     set(digests),
@@ -368,6 +368,7 @@ class SensitivityTests(unittest.TestCase):
                 )
                 self.assertEqual((destination / "src/example.rs").read_bytes(), b"source\r\n")
                 self.assertFalse((destination / ".env").exists())
+                self.assertFalse((destination / "src/deleted.rs").exists())
                 for path in (b"../escape\0", b"/absolute\0", b".git/config\0"):
                     listing.return_value = path
                     with self.subTest(path=path), self.assertRaisesRegex(AssertionError, "unsafe"):
@@ -375,6 +376,10 @@ class SensitivityTests(unittest.TestCase):
                 link = source / "src/link.rs"
                 link.symlink_to(source / "src/example.rs")
                 listing.return_value = b"src/link.rs\0"
+                with self.assertRaisesRegex(AssertionError, "ordinary source"):
+                    assurance.snapshot(destination)
+                link.unlink()
+                link.symlink_to(source / "src/missing.rs")
                 with self.assertRaisesRegex(AssertionError, "ordinary source"):
                     assurance.snapshot(destination)
                 outside = root / "outside"

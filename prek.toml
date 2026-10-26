@@ -1,7 +1,7 @@
 minimum_prek_version = "0.5.6"
 default_stages = ["pre-commit"]
 default_language_version = { python = "3.15.0", rust = { request = "1.99.1", preference = "only-system" } }
-exclude = "^(LICENSE|THIRD_PARTY_NOTICES.md|tests/fixtures/|fuzz/seeds/)"
+exclude = "^(LICENSE|THIRD_PARTY_NOTICES.md|fuzz/seeds/)"
 
 [[repos]]
 repo = "builtin"

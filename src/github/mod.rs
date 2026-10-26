@@ -72,6 +72,10 @@ pub(crate) struct GitHub<'a> {
 }
 
 impl GitHub<'_> {
+    fn fresh(&self, observed: &Instant) -> bool {
+        self.now().saturating_duration_since(*observed) <= Duration::from_secs(30)
+    }
+
     pub(crate) fn was_updated(&self, number: u64) -> bool {
         guard(&self.session.updated).contains(&number)
     }
@@ -120,7 +124,7 @@ impl GitHub<'_> {
             let times = guard(&self.session.head_times);
             references
                 .iter()
-                .filter(|reference| times.get(*reference).is_some_and(|time| !fresh(time)))
+                .filter(|reference| times.get(*reference).is_some_and(|time| !self.fresh(time)))
                 .cloned()
                 .collect()
         };
@@ -176,7 +180,7 @@ impl GitHub<'_> {
 
     #[cfg(test)]
     pub(crate) fn expire_head_observation_for_test(&self, reference: &str) {
-        let now = Instant::now();
+        let now = self.now();
         let expired = now.checked_sub(Duration::from_secs(31)).unwrap_or(now);
         guard(&self.session.head_times).insert(reference.into(), expired);
     }
@@ -186,7 +190,7 @@ impl GitHub<'_> {
         if let Some(pr) = prs.get(&number)
             && guard(&self.session.pr_times)
                 .get(&number)
-                .is_some_and(fresh)
+                .is_some_and(|time| self.fresh(time))
         {
             return Ok(Arc::clone(pr));
         }
@@ -201,7 +205,7 @@ impl GitHub<'_> {
         }
         let pr = Arc::new(pr);
         prs.insert(number, Arc::clone(&pr));
-        guard(&self.session.pr_times).insert(number, Instant::now());
+        guard(&self.session.pr_times).insert(number, self.now());
         guard(&self.session.unknown_stacks).remove(&number);
         drop(prs);
         Ok(pr)
@@ -213,13 +217,13 @@ impl GitHub<'_> {
         // A partial mutation does not renew the age of unrelated observed fields.
         guard(&self.session.pr_times)
             .entry(number)
-            .or_insert_with(Instant::now);
+            .or_insert_with(|| self.now());
     }
 
     fn observed(&self, pr: PullRequest) {
         let number = pr.number;
         self.remember(Arc::new(pr));
-        guard(&self.session.pr_times).insert(number, Instant::now());
+        guard(&self.session.pr_times).insert(number, self.now());
         guard(&self.session.unknown_stacks).remove(&number);
     }
 
@@ -263,7 +267,7 @@ impl GitHub<'_> {
         let numbers = heads.get(reference)?;
         if !guard(&self.session.head_times)
             .get(reference)
-            .is_some_and(fresh)
+            .is_some_and(|time| self.fresh(time))
         {
             return None;
         }
@@ -293,7 +297,7 @@ impl GitHub<'_> {
         prs.get(&commit.pr_number).is_some_and(|pr| {
             guard(&self.session.pr_times)
                 .get(&commit.pr_number)
-                .is_some_and(fresh)
+                .is_some_and(|time| self.fresh(time))
                 && pr.state == "open"
                 && !pr.is_merged()
                 && pr.base.name == base
@@ -394,7 +398,7 @@ impl GitHub<'_> {
             .or_default()
             .push(pr.number);
         self.observed(pr);
-        guard(&self.session.head_times).insert(commit.remote_ref().into(), Instant::now());
+        guard(&self.session.head_times).insert(commit.remote_ref().into(), self.now());
         Ok(())
     }
 
@@ -406,7 +410,7 @@ impl GitHub<'_> {
             let times = guard(&self.session.pr_times);
             numbers
                 .iter()
-                .filter(|number| !times.get(number).is_some_and(fresh))
+                .filter(|number| !times.get(number).is_some_and(|time| self.fresh(time)))
                 .filter_map(|number| prs.get(number))
                 .map(|pr| pr.head.name.clone())
                 .collect()
@@ -446,7 +450,7 @@ impl GitHub<'_> {
                 crate::tests::unit::support::LABEL_FRESHNESS_CHECKS.update(|n| n + 1);
                 let current = guard(&self.session.pr_times)
                     .get(&number)
-                    .is_some_and(fresh);
+                    .is_some_and(|time| self.fresh(time));
                 // Slow preceding mutations can expire the next target; refresh its
                 // remaining bounded group only when that target requires observation.
                 if !current {
@@ -561,10 +565,6 @@ impl GitHub<'_> {
 #[cfg(test)]
 #[path = "../tests/unit/github_protocol.rs"]
 mod unit;
-
-fn fresh(observed: &Instant) -> bool {
-    observed.elapsed() <= Duration::from_secs(30)
-}
 
 const CONTENT_LIMIT: usize = 1024 * 1024;
 fn ensure_content_size(payload: &[u8]) -> Result<()> {

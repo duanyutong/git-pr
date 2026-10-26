@@ -128,6 +128,8 @@ fn pr_selection_preserves_order_and_stops_at_the_first_matching_open_pr() {
     assert_eq!(github_policy::select_pr(&prs[..3], "topic"), 0);
     assert_eq!(github_policy::select_pr(&prs[2..3], "topic"), 2);
     assert_eq!(github_policy::select_pr(&prs, "absent"), 0);
+    assert_eq!(github_policy::select_pr(&prs, "topic"), 3);
+    assert_eq!(github_policy::select_pr(&prs[..0], "topic"), 0);
 }
 
 #[test]
@@ -309,7 +311,7 @@ fn credential_encodings_accept_supported_forms_and_reject_invalid_data() {
 }
 
 #[test]
-fn jujutsu_status_and_pr_creation_output_handle_valid_and_malformed_values() {
+fn jujutsu_status_handles_valid_and_malformed_values() {
     for (output, expected) in [
         ("EMPTY|NO-DESC", true),
         ("EMPTY|HAS-DESC", true),
@@ -321,17 +323,16 @@ fn jujutsu_status_and_pr_creation_output_handle_valid_and_malformed_values() {
     ] {
         assert_eq!(jj_policy::clean_status(output), expected);
     }
-    assert_eq!(
-        crate::tests::legacy::parse_pr_url("https://github.com/org/repo/pull/123\n").unwrap(),
-        123
-    );
-    assert_eq!(
-        crate::tests::legacy::parse_pr_url("/pull/invalid\nhttps://github.com/org/repo/pull/456")
-            .unwrap(),
-        456
-    );
-    assert!(crate::tests::legacy::parse_pr_url("No URL").is_err());
-    assert!(crate::tests::legacy::parse_pr_url("/pull/18446744073709551616").is_err());
+    for info in ["", "change|hash", "missing-fields"] {
+        let error = jj_policy::parse_working_copy(
+            "NONEMPTY|HAS-DESC",
+            info,
+            "Fixture Author",
+            "fixture@example.com",
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("unexpected jj @ output:"));
+    }
 }
 
 #[test]

@@ -155,6 +155,82 @@ fn native_git_branch_rename_preserves_the_original_publication() {
 }
 
 #[test]
+fn native_cleanup_retires_merged_orphans_and_preserves_includes_and_editor_settings() {
+    let f = Fixture::new(1, false);
+    f.run(&["--no-stack"]).unwrap();
+    let number = {
+        let mut prs = f.service.prs.lock().unwrap();
+        let mut historical = prs.values().next().unwrap().clone();
+        historical["number"] = serde_json::json!(901);
+        historical["head"]["ref"] = serde_json::json!("retired");
+        historical["state"] = serde_json::json!("closed");
+        historical["merged"] = serde_json::json!(true);
+        prs.insert(901, historical);
+        "https://github.com/org/repo/pull/901"
+    };
+    f.git(&["branch", "retired"]);
+    for anchor in ["retired", "included"] {
+        f.git(&[
+            "config",
+            &format!("branch.{anchor}.gitPrHead"),
+            "github.com/org/repo refs/heads/retired",
+        ]);
+        f.git(&[
+            "config",
+            &format!("branch.{anchor}.gitPrPullRequest"),
+            number,
+        ]);
+        f.git(&[
+            "config",
+            &format!("branch.{anchor}.description"),
+            "Editor notes",
+        ]);
+    }
+    let included = f.temp.path().join("included.gitconfig");
+    std::fs::write(
+        &included,
+        format!("[branch \"included\"]\n    gitPrPullRequest = {number}\n"),
+    )
+    .unwrap();
+    f.git(&["config", "include.path", included.to_str().unwrap()]);
+    f.git(&["update-ref", "-d", "refs/heads/retired"]);
+    f.run(&["--no-stack"]).unwrap();
+    let configuration = f.git(&["config", "--local", "--list"]);
+    assert!(!configuration.contains("branch.retired.gitpr"));
+    assert!(configuration.contains("branch.retired.description=Editor notes"));
+    assert!(configuration.contains("branch.included.gitprhead="));
+    assert!(std::fs::read_to_string(included).unwrap().contains(number));
+    f.run(&["--no-stack"]).unwrap();
+    assert_eq!(f.git(&["config", "--local", "--list"]), configuration);
+}
+
+#[cfg(unix)]
+#[test]
+fn native_repeated_submission_does_not_run_pre_push_hooks() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let f = Fixture::new(1, false);
+    f.run(&["--no-stack"]).unwrap();
+    let hook = f.cwd.join(".git/hooks/pre-push");
+    std::fs::write(&hook, "#!/bin/sh\ncat > .git/pre-push-observation\n").unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    f.run(&["--no-stack"]).unwrap();
+    assert!(!f.cwd.join(".git/pre-push-observation").exists());
+    f.git(&[
+        "--git-dir=../remote.git",
+        "update-ref",
+        "-d",
+        "refs/heads/topic/1",
+    ]);
+    f.run(&["--no-stack"]).unwrap();
+    assert!(
+        std::fs::read_to_string(f.cwd.join(".git/pre-push-observation"))
+            .unwrap()
+            .contains("refs/heads/topic/1")
+    );
+}
+
+#[test]
 fn common_repository_lock_is_exclusive_and_released_on_drop() {
     let mut f = Fixture::new(1, false);
     let lock = f.cwd.join(".git/git-pr.lock");

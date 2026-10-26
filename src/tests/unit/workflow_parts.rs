@@ -263,6 +263,9 @@ fn publication_observes_lifecycle_changes_inside_the_cache_lifetime_and_pins_ide
             memory
                 .changes_on_push
                 .insert(number, if change == "missing" { None } else { Some(pr) });
+            memory
+                .remote_refs
+                .insert("refs/heads/topic/2".into(), "f".repeat(40));
             memory.trace.clear();
             memory.stdout.clear();
         }
@@ -333,7 +336,7 @@ fn partial_publication_uses_destination_objects_to_verify_unchanged_refs() {
 }
 
 #[test]
-fn mixed_publication_refreshes_only_changing_refs_with_unselected_dependants_above() {
+fn mixed_publication_refreshes_selected_heads_and_only_changing_dependants() {
     let world = World::new(3);
     world.run(&["--no-stack"]).unwrap();
     world
@@ -363,14 +366,16 @@ fn mixed_publication_refreshes_only_changing_refs_with_unselected_dependants_abo
     plan.verify(&github, &mut selected, false).unwrap();
 
     let trace = world.trace();
-    assert_eq!(trace.len(), 1);
-    assert_eq!(trace[0]["body"]["variables"]["b0"], "topic/1");
-    assert!(trace[0]["body"]["variables"].get("b1").is_none());
+    assert_eq!(trace.len(), 2);
+    assert_eq!(trace[0]["body"]["variables"]["h0"], "topic/1");
+    assert_eq!(trace[0]["body"]["variables"]["h1"], "topic/2");
+    assert_eq!(trace[1]["body"]["variables"]["b0"], "topic/1");
+    assert!(trace[1]["body"]["variables"].get("b1").is_none());
     assert!(!trace.iter().any(publication_effect));
 }
 
 #[test]
-fn unchanged_partial_publication_lease_preserves_a_concurrent_remote_update() {
+fn unchanged_partial_publication_preserves_a_concurrent_remote_update_without_pushing() {
     let world = World::new(3);
     world.run(&["--no-stack"]).unwrap();
     let config = world.config();
@@ -394,23 +399,22 @@ fn unchanged_partial_publication_lease_preserves_a_concurrent_remote_update() {
         (memory.prs.clone(), memory.remote_refs.clone())
     };
 
-    let error = app
-        .push(
-            &config,
-            Git {
-                commands: &app.commands,
-                repo: &config.repo,
-            },
-            &github,
-            &mut selected,
-            &plan,
-        )
-        .unwrap_err();
+    app.push(
+        &config,
+        Git {
+            commands: &app.commands,
+            repo: &config.repo,
+        },
+        &github,
+        &mut selected,
+        &plan,
+    )
+    .unwrap();
 
-    assert!(format!("{error:#}").contains("stale lease"));
     let memory = world.0.lock().unwrap();
     assert_eq!(memory.remote_refs, remote);
     assert_eq!(memory.prs, before);
+    assert!(!memory.trace.iter().any(|event| event["args"][0] == "push"));
     assert!(
         !memory
             .trace
@@ -418,6 +422,91 @@ fn unchanged_partial_publication_lease_preserves_a_concurrent_remote_update() {
             .any(|event| { event["kind"] == "http" && publication_effect(event) })
     );
     drop(memory);
+}
+
+#[test]
+fn repeated_publication_skips_push_hooks_and_local_ref_synchronisation() {
+    for backend in ["git", "branchless", "jj"] {
+        let world = World::new(2);
+        {
+            let mut memory = world.0.lock().unwrap();
+            memory.jj = backend == "jj";
+            memory.branchless = backend == "branchless";
+        }
+        world.run(&["--no-stack"]).unwrap();
+        world.0.lock().unwrap().trace.clear();
+        world.run(&["--no-stack"]).unwrap();
+        let trace = world.trace();
+        assert!(!trace.iter().any(publication_effect), "{backend}");
+        assert!(
+            !trace.iter().any(|event| {
+                event["args"][0] == "worktree"
+                    || (event["program"] == "jj"
+                        && event["args"][0] == "git"
+                        && event["args"][1] == "import")
+            }),
+            "{backend}"
+        );
+        assert_eq!(
+            trace
+                .iter()
+                .filter(|event| event["path"] == "graphql")
+                .count(),
+            1,
+            "{backend}"
+        );
+        assert_eq!(
+            trace
+                .iter()
+                .filter(|event| event["args"][0] == "ls-remote")
+                .count(),
+            1,
+            "{backend}"
+        );
+    }
+}
+
+#[test]
+fn mixed_publication_pushes_only_different_destination_objects_with_exact_leases() {
+    let world = World::new(3);
+    world.run(&["--no-stack"]).unwrap();
+    {
+        let mut memory = world.0.lock().unwrap();
+        memory
+            .remote_refs
+            .insert("refs/heads/topic/2".into(), "f".repeat(40));
+        memory.trace.clear();
+    }
+    world.run(&["--no-stack"]).unwrap();
+    let trace = world.trace();
+    let pushes: Vec<_> = trace
+        .iter()
+        .filter(|event| event["args"][0] == "push")
+        .collect();
+    assert_eq!(pushes.len(), 1);
+    let args = pushes[0]["args"].as_array().unwrap();
+    assert!(args.contains(&serde_json::json!(format!(
+        "--force-with-lease=refs/heads/topic/2:{}",
+        "f".repeat(40)
+    ))));
+    assert!(args.contains(&serde_json::json!(format!(
+        "{}:refs/heads/topic/2",
+        commit(2).hash
+    ))));
+    for untouched in ["topic/1", "topic/3"] {
+        assert!(
+            !args
+                .iter()
+                .any(|arg| arg.as_str().unwrap().contains(untouched))
+        );
+    }
+    let memory = world.0.lock().unwrap();
+    for number in 1..=3 {
+        assert_eq!(
+            memory.remote_refs[&format!("refs/heads/topic/{number}")],
+            commit(number).hash
+        );
+    }
 }
 
 #[test]
@@ -538,13 +627,11 @@ fn publication_reuses_fresh_dependants_and_renews_only_expired_observations() {
     world.0.lock().unwrap().clock_elapsed += std::time::Duration::from_secs(1);
     plan.verify(&github, &mut selected, false).unwrap();
     let refreshed = world.trace();
-    assert_eq!(refreshed.len(), 1);
-    assert!(
-        refreshed[0]["body"]["query"]
-            .as_str()
-            .unwrap()
-            .contains("baseRefName:")
-    );
+    assert_eq!(refreshed.len(), 2);
+    for (request, field) in refreshed.iter().zip(["headRefName:", "baseRefName:"]) {
+        assert!(request["body"]["query"].as_str().unwrap().contains(field));
+    }
+    assert!(!refreshed.iter().any(publication_effect));
     world.0.lock().unwrap().trace.clear();
     plan.verify(&github, &mut selected, false).unwrap();
     assert_eq!(world.trace(), [] as [serde_json::Value; 0]);
@@ -1037,7 +1124,7 @@ fn full_stack_preserves_other_author_and_draft_context_without_extra_publication
                     .iter()
                     .filter(|event| event["args"][0] == "push")
                     .count(),
-                1
+                0
             );
         }
     }

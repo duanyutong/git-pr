@@ -346,22 +346,6 @@ pub(crate) fn missing_refs(commits: &[Commit]) -> Vec<&str> {
         .collect()
 }
 
-#[cfg(test)]
-pub(crate) fn recover_tip(
-    jj: bool,
-    change: &str,
-    head: &str,
-    depth: usize,
-    resolve_change: impl FnOnce(&str) -> Result<String>,
-    resolve_depth: impl FnOnce(&str, usize) -> Result<String>,
-) -> Result<String> {
-    if jj {
-        resolve_change(change)
-    } else {
-        resolve_depth(head, depth)
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RefSync {
     Nothing,

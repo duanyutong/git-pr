@@ -41,9 +41,9 @@ jobs:
             ~/.cache/prek
             target
             fuzz/target
-          key: assurance-${{ matrix.gate }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'fuzz/Cargo.lock', 'fuzz/Cargo.toml', 'scripts/dev-tools.env', 'pyproject.toml', 'uv.lock', 'prek.toml') }}
+          key: rust-assurance-${{ matrix.gate }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'fuzz/Cargo.lock', 'fuzz/Cargo.toml', 'scripts/dev-tools.env', 'pyproject.toml', 'uv.lock', 'prek.toml') }}
           restore-keys: |
-            assurance-${{ matrix.gate }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml') }}-
+            rust-assurance-${{ matrix.gate }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml') }}-
       - name: Host prerequisites
         id: prerequisites
         run: |

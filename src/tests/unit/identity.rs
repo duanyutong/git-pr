@@ -1438,3 +1438,442 @@ fn persistence_requires_a_resolved_binding_before_any_repair() {
     );
     assert_eq!(config_writes(&world), 0);
 }
+
+fn orphaned_publication(world: &World, anchor: &str, number: u64, merged: bool) {
+    let mut memory = world.0.lock().unwrap();
+    memory.config.extend([
+        (
+            format!("branch.{anchor}.gitPrHead"),
+            format!("github.com/org/repo refs/heads/{anchor}"),
+        ),
+        (
+            format!("branch.{anchor}.gitPrPullRequest"),
+            format!("https://github.com/org/repo/pull/{number}"),
+        ),
+        (
+            format!("branch.{anchor}.gitPrChangeId"),
+            "retired-change".into(),
+        ),
+        (
+            format!("branch.{anchor}.description"),
+            "Editor notes".into(),
+        ),
+    ]);
+    let mut pr = memory.prs[&101].clone();
+    pr["number"] = json!(number);
+    pr["head"]["ref"] = json!(anchor);
+    pr["state"] = json!("closed");
+    pr["merged"] = json!(merged);
+    memory.prs.insert(number, pr);
+}
+
+fn publication_records_output(records: &Records) -> String {
+    records
+        .0
+        .iter()
+        .fold(String::new(), |mut output, (key, values)| {
+            for record in values {
+                use std::fmt::Write as _;
+                write!(
+                    output,
+                    "{}\0{}\0{key}\n{}\0",
+                    record.scope, record.origin, record.value
+                )
+                .unwrap();
+            }
+            output
+        })
+}
+
+#[test]
+fn merged_orphan_cleanup_is_batched_and_preserves_other_branch_configuration() {
+    let world = clean_stack(1);
+    world.run(&["--no-stack"]).unwrap();
+    orphaned_publication(&world, "retired-a", 901, true);
+    orphaned_publication(&world, "retired-b", 902, true);
+    orphaned_publication(&world, "unmerged", 903, false);
+    orphaned_publication(&world, "main", 904, true);
+    orphaned_publication(&world, "protected", 905, true);
+    orphaned_publication(&world, "pending", 906, true);
+    {
+        let mut memory = world.0.lock().unwrap();
+        memory.config.insert(
+            "git-pr.pendingCreate".into(),
+            Attempt {
+                id: "00000000-0000-4000-8000-000000000001".into(),
+                head: Head {
+                    repository: "github.com/org/repo".into(),
+                    reference: "pending".into(),
+                },
+                base: "main".into(),
+            }
+            .value(),
+        );
+        memory
+            .config
+            .insert("branch.incomplete.gitPrHead".into(), "invalid".into());
+        memory.trace.clear();
+    }
+    let config = world.config();
+    let commands = world.commands();
+    let github = GitHub {
+        session: crate::github::Session::default(),
+        clock: None,
+        config: &config,
+        commands: &commands,
+        transport: world.as_ref(),
+        template: "",
+    };
+    let mut selected = commit(1);
+    selected.publication = Some(super::Binding {
+        anchor: Some("protected".into()),
+        anchor_oid: None,
+        head: Head::new(&config.repo, "protected").unwrap(),
+        review: Some(905),
+        adopted: true,
+        previous_anchor: None,
+    });
+    resolve::cleanup(&github, &Records::read(&commands).unwrap(), &[selected]).unwrap();
+    let memory = world.0.lock().unwrap();
+    for anchor in ["retired-a", "retired-b"] {
+        assert_eq!(
+            memory.config[&format!("branch.{anchor}.description")],
+            "Editor notes"
+        );
+        assert!(
+            !memory
+                .config
+                .keys()
+                .any(|key| key.starts_with(&format!("branch.{anchor}.git")))
+        );
+    }
+    for anchor in [
+        "topic/1",
+        "unmerged",
+        "main",
+        "protected",
+        "pending",
+        "incomplete",
+    ] {
+        assert!(
+            memory
+                .config
+                .contains_key(&format!("branch.{anchor}.gitPrHead"))
+        );
+    }
+    assert_eq!(
+        memory
+            .trace
+            .iter()
+            .filter(|event| event["path"] == "graphql")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn cleanup_failures_warn_without_changing_successful_submission_results() {
+    for (field, value) in [
+        ("gitprhead", "github.com/org/repo refs/heads/retired"),
+        ("gitprchangeid", "retired-change"),
+        ("gitprpullrequest", "https://github.com/org/repo/pull/901"),
+    ] {
+        let world = clean_stack(1);
+        world.run(&["--no-stack"]).unwrap();
+        orphaned_publication(&world, "retired", 901, true);
+        world.fail(&format!(
+            "git config --local --fixed-value --unset-all branch.retired.{field} {value}"
+        ));
+        world.run(&["--no-stack"]).unwrap();
+        let memory = world.0.lock().unwrap();
+        assert!(
+            memory
+                .stderr
+                .contains("could not finish merged publication metadata cleanup")
+        );
+        assert!(
+            memory
+                .config
+                .contains_key("branch.retired.gitPrPullRequest")
+        );
+        assert!(memory.stdout.contains("Feature 1"));
+        drop(memory);
+        world.0.lock().unwrap().responses.clear();
+        world.run(&["--no-stack"]).unwrap();
+        assert!(
+            !world
+                .0
+                .lock()
+                .unwrap()
+                .config
+                .keys()
+                .any(|key| key.starts_with("branch.retired.git"))
+        );
+    }
+}
+
+#[test]
+fn previews_checkpoints_and_failed_submissions_retain_merged_orphans() {
+    for flags in [
+        vec!["--no-stack", "--dry-run"],
+        vec!["--no-stack", "--stop-after=prepare"],
+        vec!["--no-stack", "--stop-after=push"],
+        vec!["--no-stack", "--stop-after=pr-create"],
+        vec!["--no-stack", "--stop-after=invalid"],
+    ] {
+        let world = clean_stack(1);
+        world.run(&["--no-stack"]).unwrap();
+        orphaned_publication(&world, "retired", 901, true);
+        let _ = world.run(&flags);
+        assert!(
+            world
+                .0
+                .lock()
+                .unwrap()
+                .config
+                .contains_key("branch.retired.gitPrHead")
+        );
+    }
+}
+
+#[test]
+fn cleanup_retains_orphans_when_observation_fails_or_an_anchor_reappears() {
+    use crate::tests::unit::support::Response;
+    use std::collections::VecDeque;
+
+    for scenario in ["unavailable", "reappeared", "included"] {
+        let world = clean_stack(1);
+        world.run(&["--no-stack"]).unwrap();
+        orphaned_publication(&world, "retired", 901, true);
+        let config = world.config();
+        let commands = world.commands();
+        let github = GitHub {
+            session: crate::github::Session::default(),
+            clock: None,
+            config: &config,
+            commands: &commands,
+            transport: world.as_ref(),
+            template: "",
+        };
+        match scenario {
+            "unavailable" => world.http("POST graphql", vec![Response::Failure("unavailable".into())]),
+            "reappeared" => {
+                world.0.lock().unwrap().responses.insert(
+                    "git branch --format=%(refname:strip=2)|%(objectname)".into(),
+                    VecDeque::from([
+                        Response::Output(0, format!("topic/1|{}", commit(1).hash)),
+                        Response::Output(0, format!("topic/1|{}\nretired|{}", commit(1).hash, commit(1).hash)),
+                    ]),
+                );
+            }
+            "included" => world.reply(
+                &format!("git config --null --show-scope --show-origin --includes --get-regexp {}", store::PATTERN),
+                0,
+                "local\0file:included\0branch.retired.gitprhead\ngithub.com/org/repo refs/heads/retired\0local\0file:included\0branch.retired.gitprpullrequest\nhttps://github.com/org/repo/pull/901\0",
+            ),
+            _ => unreachable!(),
+        }
+        assert_eq!(
+            resolve::cleanup(&github, &Records::read(&commands).unwrap(), &[]).is_err(),
+            scenario == "unavailable"
+        );
+        assert!(
+            world
+                .0
+                .lock()
+                .unwrap()
+                .config
+                .contains_key("branch.retired.gitPrHead")
+        );
+    }
+}
+
+#[test]
+fn cleanup_rechecks_complete_associations_after_observing_merged_reviews() {
+    use crate::tests::unit::support::Response;
+    use std::collections::VecDeque;
+
+    for field in ["gitprhead", "gitprpullrequest", "gitprchangeid", "pending"] {
+        let world = clean_stack(1);
+        world.run(&["--no-stack"]).unwrap();
+        orphaned_publication(&world, "retired", 901, true);
+        let config = world.config();
+        let commands = world.commands();
+        let records = Records::read(&commands).unwrap();
+        let mut concurrent = records.clone();
+        if field == "pending" {
+            let mut record = concurrent.0["branch.retired.gitprhead"][0].clone();
+            record.value = Attempt {
+                id: "00000000-0000-4000-8000-000000000001".into(),
+                head: Head::new(&config.repo, "retired").unwrap(),
+                base: "main".into(),
+            }
+            .value();
+            concurrent
+                .0
+                .insert("git-pr.pendingcreate".into(), vec![record]);
+        } else {
+            concurrent
+                .0
+                .get_mut(&format!("branch.retired.{field}"))
+                .unwrap()[0]
+                .value = "a concurrent association".into();
+        }
+        {
+            let mut memory = world.0.lock().unwrap();
+            memory.trace.clear();
+            memory.responses.insert(
+                format!(
+                    "git config --null --show-scope --show-origin --includes --get-regexp {}",
+                    store::PATTERN
+                ),
+                VecDeque::from([
+                    Response::Output(0, publication_records_output(&records)),
+                    Response::Output(0, publication_records_output(&concurrent)),
+                ]),
+            );
+            drop(memory);
+        }
+        let github = GitHub {
+            session: crate::github::Session::default(),
+            clock: None,
+            config: &config,
+            commands: &commands,
+            transport: world.as_ref(),
+            template: "",
+        };
+        resolve::cleanup(&github, &records, &[]).unwrap();
+        assert_eq!(config_writes(&world), 0, "{field}");
+        assert_eq!(
+            world
+                .trace()
+                .iter()
+                .filter(|event| event["path"] == "graphql")
+                .count(),
+            1
+        );
+    }
+}
+
+#[test]
+fn cleanup_observation_failures_preserve_every_association_without_partial_retirement() {
+    use crate::tests::unit::support::Response;
+    use std::collections::VecDeque;
+
+    for observation in [
+        "initial-config",
+        "initial-branches",
+        "initial-attempts",
+        "final-branches",
+        "final-config",
+        "final-attempts",
+    ] {
+        let world = clean_stack(1);
+        world.run(&["--no-stack"]).unwrap();
+        orphaned_publication(&world, "retired", 901, true);
+        let config = world.config();
+        let commands = world.commands();
+        let records = Records::read(&commands).unwrap();
+        let mut invalid_attempts = records.clone();
+        invalid_attempts.0.insert(
+            "git-pr.pendingcreate".into(),
+            vec![store::Record {
+                scope: "local".into(),
+                origin: "file:.git/config".into(),
+                value: "invalid".into(),
+            }],
+        );
+        let config_query = format!(
+            "git config --null --show-scope --show-origin --includes --get-regexp {}",
+            store::PATTERN
+        );
+        let branches_query = "git branch --format=%(refname:strip=2)|%(objectname)";
+        let failure = Response::Failure(format!("{observation} unavailable"));
+        let (query, responses) = match observation {
+            "initial-config" => (config_query.clone(), VecDeque::from([failure])),
+            "initial-branches" => (branches_query.into(), VecDeque::from([failure])),
+            "initial-attempts" => (
+                config_query.clone(),
+                VecDeque::from([Response::Output(
+                    0,
+                    publication_records_output(&invalid_attempts),
+                )]),
+            ),
+            "final-branches" => (
+                branches_query.into(),
+                VecDeque::from([
+                    Response::Output(0, format!("topic/1|{}", commit(1).hash)),
+                    failure,
+                ]),
+            ),
+            "final-config" => (
+                config_query.clone(),
+                VecDeque::from([
+                    Response::Output(0, publication_records_output(&records)),
+                    failure,
+                ]),
+            ),
+            "final-attempts" => (
+                config_query.clone(),
+                VecDeque::from([
+                    Response::Output(0, publication_records_output(&records)),
+                    Response::Output(0, publication_records_output(&invalid_attempts)),
+                ]),
+            ),
+            _ => unreachable!(),
+        };
+        {
+            let mut memory = world.0.lock().unwrap();
+            memory.trace.clear();
+            memory.responses.insert(query, responses);
+            drop(memory);
+        }
+        let github = GitHub {
+            session: crate::github::Session::default(),
+            clock: None,
+            config: &config,
+            commands: &commands,
+            transport: world.as_ref(),
+            template: "",
+        };
+        let error = resolve::cleanup(&github, &records, &[]).unwrap_err();
+        let expected = if observation.ends_with("attempts") {
+            "invalid or unsupported git-pr.pendingCreate"
+        } else {
+            "unavailable"
+        };
+        assert!(
+            format!("{error:#}").contains(expected),
+            "{observation}: {error:#}"
+        );
+        assert_eq!(config_writes(&world), 0, "{observation}");
+        let memory = world.0.lock().unwrap();
+        for field in ["gitPrHead", "gitPrChangeId", "gitPrPullRequest"] {
+            assert!(
+                memory
+                    .config
+                    .contains_key(&format!("branch.retired.{field}")),
+                "{observation}/{field}"
+            );
+        }
+        drop(memory);
+    }
+}
+
+#[test]
+fn binding_verification_rejects_duplicate_heads_after_observing_the_complete_inventory() {
+    let world = World::new(1);
+    let config = world.config();
+    let error = resolve::verify_bindings(&world.commands(), &config.repo, &[commit(1), commit(1)])
+        .unwrap_err();
+    assert!(error.to_string().contains("duplicate publication head"));
+    world.fail("git branch --format=%(refname:strip=2)|%(objectname)");
+    let error =
+        resolve::verify_bindings(&world.commands(), &config.repo, &[commit(1)]).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("failed to observe local branches")
+    );
+    assert_eq!(config_writes(&world), 0);
+}

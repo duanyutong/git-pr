@@ -539,7 +539,7 @@ pub(crate) fn render_commit(
 ) -> String {
     let is_current = commit.hash == current.hash;
     let reference = if commit.pr_number != 0 && is_current {
-        format!("#{} 👈 This PR ({})", commit.pr_number, commit.short_hash())
+        format!("#{} 👈 This PR", commit.pr_number)
     } else if commit.pr_number != 0 {
         format!("#{}", commit.pr_number)
     } else {
@@ -548,9 +548,8 @@ pub(crate) fn render_commit(
             |(user, host)| (user, format!("@{host}")),
         );
         format!(
-            "[{} ({})](https://{}/{}/commit/{}) — {}&#x200B;{}",
+            "[{}](https://{}/{}/commit/{}) — {}&#x200B;{}",
             escape_context_text(&commit.title),
-            commit.short_hash(),
             style.host,
             style.repo,
             commit.hash,

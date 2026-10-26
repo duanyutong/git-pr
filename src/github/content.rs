@@ -234,7 +234,7 @@ impl GitHub<'_> {
             if prefetched == 0
                 || !super::guard(&self.session.pr_times)
                     .get(&pending[0].pr_number)
-                    .is_some_and(super::fresh)
+                    .is_some_and(|time| self.fresh(time))
             {
                 prefetched = pending.len().min(25);
                 self.refresh_prs(

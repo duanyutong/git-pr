@@ -40,12 +40,14 @@ Python versioning tests reside separately in `scripts/test_version.py` and do no
 | Native topology | `github/native.rs`: idempotence, contiguous selections, append, consent, explicit declined outcomes, guarded rebuilding and retained-member failures. |
 | GitHub operations | `github/mod.rs`: failed lookups, creation, base updates, consent, native-stack transitions, observation age, encoded content budgets and partial failures through scripted command and transport responses. |
 | Jujutsu operations | `jj/mod.rs`: revision cardinality, change-ID recovery, working-copy assembly and bookmark targets. |
-| Submission workflows | `submission/mod.rs`, `submission/state.rs`, `submission/rewrite.rs`, `submission/pull_requests.rs` and `submission/presentation.rs`: phase barriers, rewritten identities, author and draft filtering, explicit selections, PR completion, history, labels and partial failures. |
+| Submission workflows | `submission/mod.rs`, `submission/state.rs`, `submission/recovery.rs`, `submission/pull_requests.rs` and `submission/presentation.rs`: phase barriers, publication recovery, author and draft filtering, explicit selections, PR completion, history, labels and partial failures. |
 | GitHub decisions | `github/policy.rs`: draft creation, label overlap reconciliation, PR selection and URLs, and stack failure classification. |
 | Jujutsu value interpretation | `jj/policy.rs`: working-copy status and description interpretation. |
 | Configuration paths and checkpoints | `config/paths.rs` and `config/checkpoint.rs`: home expansion, recognised phase names, absence and invalid checkpoints. |
 | Credential value interpretation | `credentials/keychain.rs`: supported native credential encodings and malformed values. |
 | Submission invariants | `submission/policy.rs`: author exclusions, preservation of existing exclusions and the first duplicate remote reference. |
+
+Pure backend interpretation is separated from command and credential adapters and is exercised through values and in-memory doubles.
 
 ## External boundaries
 
@@ -79,10 +81,11 @@ just test-unit
 just coverage-unit
 ```
 
-The pre-change unit baseline used only the nine pure tests and the captured-reference assertion test.
-It established complete line, region and function coverage in the five previously strict modules and in the then-current `model.rs` (now `model/commit.rs`).
-CLI parsing covered 104 of 115 lines, 207 of 225 regions and 12 of 13 functions; the then-current `errors.rs` (now `diagnostics/errors.rs`) had no unit coverage.
-Supplementary unit tests exercise the missing defaults, supplied values, integer syntax and overflow, contextual status classification and backend value interpretation.
+The collector cleans an independent profile directory for each package and executes only its declared unit suite.
+Integration, backend and credential runs cannot contribute profiles to those directories.
+Reports reside in `coverage/unit/application/` and `coverage/unit/summary.json`.
+The recipe `just coverage` requires the unit gate before collecting the existing package and versioning acceptance evidence.
+CI invokes that same recipe.
 
 Rust provides [compiler instrumentation](https://doc.rust-lang.org/rustc/instrument-coverage.html).
 The repository uses the pinned [cargo-llvm-cov](https://github.com/taiki-e/cargo-llvm-cov) tool to collect profiles, identify uncovered code and enforce the declared boundary.

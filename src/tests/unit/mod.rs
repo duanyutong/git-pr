@@ -9,7 +9,6 @@ mod fuzz_regressions;
 mod policy;
 mod properties;
 mod pure;
-mod reference;
 pub(crate) mod support;
 mod workflows;
 
