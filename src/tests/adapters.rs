@@ -44,6 +44,17 @@ struct Script {
 struct RawPathCommands(Arc<dyn CommandRunner>);
 
 impl CommandRunner for RawPathCommands {
+    fn edit_messages(
+        &self,
+        _program: &str,
+        _args: &[String],
+        _cwd: &std::path::Path,
+        _env: &std::collections::BTreeMap<std::ffi::OsString, std::ffi::OsString>,
+        _messages: &[(String, String)],
+    ) -> anyhow::Result<crate::commands::CommandOutput> {
+        anyhow::bail!("command adapter does not support bulk message editing")
+    }
+
     fn execute(
         &self,
         program: &str,
@@ -558,6 +569,17 @@ fn git_stack_empty_titles_empty_commits_and_backend_diagnostics() {
     assert!(git.stack_tip("main").is_err());
 }
 impl CommandRunner for Script {
+    fn edit_messages(
+        &self,
+        _program: &str,
+        _args: &[String],
+        _cwd: &std::path::Path,
+        _env: &std::collections::BTreeMap<std::ffi::OsString, std::ffi::OsString>,
+        _messages: &[(String, String)],
+    ) -> anyhow::Result<crate::commands::CommandOutput> {
+        anyhow::bail!("command adapter does not support bulk message editing")
+    }
+
     fn execute(
         &self,
         program: &str,
@@ -842,7 +864,11 @@ fn git_configuration_scopes_includes_and_empty_overrides() {
     let mut f = Fixture::new(0, true);
     let system = f.home.join("system.gitconfig");
     let global = f.home.join("user.gitconfig");
-    std::fs::write(&system, "[GIT-PR]\nOUTPUT = url\nADDLABEL = system\n").unwrap();
+    std::fs::write(
+        &system,
+        "[GIT-PR]\nOUTPUT = url\nADDLABEL = system\nHYPERLINKS = never\nPREVIEWLIMIT = 6\n",
+    )
+    .unwrap();
     std::fs::write(&global, "").unwrap();
     f.app
         .commands
@@ -858,16 +884,34 @@ fn git_configuration_scopes_includes_and_empty_overrides() {
         .insert("GIT_CONFIG_GLOBAL".into(), global.clone().into_os_string());
     assert_eq!(loaded_config(&f).labels, ["system"]);
     assert_eq!(loaded_config(&f).output, "{url}");
+    assert_eq!(loaded_config(&f).preview_limit, 6);
+    assert_eq!(
+        loaded_config(&f).hyperlinks,
+        crate::cli::hyperlinks::Mode::Never
+    );
 
-    std::fs::write(f.home.join("included config"), "[git-pr]\noutput = markdown\naddLabel = global, review\nstackUp = OFF\ndefaultDraft = YES\nstackEmoji = on\nskipDraft = off\nbranchFromTitle = 1\n").unwrap();
-    std::fs::write(f.home.join("conditional"), "[git-pr]\naddTipLabel = tip\n").unwrap();
+    std::fs::write(f.home.join("included config"), "[git-pr]\noutput = markdown\naddLabel = global, review\nstackUp = OFF\ndefaultDraft = YES\nstackEmoji = on\nskipDraft = off\nbranchFromTitle = 1\nhyperlinks = always\n").unwrap();
+    std::fs::write(
+        f.home.join("conditional"),
+        "[git-pr]\naddTipLabel = tip\nhyperlinks = auto\npreviewLimit = 12\n",
+    )
+    .unwrap();
     std::fs::write(&global, format!("[include]\npath = \"included config\"\n[includeIf \"gitdir:{}/\"]\npath = conditional\n", f.cwd.canonicalize().unwrap().display())).unwrap();
     let c = loaded_config(&f);
     assert_eq!(c.labels, ["global", "review"]);
     assert_eq!(c.tip_labels, ["tip"]);
+    assert_eq!(c.hyperlinks, crate::cli::hyperlinks::Mode::Auto);
+    assert_eq!(c.preview_limit, 12);
     assert_eq!(c.output, "[#{number}]({url}) {title}");
     assert!(!c.stack_up && c.draft && c.emoji && !c.skip_draft);
 
+    f.git(&["config", "git-pr.hyperlinks", "never"]);
+    f.git(&["config", "git-pr.previewLimit", "30"]);
+    assert_eq!(loaded_config(&f).preview_limit, 30);
+    assert_eq!(
+        loaded_config(&f).hyperlinks,
+        crate::cli::hyperlinks::Mode::Never
+    );
     f.git(&["config", "git-pr.addLabel", ""]);
     f.git(&["config", "git-pr.addTipLabel", ""]);
     f.git(&["config", "git-pr.output", ""]);
@@ -889,17 +933,33 @@ fn git_configuration_scopes_includes_and_empty_overrides() {
 
     f.git(&["config", "extensions.worktreeConfig", "true"]);
     f.git(&["config", "--worktree", "git-pr.output", "markdown"]);
+    f.git(&["config", "--worktree", "git-pr.hyperlinks", "always"]);
+    f.git(&["config", "--worktree", "git-pr.previewLimit", "40"]);
+    assert_eq!(loaded_config(&f).preview_limit, 40);
+    assert_eq!(
+        loaded_config(&f).hyperlinks,
+        crate::cli::hyperlinks::Mode::Always
+    );
     assert_eq!(loaded_config(&f).output, "[#{number}]({url}) {title}");
     let nested = f.cwd.join("nested/deep");
     std::fs::create_dir_all(&nested).unwrap();
     f.app.commands.cwd = nested;
     assert_eq!(loaded_config(&f).output, "[#{number}]({url}) {title}");
     f.app.commands.env.extend([
-        ("GIT_CONFIG_COUNT".into(), "1".into()),
+        ("GIT_CONFIG_COUNT".into(), "3".into()),
+        ("GIT_CONFIG_KEY_1".into(), "git-pr.hyperlinks".into()),
+        ("GIT_CONFIG_VALUE_1".into(), "auto".into()),
+        ("GIT_CONFIG_KEY_2".into(), "git-pr.previewLimit".into()),
+        ("GIT_CONFIG_VALUE_2".into(), "0".into()),
         ("GIT_CONFIG_KEY_0".into(), "git-pr.output".into()),
         ("GIT_CONFIG_VALUE_0".into(), "url".into()),
     ]);
     assert_eq!(loaded_config(&f).output, "{url}");
+    assert_eq!(loaded_config(&f).preview_limit, 0);
+    assert_eq!(
+        loaded_config(&f).hyperlinks,
+        crate::cli::hyperlinks::Mode::Auto
+    );
 }
 
 #[test]
@@ -1681,4 +1741,25 @@ fn global_native_stack_setting_links_without_yes_or_prompt() {
             && e["body"]["pull_requests"] == serde_json::json!([101, 102]))
     );
     assert!(!f.output().contains("skipped GitHub Stack"));
+}
+
+#[test]
+fn hyperlink_git_values_are_validated_unless_overridden() {
+    let fixture = Fixture::new(0, true);
+    for value in ["invalid", "", "true"] {
+        fixture.git(&["config", "git-pr.hyperlinks", value]);
+        let error = format!("{:#}", fixture.run(&["--stop-after=validate"]).unwrap_err());
+        assert!(
+            error.contains("git-pr.hyperlinks") && error.contains("expected auto, always or never")
+        );
+        fixture
+            .run(&["--stop-after=validate", "--hyperlinks=auto"])
+            .unwrap();
+    }
+    fixture.git(&["config", "git-pr.hyperlinks", "invalid"]);
+    fixture.git(&["config", "--add", "git-pr.hyperlinks", "never"]);
+    assert_eq!(
+        loaded_config(&fixture).hyperlinks,
+        crate::cli::hyperlinks::Mode::Never
+    );
 }

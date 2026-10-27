@@ -310,6 +310,7 @@ def main() -> int:
                 ROOT / "src" / "stack" / "description.rs",
                 ROOT / "src" / "model" / "mod.rs",
                 ROOT / "src" / "model" / "commit.rs",
+                ROOT / "src" / "identity" / "types.rs",
                 ROOT / "src" / "model" / "pull_request.rs",
                 ROOT / "src" / "model" / "repository.rs",
                 ROOT / "src" / "git" / "snapshot.rs",

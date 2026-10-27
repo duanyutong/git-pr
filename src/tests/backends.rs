@@ -97,12 +97,125 @@ fn jj_colocated_publication_preserves_bookmarks_commits_and_checkout() {
 }
 
 #[test]
+fn publication_and_amendment_retain_original_and_published_objects_for_each_backend() {
+    for backend in ["git", "branchless", "jj", "jj-workspace"] {
+        for native_stack in [false, true] {
+            let mut f = Fixture::with_service(
+                1,
+                false,
+                super::support::Service {
+                    branchless: backend == "branchless",
+                    ..super::support::Service::default()
+                },
+            );
+            if backend.starts_with("jj") {
+                enable_jj(&mut f);
+                if backend == "jj-workspace" {
+                    let workspace = f.temp.path().join("publication-workspace");
+                    f.app
+                        .commands
+                        .jj(&[
+                            "workspace",
+                            "add",
+                            "--no-colocate",
+                            workspace.to_str().unwrap(),
+                        ])
+                        .unwrap();
+                    f.app.commands.cwd = workspace.clone();
+                    f.cwd = workspace;
+                    let root = f.app.commands.jj(&["git", "root"]).unwrap();
+                    f.app.commands.env.insert("GIT_DIR".into(), root.into());
+                }
+            }
+            let flags = if native_stack {
+                vec!["--github-stack", "--yes"]
+            } else {
+                vec!["--no-stack"]
+            };
+            let revision = |name| {
+                if backend.starts_with("jj") {
+                    f.app
+                        .commands
+                        .jj(&[
+                            "--ignore-working-copy",
+                            "log",
+                            "-r",
+                            name,
+                            "--no-graph",
+                            "-T",
+                            "commit_id",
+                        ])
+                        .unwrap()
+                } else {
+                    f.git(&["rev-parse", name])
+                }
+            };
+            let original = f.hashes[0].clone();
+            let original_object = f.git(&["cat-file", "commit", &original]);
+            f.run(&flags).unwrap();
+            assert_eq!(revision("topic/1"), original, "{backend}");
+            assert_eq!(
+                f.git(&["ls-remote", "origin", "refs/heads/topic/1"]),
+                format!("{original}\trefs/heads/topic/1"),
+                "{backend}"
+            );
+
+            let message = "Feature 1 amended\n\nUpdated body\n\nRemote-Ref: topic/1";
+            if backend.starts_with("jj") {
+                f.app
+                    .commands
+                    .jj(&[
+                        "--ignore-immutable",
+                        "describe",
+                        "-r",
+                        "topic/1",
+                        "-m",
+                        message,
+                    ])
+                    .unwrap();
+            } else if backend == "branchless" {
+                f.git(&["reword", "topic/1", "-m", message]);
+            } else {
+                f.git(&["commit", "--amend", "-m", message]);
+            }
+            let amended = revision("topic/1");
+            let amended_object = f.git(&["cat-file", "commit", &amended]);
+            assert_ne!(amended, original, "{backend}");
+            let checkout_name = if backend.starts_with("jj") {
+                "@"
+            } else {
+                "HEAD"
+            };
+            let checkout = revision(checkout_name);
+            for _ in 0..2 {
+                f.run(&flags).unwrap();
+                assert_eq!(revision(checkout_name), checkout, "{backend}");
+                assert_eq!(revision("topic/1"), amended, "{backend}");
+                assert_eq!(
+                    f.git(&["ls-remote", "origin", "refs/heads/topic/1"]),
+                    format!("{amended}\trefs/heads/topic/1"),
+                    "{backend}"
+                );
+                for (oid, object) in [(&original, &original_object), (&amended, &amended_object)] {
+                    assert_eq!(f.git(&["cat-file", "commit", oid]), *object, "{backend}");
+                }
+                let prs = f.service.prs.lock().unwrap();
+                assert_eq!(prs.len(), 1, "{backend}");
+                assert_eq!(prs[&101]["head"]["ref"], "topic/1", "{backend}");
+                assert_eq!(prs[&101]["state"], "open", "{backend}");
+            }
+        }
+    }
+}
+
+#[test]
 fn jj_separate_workspace_discovers_backing_git_and_resolves_selected_tip() {
     let mut f = Fixture::new(3, false);
     enable_jj(&mut f);
     f.git(&["config", "git-pr.addLabel", "workspace-label"]);
     f.git(&["config", "git-pr.defaultDraft", "off"]);
     f.git(&["config", "git-pr.output", "url"]);
+    f.git(&["config", "git-pr.hyperlinks", "invalid"]);
     let workspace = f.temp.path().join("workspace");
     f.app
         .commands
@@ -121,7 +234,10 @@ fn jj_separate_workspace_discovers_backing_git_and_resolves_selected_tip() {
         .commands
         .jj(&["log", "-r", "@", "--no-graph", "-T", "change_id"])
         .unwrap();
-    f.run(&["topic/1..topic/2"]).unwrap();
+    let error = f.run(&["topic/1..topic/2"]).unwrap_err();
+    assert!(format!("{error:#}").contains("invalid git-pr.hyperlinks"));
+    assert!(f.service.prs.lock().unwrap().is_empty());
+    f.run(&["--hyperlinks=never", "topic/1..topic/2"]).unwrap();
     let after = f
         .app
         .commands

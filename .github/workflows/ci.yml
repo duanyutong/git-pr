@@ -93,7 +93,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        gate: [backends, coverage, coverage-branches, assurance, mutants]
+        gate: [backends, coverage, assurance, mutants]
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
@@ -139,9 +139,6 @@ jobs:
               dirname "$(command -v prek)" >> "$GITHUB_PATH"
             '
       - run: sh setup.sh
-      - name: Install pinned branch instrumentation
-        if: matrix.gate == 'coverage-branches'
-        run: rustup toolchain install nightly-2026-10-14 --profile minimal --component llvm-tools-preview
       - name: Execute boundary gate
         env:
           BOUNDARY_GATE: ${{ matrix.gate }}

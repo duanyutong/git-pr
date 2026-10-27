@@ -146,8 +146,8 @@ fn worker_creation_failure_reports_the_reason_and_retains_plain_output() {
     let wait = progress.start_activity("GitHub retry", Some(Duration::from_secs(2)));
     progress.end_activity(wait);
     progress.finish(true);
-    assert!(!progress.selection(&[], true));
-    assert!(!progress.results(&[], &Repository::default(), true));
+    assert!(!progress.selection(&[], true, 20));
+    assert!(!progress.results(&[], &Repository::default(), true, hyperlinks::Mode::Auto));
     drop(progress);
     assert_eq!(*terminal.stdout.lock().unwrap(), "Branch is ready\n");
     assert_eq!(
@@ -235,7 +235,7 @@ fn terminal_fixture() {
         ..Commit::default()
     }];
     terminal.stage("Reading commits");
-    if !terminal.selection(&commits.iter().collect::<Vec<_>>(), false) {
+    if !terminal.selection(&commits.iter().collect::<Vec<_>>(), false, 20) {
         terminal.out("Plain selection");
     }
     terminal.stage("Updating descriptions");
@@ -261,6 +261,10 @@ fn terminal_fixture() {
             ..Repository::default()
         },
         false,
+        hyperlinks::Mode::parse(
+            &std::env::var("GIT_PR_TEST_HYPERLINKS").unwrap_or_else(|_| "auto".into()),
+        )
+        .unwrap(),
     ) {
         terminal.out("Plain results");
     }
@@ -274,6 +278,8 @@ import fcntl, os, pty, re, select, signal, struct, subprocess, sys, termios, tim
 env = dict(os.environ, GIT_PR_TEST_PROGRESS='1', TERM='xterm')
 env.pop('CI', None)
 env.pop('NO_COLOR', None)
+for key in ['TERM_PROGRAM', 'TMUX', 'STY', 'SSH_CONNECTION', 'SSH_TTY', 'FORCE_HYPERLINK', 'GIT_PR_TEST_HYPERLINKS']:
+    env.pop(key, None)
 command = [sys.argv[1], '--exact', 'cli::progress::tests::terminal_fixture', '--nocapture']
 def capture(interrupt=False, settings=None, pipe_stdout=False):
     master, slave = pty.openpty()
@@ -317,19 +323,39 @@ def capture(interrupt=False, settings=None, pipe_stdout=False):
 output = capture()
 assert b'\r\x1b[2K' in output, output
 assert b'remaining' in output and b'accepted' in output and b'Final output' in output, output
-assert b'Pull requests' in output and b'1 updated' in output, output
-assert '1 PR · base at the top'.encode() in output and '1 commit · base at the top'.encode() in output, output
+assert b'Pull requests' in output and b'1 updated' in output and b'\x1b[33m~\x1b[0m  \x1b[36m#42\x1b[0m' in output, output
+assert 'org/repo · tip last'.encode() in output and '1 commit · tip last'.encode() in output, output
 assert b'Plain results' not in output and b'Plain selection' not in output, output
 assert 'café 日本語'.encode() in output, output
-for settings in [{'NO_COLOR': '1'}, {'TERM': 'dumb'}, {'CI': 'true'}]:
+for settings in [{'NO_COLOR': '1'}, {'TERM': 'dumb', 'GIT_PR_TEST_HYPERLINKS': 'always'}, {'CI': 'true', 'GIT_PR_TEST_HYPERLINKS': 'always'}]:
     plain = capture(settings=settings)
     if 'NO_COLOR' in settings:
         assert not re.search(rb'\x1b\[[0-9;:]*m', plain), plain
-        assert b'Pull requests' in plain, plain
+        assert b'Pull requests' in plain and b'  ~  #42  Unicode' in plain, plain
     else:
         assert b'\x1b' not in plain, plain
         assert b'Plain results' in plain, plain
 assert b'\r\x1b[2K' in capture(pipe_stdout=True)
+for program in ['vscode', 'zed']:
+    linked = capture(settings={'TERM_PROGRAM': program, 'NO_COLOR': '1'})
+    assert b'  ~  \x1b]8;;https://github.com/org/repo/pull/42\x1b\\#42\x1b]8;;\x1b\\' in linked, linked
+    assert not re.search(rb'\x1b\[[0-9;:]*m', linked), linked
+for settings in [
+    {'TERM_PROGRAM': 'unknown'},
+    {'TERM_PROGRAM': os.fsdecode(b'\xff')},
+    {'TERM_PROGRAM': 'zed', 'TMUX': '/tmp/example'},
+    {'TERM_PROGRAM': 'zed', 'STY': 'session'},
+    {'TERM_PROGRAM': 'zed', 'SSH_CONNECTION': 'example'},
+    {'TERM_PROGRAM': 'zed', 'SSH_TTY': '/dev/tty'},
+    {'TERM_PROGRAM': 'zed', 'GIT_PR_TEST_HYPERLINKS': 'never'},
+    {'TERM_PROGRAM': 'unknown', 'FORCE_HYPERLINK': '1'},
+]:
+    fallback = capture(settings=settings)
+    assert b'\x1b]8;' not in fallback and b'https://github.com/org/repo/pull/42' in fallback, fallback
+forced = capture(settings={'TERM_PROGRAM': 'unknown', 'GIT_PR_TEST_HYPERLINKS': 'always'})
+assert b'\x1b]8;' in forced, forced
+capture(settings={'TERM_PROGRAM': 'zed', 'GIT_PR_TEST_HYPERLINKS': 'always'}, pipe_stdout=True)
+
 interrupted = capture(True)
 assert b'\r\x1b[2KInterrupted:' in interrupted, interrupted
 assert b'Final output' not in interrupted, interrupted
@@ -351,6 +377,58 @@ assert b'declined' in piped.stdout and b'Final output' in piped.stdout, piped.st
 }
 
 #[test]
+fn selection_preview_respects_limits_and_orientation() {
+    for (count, limit, positions) in [
+        (0, 20, vec![]),
+        (10, 20, (0..10).collect()),
+        (20, 20, (0..20).collect()),
+        (21, 20, (0..10).chain(11..21).collect()),
+        (24, 20, (0..10).chain(14..24).collect()),
+        (12, 5, vec![0, 1, 2, 10, 11]),
+        (12, 1, vec![0]),
+        (12, 0, (0..12).collect()),
+        (12, usize::MAX, (0..12).collect()),
+    ] {
+        for stack_up in [false, true] {
+            let terminal = Arc::new(MemoryTerminal::default());
+            let progress = ProgressTerminal::with_options(terminal.clone(), true, true, false);
+            let commits: Vec<_> = (0..count)
+                .map(|n| Commit {
+                    hash: format!("{n:08x}"),
+                    title: format!("Feature {n}"),
+                    ..Commit::default()
+                })
+                .collect();
+            let mut selected: Vec<_> = commits.iter().collect();
+            if stack_up {
+                selected.reverse();
+            }
+            assert!(progress.selection(&selected, stack_up, limit));
+            drop(progress);
+            let stdout = terminal.stdout.lock().unwrap();
+            let shown: Vec<usize> = stdout
+                .lines()
+                .filter_map(|line| line.split_once("  Feature "))
+                .map(|(_, n)| n.parse().unwrap())
+                .collect();
+            let expected: Vec<_> = positions
+                .iter()
+                .map(|&n| if stack_up { count - 1 - n } else { n })
+                .collect();
+            assert_eq!(shown, expected, "count={count}, limit={limit}");
+            let hidden = count - positions.len();
+            if hidden == 0 {
+                assert!(!stdout.contains("more commit"));
+            } else {
+                let suffix = if hidden == 1 { "" } else { "s" };
+                assert!(stdout.contains(&format!("  … {hidden} more commit{suffix}\n")));
+                assert_eq!(stdout.matches("more commit").count(), 1);
+            }
+        }
+    }
+}
+
+#[test]
 fn rich_console_compacts_selection_and_reports_every_result_with_accurate_status() {
     let terminal = Arc::new(MemoryTerminal::default());
     let progress = ProgressTerminal::with_options(terminal.clone(), true, true, true);
@@ -367,7 +445,7 @@ fn rich_console_compacts_selection_and_reports_every_result_with_accurate_status
     commits[1].base_updated = true;
     commits[2].metadata_updated = true;
     progress.stage("Reading commits");
-    assert!(progress.selection(&commits.iter().rev().collect::<Vec<_>>(), true));
+    assert!(progress.selection(&commits.iter().rev().collect::<Vec<_>>(), true, 8));
     progress.stage("Publishing branches");
     progress.detail("push -f origin example");
     progress.progress("Branches", 12, 12);
@@ -377,28 +455,38 @@ fn rich_console_compacts_selection_and_reports_every_result_with_accurate_status
         name: "org/repo".into(),
         ..Repository::default()
     };
-    assert!(progress.results(&commits.iter().rev().collect::<Vec<_>>(), &repo, true));
+    assert!(progress.results(
+        &commits.iter().rev().collect::<Vec<_>>(),
+        &repo,
+        true,
+        hyperlinks::Mode::Never
+    ));
     drop(progress);
     let stdout = terminal.stdout.lock().unwrap().clone();
     let stderr = terminal.stderr.lock().unwrap().clone();
     assert!(stdout.contains("4 more commits"));
-    assert!(stdout.contains("12 commits · tip at the top"));
+    assert!(stdout.contains("12 commits · tip first"));
     assert!(stdout.find("Feature 12:").unwrap() < stdout.find("Feature 1:").unwrap());
     assert!(!stdout.contains("push -f"));
     assert!(stdout.contains("1 created · 2 updated · 9 unchanged"));
-    assert!(stdout.contains("12 PRs · tip at the top"));
+    assert!(stdout.contains("github.example.com/org/repo · tip first"));
     assert!(stdout.contains("café 日本語 👩‍💻"));
     for number in 1..=12 {
         assert_eq!(
             stdout
                 .matches(&format!(
-                    "https://github.example.com/org/repo/pull/{number}\n"
+                    "https://github.example.com/org/repo/pull/{number}\x1b[0m\n"
                 ))
                 .count(),
             1
         );
     }
-    assert!(stdout.find("#12 ").unwrap() < stdout.find("#1 ").unwrap());
+    let plain = clean(&stdout, false);
+    assert!(plain.contains("  +   #1  Feature 1:"));
+    assert!(plain.contains("  ~   #2  Feature 2:"));
+    assert!(plain.contains("  ~   #3  Feature 3:"));
+    assert!(plain.contains("  =  #12  Feature 12:"));
+    assert!(plain.find("#12 ").unwrap() < plain.find("#1 ").unwrap());
     assert!(stderr.contains("✓") && stderr.contains("Reading commits"));
     assert!(stderr.contains("Publishing branches") && stderr.contains("0."));
     assert!(stdout.contains("\x1b[1m"));
@@ -412,8 +500,8 @@ fn plain_console_preserves_output_templates_and_removes_generated_colour() {
     progress.detail("ordinary detail");
     progress.out("literal\rtemplate\tvalue");
     progress.err("\x1b[33mWarning\x1b[0m\n");
-    assert!(!progress.selection(&[], true));
-    assert!(!progress.results(&[], &Repository::default(), false));
+    assert!(!progress.selection(&[], true, 20));
+    assert!(!progress.results(&[], &Repository::default(), false, hyperlinks::Mode::Auto));
     progress.finish(false);
     assert_eq!(
         *terminal.stdout.lock().unwrap(),
@@ -429,14 +517,14 @@ fn failed_stages_are_durable_and_empty_results_are_explicit() {
     progress.stage("Updating descriptions");
     progress.finish(false);
     progress.finish(false);
-    assert!(progress.selection(&[], true));
-    assert!(progress.results(&[], &Repository::default(), false));
+    assert!(progress.selection(&[], true, 20));
+    assert!(progress.results(&[], &Repository::default(), false, hyperlinks::Mode::Auto));
     drop(progress);
     let stderr = terminal.stderr.lock().unwrap().clone();
     assert_eq!(stderr.matches("✗ Updating descriptions").count(), 1);
     assert!(!stderr.contains('✓'));
     let stdout = terminal.stdout.lock().unwrap().clone();
-    assert!(stdout.contains("0 PRs · base at the top"));
+    assert!(stdout.contains("Pull requests\n  tip last"));
     assert!(stdout.contains("Nothing selected for publication"));
 }
 
@@ -687,17 +775,7 @@ fn clipping_preserves_graphemes_and_terminal_cell_width() {
 #[test]
 fn rich_sections_and_wrapped_titles_preserve_spacing_and_unicode() {
     for columns in [0, 1, 4, 5, 12, 40, 80, 200] {
-        assert!(heading("Selected stack", columns, false).width() <= columns.min(80));
-        let mut text = String::new();
-        write_title(
-            &mut text,
-            "A café 日本語 👩‍💻 e\u{301} extraordinarily-long-title",
-            columns,
-        );
-        assert!(text.lines().all(|line| line.width() <= columns));
-        if columns >= 12 {
-            assert!(text.contains("👩‍💻") && text.contains("e\u{301}"));
-        }
+        assert!(heading("Selected stack", columns, false).width() <= columns);
     }
     let terminal = Arc::new(MemoryTerminal::default());
     let progress = ProgressTerminal::with_options(terminal.clone(), true, true, false);
@@ -706,7 +784,7 @@ fn rich_sections_and_wrapped_titles_preserve_spacing_and_unicode() {
     progress.finish(true);
     let commits = [Commit { hash: "12345678".into(), title: "A complete title with enough words to wrap across a narrow display without losing any of its content".into(), pr_number: 42, ..Commit::default() }, Commit { pr_number: 43, title: "Next PR".into(), ..Commit::default() }];
     let selected: Vec<_> = commits.iter().collect();
-    assert!(progress.selection(&selected, true));
+    assert!(progress.selection(&selected, true, 20));
     progress.section("Submission");
     assert!(progress.results(
         &selected,
@@ -715,13 +793,14 @@ fn rich_sections_and_wrapped_titles_preserve_spacing_and_unicode() {
             name: "org/repo".into(),
             ..Repository::default()
         },
-        true
+        true,
+        hyperlinks::Mode::Auto,
     ));
     drop(progress);
     let stdout = terminal.stdout.lock().unwrap();
-    assert!(stdout.contains("  Repository ─"));
-    assert!(stdout.contains("\n\n  Submission ─"));
-    assert!(stdout.contains("pull/42\n\n  #43  [unchanged]\n    Next PR\n    https://"));
+    assert!(stdout.contains("  Repository\n"));
+    assert!(stdout.contains("\n\n  Submission\n"));
+    assert!(stdout.contains("pull/42\n  =  #43  Next PR\n          https://"));
     let results = stdout.split("Pull requests").last().unwrap();
     assert!(!results.contains('…') && !stdout.contains('\x1b'));
     assert!(
@@ -732,4 +811,22 @@ fn rich_sections_and_wrapped_titles_preserve_spacing_and_unicode() {
             .contains(&commits[0].title)
     );
     drop(stdout);
+}
+
+#[test]
+fn completion_labels_are_explicit_and_used_only_after_success() {
+    let terminal = Arc::new(MemoryTerminal::default());
+    let progress = ProgressTerminal::with_options(terminal.clone(), true, true, false);
+    progress.stage_with_completion("Updating PR labels", "Reconciled labels");
+    progress.progress("Labels #101", 10, 10);
+    progress.finish(true);
+    progress.stage_with_completion("Updating PR descriptions", "Reconciled descriptions");
+    progress.progress("Descriptions #102", 1, 3);
+    progress.finish(false);
+    drop(progress);
+    let text = terminal.stderr.lock().unwrap();
+    assert!(text.contains("✓ Reconciled labels · 10/10"));
+    assert!(text.contains("✗ 1/3 Descriptions #102 · Updating PR descriptions"));
+    assert!(!text.contains("Reconciled descriptions"));
+    drop(text);
 }

@@ -712,10 +712,16 @@ impl Clock for World {
     }
 }
 impl Terminal for World {
-    fn selection(&self, _: &[&Commit], _: bool) -> bool {
+    fn selection(&self, _: &[&Commit], _: bool, _: usize) -> bool {
         self.0.lock().unwrap().rich_output
     }
-    fn results(&self, _: &[&Commit], _: &crate::model::Repository, _: bool) -> bool {
+    fn results(
+        &self,
+        _: &[&Commit],
+        _: &crate::model::Repository,
+        _: bool,
+        _: crate::cli::hyperlinks::Mode,
+    ) -> bool {
         self.0.lock().unwrap().rich_output
     }
 

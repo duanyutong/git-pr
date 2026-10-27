@@ -11,6 +11,8 @@ use std::{
 use unicode_segmentation::UnicodeSegmentation as _;
 use unicode_width::UnicodeWidthStr as _;
 
+use super::{hyperlinks, results};
+
 use crate::{
     commands::Terminal,
     model::{Commit, Repository},
@@ -35,6 +37,7 @@ struct State {
     next: u64,
     activities: BTreeMap<u64, Activity>,
     stage: Option<Activity>,
+    completed_stage: Option<String>,
     detail: String,
     progress: Option<Progress>,
     quota: Option<(String, Instant, Duration)>,
@@ -70,6 +73,7 @@ pub(crate) fn colour_enabled() -> bool {
 pub(crate) struct ProgressTerminal {
     shared: Arc<Shared>,
     worker: Mutex<Option<JoinHandle<()>>>,
+    hyperlinks: bool,
 }
 
 impl ProgressTerminal {
@@ -77,12 +81,19 @@ impl ProgressTerminal {
         let animated = std::io::stderr().is_terminal()
             && std::env::var_os("CI").is_none()
             && std::env::var("TERM").is_ok_and(|term| term != "dumb");
-        Self::with_options(
+        let mut progress = Self::with_options(
             terminal,
             animated,
             animated && std::io::stdout().is_terminal(),
             colour_enabled(),
-        )
+        );
+        progress.hyperlinks = hyperlinks::supported(
+            std::env::var("TERM_PROGRAM").ok().as_deref(),
+            ["TMUX", "STY", "SSH_CONNECTION", "SSH_TTY"]
+                .iter()
+                .any(|key| std::env::var_os(key).is_some()),
+        );
+        progress
     }
 
     #[cfg(test)]
@@ -133,6 +144,7 @@ impl ProgressTerminal {
         Self {
             shared,
             worker: Mutex::new(worker),
+            hyperlinks: false,
         }
     }
 
@@ -145,16 +157,22 @@ impl ProgressTerminal {
 
     fn end_stage(&self, state: &mut State, success: bool) {
         self.clear(state);
+        let completed = state.completed_stage.take().filter(|_| success);
         if let Some(stage) = state.stage.take()
             && self.shared.animated
         {
+            let label = completed.as_deref().unwrap_or(&stage.label);
             let label = state.progress.as_ref().map_or_else(
-                || stage.label.clone(),
+                || label.to_owned(),
                 |progress| {
-                    format!(
-                        "{}/{} {} · {}",
-                        progress.done, progress.total, progress.label, stage.label
-                    )
+                    if completed.is_some() {
+                        format!("{label} · {}/{}", progress.done, progress.total)
+                    } else {
+                        format!(
+                            "{}/{} {} · {label}",
+                            progress.done, progress.total, progress.label
+                        )
+                    }
                 },
             );
             self.shared.terminal.err(&format!(
@@ -221,23 +239,17 @@ impl Terminal for ProgressTerminal {
         if self.shared.rich {
             self.write_rich(&format!(
                 "\n{}\n\n",
-                heading(label, width().saturating_sub(1), self.shared.colour)
+                heading(label, output_width().saturating_sub(1), self.shared.colour)
             ));
         }
     }
 
     fn stage(&self, label: &str) {
-        let mut state = lock(&self.shared.state);
-        self.end_stage(&mut state, true);
-        state.stage = Some(Activity {
-            label: single_line(label),
-            started: Instant::now(),
-            wait: None,
-        });
-        state.detail.clear();
-        state.progress = None;
-        drop(state);
-        self.shared.wake.notify_all();
+        self.begin_stage(label, None);
+    }
+
+    fn stage_with_completion(&self, label: &str, completed: &str) {
+        self.begin_stage(label, Some(completed));
     }
 
     fn finish(&self, success: bool) {
@@ -266,21 +278,21 @@ impl Terminal for ProgressTerminal {
         self.shared.wake.notify_all();
     }
 
-    fn selection(&self, commits: &[&Commit], stack_up: bool) -> bool {
+    fn selection(&self, commits: &[&Commit], stack_up: bool, preview_limit: usize) -> bool {
         if !self.shared.rich {
             return false;
         }
-        let width = width().saturating_sub(1);
+        let width = output_width().saturating_sub(1);
         let mut text = format!(
             "\n{}\n{}\n\n",
             heading("Selected stack", width, self.shared.colour),
             paint(
                 &clip(
                     &format!(
-                        "  {} commit{} · {} at the top",
+                        "  {} commit{} · {}",
                         commits.len(),
                         if commits.len() == 1 { "" } else { "s" },
-                        if stack_up { "tip" } else { "base" }
+                        results::orientation(stack_up)
                     ),
                     width
                 ),
@@ -288,10 +300,17 @@ impl Terminal for ProgressTerminal {
                 self.shared.colour
             )
         );
+        let first = preview_limit.div_ceil(2);
+        let last = commits.len().saturating_sub(preview_limit / 2);
         for (i, commit) in commits.iter().enumerate() {
-            if commits.len() > 8 && (4..commits.len() - 4).contains(&i) {
-                if i == 4 {
-                    let _ = writeln!(text, "  … {} more commits", commits.len() - 8);
+            if preview_limit > 0 && commits.len() > preview_limit && (first..last).contains(&i) {
+                if i == first {
+                    let hidden = commits.len() - preview_limit;
+                    let _ = writeln!(
+                        text,
+                        "  … {hidden} more commit{}",
+                        if hidden == 1 { "" } else { "s" }
+                    );
                 }
                 continue;
             }
@@ -302,67 +321,26 @@ impl Terminal for ProgressTerminal {
         true
     }
 
-    fn results(&self, commits: &[&Commit], repo: &Repository, stack_up: bool) -> bool {
+    fn results(
+        &self,
+        commits: &[&Commit],
+        repo: &Repository,
+        stack_up: bool,
+        mode: hyperlinks::Mode,
+    ) -> bool {
         if !self.shared.rich {
             return false;
         }
-        let created = commits.iter().filter(|c| c.newly_created).count();
-        let updated = commits
-            .iter()
-            .filter(|c| !c.newly_created && (c.metadata_updated || c.base_updated))
-            .count();
-        let columns = width().saturating_sub(1);
-        let mut text = format!(
-            "\n{}\n{}\n{}\n\n",
-            heading("Pull requests", columns, self.shared.colour),
-            paint(
-                &clip(
-                    &format!(
-                        "  {} PR{} · {} at the top",
-                        commits.len(),
-                        if commits.len() == 1 { "" } else { "s" },
-                        if stack_up { "tip" } else { "base" }
-                    ),
-                    columns
-                ),
-                "2",
-                self.shared.colour
-            ),
-            clip(
-                &format!(
-                    "  {created} created · {updated} updated · {} unchanged",
-                    commits.len() - created - updated
-                ),
-                columns
-            )
-        );
-        if commits.is_empty() {
-            text.push_str("  Nothing selected for publication.\n");
-        }
-        for (index, commit) in commits.iter().enumerate() {
-            if index != 0 {
-                text.push('\n');
-            }
-            let (status, code) = if commit.newly_created {
-                ("created", "32")
-            } else if commit.metadata_updated || commit.base_updated {
-                ("updated", "36")
-            } else {
-                ("unchanged", "2")
-            };
-            let row = clip(&format!("  #{}  [{status}]", commit.pr_number), columns);
-            let _ = writeln!(text, "{}", paint(&row, code, self.shared.colour));
-            write_title(&mut text, &single_line(&commit.title), columns);
-            let _ = writeln!(
-                text,
-                "    https://{}/{}/pull/{}",
-                single_line(&repo.host),
-                single_line(&repo.name),
-                commit.pr_number
-            );
-        }
-        text.push('\n');
-        self.write_rich(&text);
+        self.write_rich(&results::render(
+            commits,
+            repo,
+            stack_up,
+            results::Options {
+                columns: output_width().saturating_sub(1),
+                colour: self.shared.colour,
+                hyperlinks: mode.enabled(self.hyperlinks),
+            },
+        ));
         true
     }
 
@@ -411,6 +389,21 @@ impl Terminal for ProgressTerminal {
 }
 
 impl ProgressTerminal {
+    fn begin_stage(&self, label: &str, completed: Option<&str>) {
+        let mut state = lock(&self.shared.state);
+        self.end_stage(&mut state, true);
+        state.stage = Some(Activity {
+            label: single_line(label),
+            started: Instant::now(),
+            wait: None,
+        });
+        state.completed_stage = completed.map(single_line);
+        state.detail.clear();
+        state.progress = None;
+        drop(state);
+        self.shared.wake.notify_all();
+    }
+
     fn write_rich(&self, text: &str) {
         let mut state = lock(&self.shared.state);
         self.clear(&mut state);
@@ -568,61 +561,19 @@ fn width() -> usize {
         .map_or(80, |size| usize::from(size.ws_col))
 }
 
+fn output_width() -> usize {
+    rustix::termios::tcgetwinsize(std::io::stdout())
+        .ok()
+        .filter(|size| size.ws_col != 0)
+        .map_or(80, |size| usize::from(size.ws_col))
+}
+
 fn heading(label: &str, columns: usize, colour: bool) -> String {
-    let columns = columns.min(80);
     let label = clip(&format!("  {}", single_line(label)), columns);
-    let remaining = columns.saturating_sub(label.width());
-    let rule = if remaining > 1 {
-        format!(" {}", "─".repeat(remaining - 1))
-    } else {
-        String::new()
-    };
-    format!(
-        "{}{}",
-        paint(&label, "1", colour),
-        paint(&rule, "2", colour)
-    )
+    paint(&label, "1", colour)
 }
 
-fn write_title(output: &mut String, title: &str, columns: usize) {
-    let indent = columns.min(4);
-    let available = columns.saturating_sub(indent);
-    if available == 0 {
-        return;
-    }
-    let mut line = String::new();
-    let mut used = 0;
-    for word in title.split_whitespace() {
-        if used != 0 && used + 1 + word.width() > available {
-            let _ = writeln!(output, "{:indent$}{line}", "");
-            line.clear();
-            used = 0;
-        }
-        if used != 0 {
-            line.push(' ');
-            used += 1;
-        }
-        for grapheme in word.graphemes(true) {
-            let grapheme = if grapheme.width() > available {
-                "…"
-            } else {
-                grapheme
-            };
-            if used + grapheme.width() > available {
-                let _ = writeln!(output, "{:indent$}{line}", "");
-                line.clear();
-                used = 0;
-            }
-            line.push_str(grapheme);
-            used += grapheme.width();
-        }
-    }
-    if !line.is_empty() {
-        let _ = writeln!(output, "{:indent$}{line}", "");
-    }
-}
-
-fn paint(text: &str, code: &str, colour: bool) -> String {
+pub(super) fn paint(text: &str, code: &str, colour: bool) -> String {
     if colour {
         format!("\x1b[{code}m{text}\x1b[0m")
     } else {
@@ -648,7 +599,7 @@ fn clip(text: &str, columns: usize) -> String {
     format!("{prefix}…")
 }
 
-fn single_line(text: &str) -> String {
+pub(super) fn single_line(text: &str) -> String {
     clean(text, false).replace(['\n', '\t'], " ")
 }
 

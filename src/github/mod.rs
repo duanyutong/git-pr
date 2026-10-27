@@ -1,3 +1,7 @@
+#[cfg(test)]
+#[path = "../tests/github_helpers.rs"]
+mod test_helpers;
+
 mod content;
 mod dispatch;
 pub(crate) mod http;
@@ -173,18 +177,6 @@ impl GitHub<'_> {
         Ok(selected)
     }
 
-    #[cfg(test)]
-    pub(crate) fn expire_pr_observation_for_test(&self, number: u64) {
-        guard(&self.session.pr_times).remove(&number);
-    }
-
-    #[cfg(test)]
-    pub(crate) fn expire_head_observation_for_test(&self, reference: &str) {
-        let now = self.now();
-        let expired = now.checked_sub(Duration::from_secs(31)).unwrap_or(now);
-        guard(&self.session.head_times).insert(reference.into(), expired);
-    }
-
     pub(crate) fn get(&self, number: u64) -> Result<Arc<PullRequest>> {
         let mut prs = self.session.prs();
         if let Some(pr) = prs.get(&number)
@@ -339,19 +331,6 @@ impl GitHub<'_> {
             .iter()
             .find(|p| p.head == commit.remote_ref())
             .map_or(0, |p| p.number))
-    }
-
-    #[cfg(test)]
-    pub(crate) fn number(&self, commit: &mut Commit, base: &str) -> Result<u64> {
-        if commit.skip && commit.remote_ref().is_empty() {
-            return Ok(0);
-        }
-        let number = self.find(commit)?;
-        if number != 0 || commit.skip {
-            return Ok(number);
-        }
-        self.create(commit, base)?;
-        Ok(commit.pr_number)
     }
 
     pub(crate) fn create(&self, commit: &mut Commit, base: &str) -> Result<()> {

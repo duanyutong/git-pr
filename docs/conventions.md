@@ -15,7 +15,7 @@ The checkout provisions its own development tools.
 | Formatting | Rustfmt, cargo-sort, offline Tombi, Ruff, spelling and repository hygiene. |
 | Hooks | Pre-commit formatting and hygiene, Conventional Commit and version validation at commit time, version-history verification and lightweight, read-only built-in file checks before push. |
 | Validation | `just lint`, `just typecheck`, `just test`, `just coverage` and `just build-release`; `just check` combines lint, tests, doctests and release compilation. |
-| Coverage | Complete application line coverage, complete unit branch outcomes under pinned nightly instrumentation and complete coverage within the declared pure-policy boundaries. |
+| Coverage | Core Rust unit scope requires 100% executable lines, regions and functions under the stable compiler; Python versioning retains a separate 95% statement-coverage sanity guard, and native adapters retain behavioural acceptance. |
 | CI | Linux and macOS, pinned action revisions, repository setup and local recipes, bounded jobs and retained evidence. |
 | Configuration | Git owns parsing, includes, precedence and Boolean conversion; keys use camelCase and flags use kebab-case. |
 | Release policy | Commit hooks generate required version increments; successful main CI triggers annotated version tags. |

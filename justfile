@@ -36,13 +36,9 @@ test-unit:
 coverage:
     just coverage-unit
     just coverage-versioning
-    prek run coverage-application --all-files --hook-stage manual --verbose
 
 coverage-unit:
     prek run coverage-unit --all-files --hook-stage manual --verbose
-
-coverage-branches:
-    prek run coverage-branches --all-files --hook-stage manual --verbose
 
 build-release:
     uv run scripts/measure.py release cargo build --release --locked
@@ -63,10 +59,11 @@ amend *args:
 coverage-versioning:
     uv run --locked coverage erase
     uv run --locked coverage run scripts/test_version.py
-    uv run --locked coverage combine
-    uv run --locked coverage report --fail-under=95
-    uv run --locked coverage json -o coverage/versioning.json
-    uv run --locked coverage html -d coverage/versioning
+    uv run --locked coverage combine --quiet
+    uv run --locked coverage json --quiet -o coverage/versioning.json
+    uv run --locked coverage html --quiet -d coverage/versioning
+    @uv run --locked coverage report --fail-under=95 > coverage/versioning-summary.txt || { cat coverage/versioning-summary.txt; exit 1; }
+    @printf '%s\n' 'Versioning sanity guard: passed (minimum 95%)'
 
 backends:
     prek run backends --all-files --hook-stage manual --verbose

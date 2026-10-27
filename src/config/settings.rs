@@ -66,3 +66,11 @@ pub(crate) fn labels(cli: &[String], configured: &str) -> Vec<String> {
         cli.to_vec()
     }
 }
+
+pub(crate) fn preview_limit(value: Option<&str>) -> Result<usize> {
+    value.map_or(Ok(20), |value| {
+        value
+            .parse::<usize>()
+            .context("git-pr.previewLimit must be a non-negative integer (0 shows all commits)")
+    })
+}

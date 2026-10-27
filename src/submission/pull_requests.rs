@@ -354,11 +354,14 @@ impl Application {
         crate::identity::resolve::verify_bindings(&self.commands, &config.repo, state.selected())?;
         git.recovery_destination()?;
         if let Some(recovery) = &publication.recovery {
+            self.commands.terminal.stage_with_completion(
+                "Preparing publication transition",
+                "Publication transition prepared",
+            );
+            recovery.apply(github, state, &publication.bases)?;
             self.commands
                 .terminal
-                .stage("Preparing publication transition");
-            recovery.apply(github, state, &publication.bases)?;
-            self.commands.terminal.stage("Publishing branches");
+                .stage_with_completion("Publishing branches", "Publication reconciled");
         }
         crate::identity::resolve::verify_anchors(&self.commands, state.selected())?;
         publication.verify(github, state, false)?;
@@ -389,7 +392,9 @@ impl Application {
                     != Some(&commit.hash);
             }
         }
-        self.commands.terminal.stage("Reconciling pull requests");
+        self.commands
+            .terminal
+            .stage_with_completion("Reconciling pull requests", "Pull requests reconciled");
         self.reconcile_prs(&publication.bases, github, state, &indices)?;
         if config.no_stack {
             github.warn_blocked(state.selected());
@@ -558,7 +563,10 @@ impl Application {
                 )
             })
             .context(Fatal)?;
-        github.commands.terminal.stage("Updating PR labels");
+        github
+            .commands
+            .terminal
+            .stage_with_completion("Updating PR labels", "Reconciled labels");
         github
             .update_labels(
                 &targets

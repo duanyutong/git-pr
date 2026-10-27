@@ -14,6 +14,28 @@ import unittest.mock
 import assurance
 
 
+class SensitivitySelectorTests(unittest.TestCase):
+    """Every sensitivity baseline shall execute its intended compiled regression."""
+
+    def test_inventory_requires_each_exact_selector_once(self) -> None:
+        inventory = "\n".join(f"{defect.test}: test" for defect in assurance.DEFECTS)
+        assurance.validate_selectors(inventory)
+        for output in [
+            "",
+            inventory.replace(assurance.DEFECTS[0].test, "renamed"),
+            inventory + f"\n{assurance.DEFECTS[0].test}: test",
+        ]:
+            with self.subTest(output=output), self.assertRaisesRegex(AssertionError, "exactly one"):
+                assurance.validate_selectors(output)
+
+    def test_duplicate_selectors_are_rejected(self) -> None:
+        with (
+            unittest.mock.patch.object(assurance, "DEFECTS", (assurance.DEFECTS[0],) * 2),
+            self.assertRaisesRegex(AssertionError, "duplicate"),
+        ):
+            assurance.validate_selectors(f"{assurance.DEFECTS[0].test}: test")
+
+
 class MutationVerdictTests(unittest.TestCase):
     """A passing campaign requires executable detections and a passing baseline."""
 

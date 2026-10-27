@@ -1,8 +1,5 @@
 use std::fmt;
 
-#[cfg(test)]
-use crate::model::trailers;
-
 pub(crate) const REMOTE_REF: &str = "remote-ref";
 
 // Independent facts may coexist, including a deferred base edit marked as updated.
@@ -47,16 +44,6 @@ impl Commit {
         )
     }
 
-    #[cfg(test)]
-    pub(crate) fn set_attr(&mut self, key: &str, value: &str) {
-        if let Some((_, v)) = self.attrs.iter_mut().find(|(k, _)| k == key) {
-            value.clone_into(v);
-        } else {
-            self.attrs.push((key.into(), value.into()));
-            self.attrs.sort_by(|a, b| a.0.cmp(&b.0));
-        }
-    }
-
     pub(crate) fn tags(&self, defaults: &[String]) -> Vec<String> {
         dedup(
             defaults
@@ -64,13 +51,6 @@ impl Commit {
                 .map(|s| s.trim())
                 .chain(self.attr("tags").split(',').map(str::trim)),
         )
-    }
-
-    #[cfg(test)]
-    pub(crate) fn full_message(&self) -> String {
-        #[cfg(test)]
-        crate::tests::unit::support::MESSAGE_SERIALISATIONS.update(|count| count + 1);
-        trailers::serialise(&self.title, &self.message, &self.attrs)
     }
 }
 

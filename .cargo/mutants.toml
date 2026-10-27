@@ -1,7 +1,7 @@
 # The scope is explicit; unrelated functions are not assigned a mutation score.
 gitignore = true
 examine_globs = ["src/model/trailers.rs", "src/git/policy.rs", "src/stack/selection.rs", "src/submission/policy.rs"]
-examine_re = ["parse_attr|serialise|protect_trunk|valid_branch_name|mark_other_authors|duplicate_ref|local_branch(?:es)?|remote_ref_matches|missing_refs|decide_ref_sync|resolve_bases|order_selection|slice_start"]
+examine_re = ["parse_attr|protect_trunk|valid_branch_name|mark_other_authors|duplicate_ref|remote_ref_matches|missing_refs|decide_ref_sync|resolve_bases|order_selection|slice_start"]
 additional_cargo_args = ["--lib", "--locked"]
 additional_cargo_test_args = ["tests::unit::"]
 minimum_test_timeout = 60.0

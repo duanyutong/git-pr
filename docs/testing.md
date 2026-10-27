@@ -121,17 +121,18 @@ The [source organisation](development.md#source-organisation) retains shared app
 Coverage and assurance inventories use the complete hierarchical source paths; a source move shall preserve each module's classification and independently measured obligations.
 Independent profile directories prevent integration execution from contributing to the unit percentage.
 
-`just coverage` requires that unit gate and then enforces complete application line coverage, including CLI, command, credential, HTTP and VCS adapters.
-The package report also verifies that the declared unit modules remain completely exercised within aggregate acceptance.
-The inventory includes every application source file; `lib.rs` contains declarations and re-exports without executable logic.
-Test implementation modules are excluded from the report; application adapters remain included.
+`just coverage` runs that strict core Rust unit gate and the separate Python versioning sanity guard.
+Executable lines, regions and functions shall each be 100% covered in every declared unit module; integer counts, including zero uncovered entries, determine acceptance.
+The exhaustive inventory also classifies native boundaries, mixed modules, declarations and generated implementations without assigning an aggregate application percentage target.
+Test implementations and test-only helpers are excluded from the production denominator, whilst production generic functions instantiated with in-memory doubles remain valid production evidence.
+CLI runtime, command, credential, HTTP and VCS adapters retain their behavioural assertions through ordinary and backend acceptance; Linux additionally requires native `just credentials` execution.
 
-The collector obtains the environment from `cargo llvm-cov show-env`, builds and executes instrumented Rust tests, runs native Linux credential acceptance where applicable, and collects profiles from native application subprocesses.
-Collision-safe LLVM profile filenames prevent child-process overwrites.
-JSON, HTML and text reports are retained under `coverage/`.
+The collector cleans independent instrumentation storage, builds and executes only the declared Rust unit selection, and rejects missing, duplicate, foreign, empty or incomplete metric entries.
+It clears the summary before validation or collection, preventing an earlier success from representing a failed attempt.
+JSON, HTML and text reports under `coverage/unit/` identify the source scope, stable compiler and test selection.
+Versioning reports remain separate under `coverage/`; their counts are neither averaged with Rust counts nor presented as complete repository coverage.
 Stable doctests remain a separate required gate.
-`just coverage-branches` requires complete, nonempty branch outcomes from isolated unit execution under the pinned nightly compiler, retaining JSON and HTML.
-This command runs as a separate PR and scheduled CI gate; its compiler prerequisites, evidence paths and instrumentation limits are specified in the [assurance guide](assurance.md#unit-branch-coverage).
+Ordinary validation and coverage acceptance require no nightly compiler.
 Line, region and function percentages do not measure the strength of assertions or establish complete combinations of input and external state.
 The [contract inventory](behavioural-contracts.md) and [assurance guide](assurance.md) report generated dimensions, mutation outcomes, native observations and exploration budgets separately.
 
@@ -143,7 +144,7 @@ Pre-commit hooks provide formatting and hygiene checks; pre-push verifies versio
 Command-runner pins reside in `scripts/dev-tools.env`; hook dependencies and their runtime versions are declared in `prek.toml`.
 The Python project requirement and environment resolution are recorded in `pyproject.toml` and `uv.lock`.
 The compiler and dependency graph are fixed by `rust-toolchain.toml` and `Cargo.lock`.
-The fuzz workspace has its own locked dependency graph, and instrumented fuzzing and branch coverage use a separately pinned nightly compiler without replacing the ordinary stable toolchain.
+The fuzz workspace has its own locked dependency graph; only its separate instrumented campaign requires the pinned nightly compiler, without replacing the ordinary stable toolchain.
 The [platform coverage contract](#platform-coverage) distinguishes shared policy tests, native integration obligations and the CI jobs which execute them.
 Neither an installed application nor a user's Git aliases are replaced by acceptance.
 
@@ -164,11 +165,13 @@ Local service fixtures establish correctness and operation counts; their timings
 
 ## Version automation
 
-The identical `scripts/test_version.py` suites exercise Conventional Commit policy, generated increments, formatting preservation, staged and unstaged changes, initial commits, amendments, push revisions and annotated tags in disposable repositories.
+The `scripts/test_version.py` suite exercises Conventional Commit policy, generated increments, formatting preservation, staged and unstaged changes, initial commits, amendments, push revisions and annotated tags in disposable repositories.
 Tag-publication tests use private local bare remotes, including failed publication, repeated invocation, published baselines, unrelated tags and conflicts.
 The tests use standard-library `unittest` and form part of `just test`.
-The `just coverage-versioning` gate uses coverage.py to require at least 95% line coverage of `scripts/version.py`, including its command subprocesses.
-These gates form part of `just coverage`.
+The `just coverage-versioning` gate uses coverage.py to retain a 95% statement-coverage sanity guard for `scripts/version.py`, including its command subprocesses.
+A passing run reports the guard as passed and requires no additional work towards 100%; a failed guard emits detailed percentage and missing-statement diagnostics and fails acceptance.
+JSON, HTML and diagnostic text remain available in `coverage/` for either outcome.
+This guard forms part of `just coverage`, separately from the principal Rust unit result.
 
 ## Error-handling acceptance
 

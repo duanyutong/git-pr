@@ -510,6 +510,17 @@ fn structured_command_failures_retain_output_and_encoding_context() {
         bytes: Vec<u8>,
     }
     impl CommandRunner for Output {
+        fn edit_messages(
+            &self,
+            _program: &str,
+            _args: &[String],
+            _cwd: &std::path::Path,
+            _env: &std::collections::BTreeMap<std::ffi::OsString, std::ffi::OsString>,
+            _messages: &[(String, String)],
+        ) -> anyhow::Result<crate::commands::CommandOutput> {
+            anyhow::bail!("command adapter does not support bulk message editing")
+        }
+
         fn execute(
             &self,
             _: &str,

@@ -3,10 +3,11 @@
 This independent Cargo workspace compiles the application's actual trailer, structured Git snapshot, managed-description and commit-model source files.
 It neither publishes additional application APIs nor introduces fuzz dependencies into the released executable.
 The harness includes the production `src/model/mod.rs` directly, allowing Rust's ordinary child-module resolution to compile the same model sources in both workspaces.
+Publication bindings use the production identity declarations without importing native identity-resolution adapters.
 Its crate-level trailer alias refers to that model module's `trailers` child; the snapshot and description harnesses therefore exercise the production trailer implementation rather than a copy.
 
 The `trailers`, `snapshots` and `descriptions` targets each exercise arbitrary UTF-8 replacement text and independently constructed valid structures.
-The trailer oracle requires normalised key/value grammar, retention of unknown metadata, one-character values, duplicate winner preservation and serialised metadata preservation.
+The trailer oracle requires normalised key/value grammar, retention of unknown metadata, one-character values and duplicate winner preservation when independently framed footer fixtures are parsed.
 The snapshot oracle requires exact commit, tree and parent identities, author information, messages, trailers and linear depth rankings for independently framed SHA-1 and SHA-256 records, and rejects truncated records.
 The description oracle requires bounded output, valid delimiters, preservation of human text outside explicit managed markers, rejection of ambiguous markers and idempotence under an unchanged footer.
 Inputs are bounded at 4,096 bytes; structured expansion is bounded by five snapshot records.

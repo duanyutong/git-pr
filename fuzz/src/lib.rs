@@ -9,6 +9,8 @@ use std::sync::Arc;
 // preserving the production crate's visibility, dependencies and coverage inventory.
 #[path = "../../src/stack/description.rs"]
 mod description;
+#[path = "../../src/identity/types.rs"]
+mod identity;
 #[path = "../../src/model/mod.rs"]
 mod model;
 #[path = "../../src/git/snapshot.rs"]
@@ -97,24 +99,18 @@ pub fn trailers(data: &[u8]) {
     };
     assert_eq!(commit.remote_ref(), generated);
 
-    let rendered = trailer_parser::serialise("Title", &body, &attrs);
-    let (_, footer) = rendered
-        .split_once('\n')
-        .expect("serialisation retains title separator");
+    // Independently frame a footer in source order to exercise the production parser.
+    let footer = attrs
+        .iter()
+        .rev()
+        .fold(format!("{body}\n\n"), |mut text, (key, value)| {
+            use std::fmt::Write as _;
+            writeln!(text, "{key}: {value}").expect("writing a fixture to a String");
+            text
+        });
     let (new_body, new_attrs) = trailer_parser::parse(&footer.lines().collect::<Vec<_>>());
     assert_eq!(new_body, body);
-    let rewritten = model::Commit {
-        attrs: new_attrs.clone(),
-        ..model::Commit::default()
-    };
-    assert_eq!(rewritten.remote_ref(), commit.remote_ref());
-    // Stable sorting groups duplicates; serialisation deliberately retains each
-    // occurrence. Compare the multiset, since source order is not canonical.
-    let mut expected = attrs;
-    let mut actual = new_attrs;
-    expected.sort();
-    actual.sort();
-    assert_eq!(actual, expected);
+    assert_eq!(new_attrs, attrs);
 }
 
 pub fn snapshots(data: &[u8]) {

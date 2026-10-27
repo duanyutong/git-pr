@@ -428,6 +428,17 @@ fn rewrite_uses_bulk_editor_with_literal_fallback_for_reserved_delimiters() {
 #[derive(Debug)]
 struct Minimal;
 impl CommandRunner for Minimal {
+    fn edit_messages(
+        &self,
+        _program: &str,
+        _args: &[String],
+        _cwd: &std::path::Path,
+        _env: &std::collections::BTreeMap<std::ffi::OsString, std::ffi::OsString>,
+        _messages: &[(String, String)],
+    ) -> anyhow::Result<crate::commands::CommandOutput> {
+        anyhow::bail!("command adapter does not support bulk message editing")
+    }
+
     fn execute(
         &self,
         _: &str,

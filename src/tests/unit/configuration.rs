@@ -29,6 +29,17 @@ fn absence_status_with_unexpected_stdout_is_not_a_successful_empty_query() {
     #[derive(Debug)]
     struct UnexpectedStdout;
     impl CommandRunner for UnexpectedStdout {
+        fn edit_messages(
+            &self,
+            _program: &str,
+            _args: &[String],
+            _cwd: &std::path::Path,
+            _env: &std::collections::BTreeMap<std::ffi::OsString, std::ffi::OsString>,
+            _messages: &[(String, String)],
+        ) -> anyhow::Result<crate::commands::CommandOutput> {
+            anyhow::bail!("command adapter does not support bulk message editing")
+        }
+
         fn execute(
             &self,
             _: &str,
@@ -151,6 +162,17 @@ fn invalid_utf8_configuration_output_is_rejected() {
     #[derive(Debug)]
     struct InvalidUtf8;
     impl CommandRunner for InvalidUtf8 {
+        fn edit_messages(
+            &self,
+            _program: &str,
+            _args: &[String],
+            _cwd: &std::path::Path,
+            _env: &std::collections::BTreeMap<std::ffi::OsString, std::ffi::OsString>,
+            _messages: &[(String, String)],
+        ) -> anyhow::Result<crate::commands::CommandOutput> {
+            anyhow::bail!("command adapter does not support bulk message editing")
+        }
+
         fn execute(
             &self,
             _: &str,

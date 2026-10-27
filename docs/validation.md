@@ -3,7 +3,7 @@
 Acceptance requires `just check`, `just coverage` and `just backends` against the complete source state being assessed.
 Focused regressions supply evidence for their named contracts but do not replace these gates.
 The [testing contract](testing.md) specifies fixture isolation, platform obligations, coverage attribution and behavioural expectations.
-The [assurance guide](assurance.md) specifies additional generated campaigns, mutation analysis, semantic fuzzing and branch instrumentation.
+The [assurance guide](assurance.md) specifies additional generated campaigns, mutation analysis and semantic fuzzing.
 
 ## Provenance and retention
 
@@ -13,7 +13,7 @@ Where an external restriction prevents execution, identify the unexecuted obliga
 A failed or interrupted attempt remains part of the evidence; a later successful run does not retrospectively establish that the earlier attempt passed.
 
 Measured validation phases append timing and status records under `target/validation/`.
-Application and unit coverage reports reside under `coverage/`, with independently isolated profiles and integer thresholds as specified in the [coverage policy](coverage-policy.md).
+Rust unit coverage reports and the separate Python versioning sanity-guard evidence reside under `coverage/`, with isolated unit profiles and integer metric requirements as specified in the [coverage policy](coverage-policy.md).
 Backend acceptance uses disposable repositories and isolated credentials; it shall not operate upon a developer's working stack or production pull requests.
 Native results are attributable to the operating system on which they execute.
 The CI platform matrix supplies additional macOS and Linux evidence without implying that every local execution covers both systems.

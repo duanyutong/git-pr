@@ -1,3 +1,9 @@
+#[cfg(test)]
+#[path = "../tests/jj_helpers.rs"]
+mod test_helpers;
+#[cfg(test)]
+pub(crate) use test_helpers::change_id;
+
 pub(crate) mod policy;
 
 use policy::parse_working_copy;
@@ -64,23 +70,6 @@ pub(crate) fn resolve_revisions(commands: &Commands, revisions: &[String]) -> Re
         remaining = &remaining[count..];
     }
     Ok(hashes)
-}
-
-#[cfg(test)]
-pub(crate) fn change_id(commands: &Commands, hash: &str) -> Result<String> {
-    let output = commands.jj_data(&[
-        "--ignore-working-copy",
-        "log",
-        "-r",
-        hash,
-        "--no-graph",
-        "-T",
-        "change_id",
-    ])?;
-    match output.lines().rev().map(str::trim).find(|s| !s.is_empty()) {
-        Some(id) => Ok(id.into()),
-        None => bail!("failed to parse change ID from jj output: {output}"),
-    }
 }
 
 pub(crate) fn working_copy(commands: &Commands) -> Result<Option<Commit>> {

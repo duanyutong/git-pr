@@ -1074,6 +1074,17 @@ impl InterruptedObservation {
     }
 }
 impl crate::commands::CommandRunner for InterruptedObservation {
+    fn edit_messages(
+        &self,
+        _program: &str,
+        _args: &[String],
+        _cwd: &std::path::Path,
+        _env: &std::collections::BTreeMap<std::ffi::OsString, std::ffi::OsString>,
+        _messages: &[(String, String)],
+    ) -> anyhow::Result<crate::commands::CommandOutput> {
+        anyhow::bail!("command adapter does not support bulk message editing")
+    }
+
     fn execute(
         &self,
         program: &str,
@@ -1278,6 +1289,17 @@ fn malformed_pending_records_prevent_recovery_and_invalid_git_keys_remain_git_er
 #[derive(Debug)]
 struct InvalidConfigEncoding;
 impl crate::commands::CommandRunner for InvalidConfigEncoding {
+    fn edit_messages(
+        &self,
+        _program: &str,
+        _args: &[String],
+        _cwd: &std::path::Path,
+        _env: &std::collections::BTreeMap<std::ffi::OsString, std::ffi::OsString>,
+        _messages: &[(String, String)],
+    ) -> anyhow::Result<crate::commands::CommandOutput> {
+        anyhow::bail!("command adapter does not support bulk message editing")
+    }
+
     fn execute(
         &self,
         _: &str,

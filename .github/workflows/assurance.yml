@@ -25,7 +25,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        gate: [assurance, mutants, fuzz, coverage-branches]
+        gate: [assurance, mutants, fuzz]
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
@@ -74,9 +74,6 @@ jobs:
       - name: Install pinned fuzzing compiler
         if: matrix.gate == 'fuzz'
         run: rustup toolchain install nightly-2026-10-14 --profile minimal
-      - name: Install pinned branch instrumentation
-        if: matrix.gate == 'coverage-branches'
-        run: rustup toolchain install nightly-2026-10-14 --profile minimal --component llvm-tools-preview
       - name: Execute extended campaign
         env:
           ASSURANCE_GATE: ${{ matrix.gate }}

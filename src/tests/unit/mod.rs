@@ -18,3 +18,5 @@ mod mutations;
 
 pub(crate) mod live_progress;
 mod local_optimisation;
+
+mod terminal_results;

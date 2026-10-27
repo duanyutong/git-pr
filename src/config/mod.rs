@@ -16,7 +16,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 
 use crate::{
-    cli::{Flags, output},
+    cli::{Flags, hyperlinks, output},
     commands::Commands,
     credentials::{self, CredentialStore, Secret},
     diagnostics::errors::Fatal,
@@ -39,6 +39,7 @@ pub(crate) struct Config {
     pub dry_run: bool,
     pub stop_after: Option<Checkpoint>,
     pub output: String,
+    pub hyperlinks: hyperlinks::Mode,
     pub auto_accept: bool,
     pub github_stack: bool,
     pub no_stack: bool,
@@ -46,6 +47,7 @@ pub(crate) struct Config {
     pub include_draft: bool,
     pub draft_patterns: DraftPatterns,
     pub stack_up: bool,
+    pub preview_limit: usize,
     pub draft: bool,
     pub emoji: bool,
     pub compact_stack: bool,
@@ -97,6 +99,8 @@ pub(crate) fn load(
         return Ok(Loaded::TagsSaved);
     }
     let strings = string_settings(flags, commands)?;
+    let hyperlinks = hyperlink_mode(flags, &strings)?;
+    let preview_limit = settings::preview_limit(strings.get("git-pr.previewLimit"))?;
     let booleans = boolean_settings(flags, env, commands)?;
     let no_stack = settings::enabled(flags, env, "no-stack", "GIT_PR_NO_STACK");
     let github_stack = settings::github_stack(
@@ -163,6 +167,7 @@ pub(crate) fn load(
         dry_run,
         stop_after,
         output,
+        hyperlinks,
         auto_accept: settings::enabled(flags, env, "yes", "GIT_PR_YES"),
         github_stack,
         no_stack,
@@ -170,12 +175,24 @@ pub(crate) fn load(
         include_draft: settings::enabled(flags, env, "include-draft", "GIT_PR_INCLUDE_DRAFT"),
         draft_patterns,
         stack_up,
+        preview_limit,
         draft,
         emoji,
         compact_stack: compact_stack(flags, &booleans),
         selection,
         transition_journal: strings.string("git-pr.transitionJournal"),
     })))
+}
+
+fn hyperlink_mode(flags: &Flags, strings: &Values) -> Result<hyperlinks::Mode> {
+    flags.hyperlinks.map_or_else(
+        || {
+            hyperlinks::Mode::parse(strings.get("git-pr.hyperlinks").unwrap_or("auto"))
+                .map_err(anyhow::Error::msg)
+                .context("invalid git-pr.hyperlinks configuration")
+        },
+        Ok,
+    )
 }
 
 fn draft_patterns(flags: &Flags, strings: &Values) -> String {
@@ -492,6 +509,7 @@ fn string_settings(flags: &Flags, commands: &Commands) -> Result<Values> {
     let mut keys = vec![
         "git-pr.tags",
         "git-pr.output",
+        "git-pr.previewLimit",
         "git-pr.transitionJournal",
         "git-pr.addLabel",
         "git-pr.addTipLabel",
@@ -501,6 +519,9 @@ fn string_settings(flags: &Flags, commands: &Commands) -> Result<Values> {
     ];
     if flags.string("draft-pattern").is_empty() {
         keys.push("git-pr.draftPattern");
+    }
+    if flags.hyperlinks.is_none() {
+        keys.push("git-pr.hyperlinks");
     }
     Values::read_patterns(commands, &keys, None, &[r"branch\..*\.(pushremote|remote)"])
 }

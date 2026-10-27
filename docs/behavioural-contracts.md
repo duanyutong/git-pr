@@ -15,7 +15,7 @@ Native members requiring an unsupported relationship change and arbitrary reorde
 Git leases and PR observations do not constitute a single transaction across Git and GitHub.
 
 This specification defines the observable contracts prioritised by the behavioural assurance programme.
-The examples and expected states below constitute application requirements; compatibility with an earlier implementation does not supersede them.
+The production contracts and fixture obligations below govern their respective contexts; compatibility with an earlier implementation does not supersede them.
 Passing a finite campaign establishes evidence within its declared inputs, transitions and failure positions, without establishing the absence of every possible defect.
 The [assurance guide](assurance.md) specifies execution commands, retained artefacts and continuous integration obligations.
 
@@ -51,11 +51,14 @@ The parser trims surrounding message whitespace and normalises line endings thro
 Unknown valid keys shall be retained alongside application-owned metadata.
 
 The final occurrence of a normalised key on disk shall determine its effective value.
-For example, `Tags: 🦀` followed by `Tags: x` shall yield the effective label `x`, including after rewriting.
-Likewise, `Remote-Ref: first` followed by `Remote-Ref: second` shall continue to identify `second` after rewriting.
-The internal attribute representation places the winning occurrence first; serialisation shall preserve that precedence when emitting repeated keys.
-Serialisation retains the established title and body separation, aligned title-case keys, lexical key ordering and final `Remote-Ref` group.
-Unique-key trailer representation shall remain unchanged by the duplicate-precedence correction.
+For example, `Tags: 🦀` followed by `Tags: x` shall yield the effective label `x`.
+Likewise, `Remote-Ref: first` followed by `Remote-Ref: second` shall identify `second`.
+The internal attribute representation places the winning occurrence first.
+Production submission preserves stored commit messages and their trailer representation.
+
+The [test fixture builder](../src/tests/model_helpers.rs) additionally serialises model values when constructing disposable commits.
+Its serialisation shall preserve duplicate precedence, the established title and body separation, aligned title-case keys, lexical key ordering and final `Remote-Ref` group.
+Unique-key fixture representation shall remain unchanged by the duplicate-precedence correction.
 
 ## Contract inventory
 
@@ -65,16 +68,26 @@ The [generated property suite](../src/tests/unit/properties.rs), [native assuran
 | Contract | Independent expectation and permitted normalisation | Observable invariant | Principal executable evidence |
 | --- | --- | --- | --- |
 | Trailer grammar and metadata retention | The explicit requirements above determine normalised keys, trimmed values and source-order precedence. | A single-character or unknown trailer shall not discard `Remote-Ref`, labels or human text; malformed footer text shall not be consumed. | `footer_semantics_follow_the_independent_source_order`; `empty_or_invalid_footer_lines_preserve_the_entire_human_body`; `a_missing_blank_boundary_cannot_consume_human_prose`; `single_character_tags_preserve_the_published_branch_and_label` |
-| Trailer rewriting | Effective values are calculated directly from source-order examples, independently of the parser and serialiser. | Rewriting shall preserve every effective key and reach a stable serialised form, including repeated keys. | `duplicate_trailer_winners_survive_rewriting`; `rewriting_preserves_all_effective_trailers` |
+| Fixture trailer round trips | Effective values are calculated directly from source-order examples, independently of the parser and fixture serialiser. | Fixture serialisation shall preserve every effective key and reach a stable form, including repeated keys. | `duplicate_trailer_winners_survive_rewriting`; `rewriting_preserves_all_effective_trailers` |
 | Structured snapshots | Tests construct complete NUL-delimited records and expected fields, dates and linear ancestry directly. | Metadata shall retain record boundaries, author identity, SHA-1 or SHA-256 identities, messages and verified depths; truncation shall fail before a subsequent boundary operation. | `structured_metadata_preserves_independently_framed_records`; `truncated_structured_records_fail_before_any_effect` |
 | Literal branch identity | Git determines whether generated names are admissible; application inventory separators carry no authority over names. | A pipe or Unicode character in a valid branch name shall survive discovery, publication and recovery unchanged; the first eligible alias for an identity is retained. | `branch_inventories_preserve_literal_names_and_the_first_alias`; `generated_literal_refs_agree_with_git_and_preserve_discovery_publication_and_recovery`; `literal_ref_acceptance_matches_git_at_reserved_and_punctuation_boundaries`; `pipe_branch_is_synchronised_without_moving_the_checked_out_branch` |
 | Default branch discovery | Git supplies the full symbolic target within the selected remote namespace. | A colliding local branch or tag shall not change the trunk; nested default branch names and alternate publication remotes shall retain their exact identities. | `trunk_discovery_ignores_shadowing_local_branches_and_tags`; `nested_default_branches_and_alternate_remotes_preserve_literal_identity`; `alternate_remote_mock_answers_and_publication_follow_the_selected_name`; `in_memory_remote_head_observations_match_real_git_for_each_supported_remote_name` |
-| Push destination selection | Git resolves explicit push URLs and URL rewriting; the expected postcondition is the complete ref and object identity at every resolved destination. | A failed or uncertain push shall not be declared successful solely because the fetch destination or one push destination matches. | `observed_publication_refs_require_complete_literal_identity`; `failed_publication_verifies_every_push_destination_instead_of_the_fetch_url`; `real_push_url_rewriting_and_explicit_push_urls_recover_lost_acknowledgements`; `every_partial_push_destination_prefix_remains_uncertain_until_all_destinations_match` |
+| Push destination selection | Git resolves explicit push URLs and URL rewriting; the expected postcondition is the complete ref and object identity at every resolved destination. | A failed or uncertain push shall not be declared successful solely because the fetch destination or one push destination matches. | `observed_publication_refs_require_complete_literal_identity`; `real_push_url_rewriting_and_explicit_push_urls_recover_lost_acknowledgements`; `every_partial_push_destination_prefix_remains_uncertain_until_all_destinations_match` |
 | Selection and predecessor bases | Generated stack positions, membership sets, existing exclusion flags and verified ancestry determine expected bounds and predecessors. | Argument order shall not change stack order; exclusions shall remain excluded; filtered commits shall not invalidate verified range boundaries; selected PR bases shall retain the intended predecessor context. | `selected_bounds_follow_stack_order_and_ignore_argument_order`; `selection_never_clears_existing_exclusions`; `filtered_range_boundaries_obey_verified_linear_ancestry`; `bases_use_live_selected_predecessors_and_preserve_context` |
 | Ref recovery authority | Identity equality, verified fast-forward ancestry or the same backend change identity determine the permitted action. | An unrelated local ref shall not move merely because publication completed elsewhere. | `ref_recovery_requires_identity_or_authorised_ancestry`; `generated_literal_refs_agree_with_git_and_preserve_discovery_publication_and_recovery` |
 | Human description preservation | Independently constructed text before and after the managed section remains authoritative, subject only to the specified fixed-point line-ending normalisation of observed or newly composed output and whitespace adjoining the replaced section. | Managed updates shall retain human sections, use one delimiter pair, preserve the first historical occurrence of each PR identity and avoid a further update at the fixed point. | `managed_updates_preserve_human_sections_and_reach_a_fixed_point`; `unmanaged_human_text_survives_adoption_and_repeated_updates`; `history_retains_first_identity_occurrence_and_its_state`; `malformed_managed_markers_are_rejected_without_rendering_human_text`; `rendered_descriptions_canonicalise_new_line_endings_before_first_write`; `rendering_preserves_bare_carriage_returns_without_line_feed` |
 | Dry-run, refused preflight and unrelated local state | Initial local and remote observations constitute the complete expected state when submission is unauthorised or refused, and unrelated worktree state remains outside the authorised submission effects. | Preview or refused preflight shall have no submission effect; unrelated refs, staged index contents, untracked files and linked worktree state shall survive an authorised submission. | `all_three_step_workflow_sequences_preserve_identity_and_human_text`; `nested_default_branches_and_alternate_remotes_preserve_literal_identity`; `refused_dirty_worktrees_preserve_index_unrelated_refs_and_all_remote_effects`; `successful_submission_preserves_unrelated_worktree_index_and_human_files` |
 | Retry reconciliation and PR identity | The expected model retains completed effects and the existing PR identities; it does not assume rollback of remote effects. | A retry shall observe the current state, converge on intended heads, bases, labels and content, retain human text and avoid duplicate creation or redundant metadata mutation after convergence; changed remote bases or lifecycle states shall stop unsafe replay. | `before_effect_and_lost_acknowledgement_failures_converge_without_duplicate_prs`; `every_partial_prefix_recovers_without_repeating_completed_writes_or_publication`; `all_three_step_workflow_sequences_preserve_identity_and_human_text`; `remote_base_and_lifecycle_changes_stop_publication_before_any_further_pr_effects` |
+
+## Interactive result presentation
+
+The interactive-result contract preserves every visible PR, complete title and configured orientation, with non-zero outcome counts in the heading.
+Every row carries a leading outcome glyph: `+` for created, `~` for updated and `=` for unchanged, including when all outcomes match.
+Colour supplements these distinct glyphs; mixed outcomes retain stack order.
+Hyperlink mode resolves from the final explicit CLI value, effective Git setting and `auto` default, in that order.
+Hyperlinks remain restricted to eligible rich results; redirected and custom output retain their established representations under every mode.
+Terminal identity is a conservative estimate, and unknown support retains complete visible URLs.
+The `terminal_results` unit cases, native configuration scope tests and pseudo-terminal progress tests exercise these contracts independently of live PRs.
 
 ## Bounded generated dimensions
 

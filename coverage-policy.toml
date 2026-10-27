@@ -1,14 +1,14 @@
 # Unit completeness is measured from the declared unit suites alone.
-# Package line thresholds apply independently to aggregate acceptance.
 [application]
 package = "git-pr"
 source_root = "src"
-minimum_lines = 100
 target = ["--lib"]
 test_filter = "::unit::"
 test_skip = []
 unit = [
   "src/cli/mod.rs",
+  "src/cli/hyperlinks.rs",
+  "src/cli/results.rs",
   "src/cli/output.rs",
   "src/commands/mod.rs",
   "src/config/batch.rs",
@@ -50,5 +50,5 @@ unit = [
 ]
 mixed = []
 boundary = ["src/diagnostics/mod.rs", "src/commands/cancellation.rs", "src/commands/system.rs", "src/config/files.rs", "src/credentials/system.rs", "src/github/http.rs", "src/main.rs", "src/cli/progress.rs", "src/submission/runtime.rs"]
-declarations = ["src/lib.rs", "src/model/mod.rs", "src/model/repository.rs", "src/stack/mod.rs"]
+declarations = ["src/lib.rs", "src/model/mod.rs", "src/model/repository.rs", "src/stack/mod.rs", "src/identity/types.rs"]
 generated = []

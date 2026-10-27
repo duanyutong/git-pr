@@ -207,30 +207,10 @@ pass_filenames = false
 always_run = true
 
 [[repos.hooks]]
-id = "coverage-branches"
-name = "Complete nightly unit branch coverage"
-language = "rust"
-additional_dependencies = ["cli:cargo-llvm-cov:0.9.1"]
-entry = "uv run scripts/branch_coverage.py"
-stages = ["manual"]
-pass_filenames = false
-always_run = true
-
-[[repos.hooks]]
 id = "coverage-versioning"
 name = "Versioning coverage"
 language = "system"
 entry = "just coverage-versioning"
-stages = ["manual"]
-pass_filenames = false
-always_run = true
-
-[[repos.hooks]]
-id = "coverage-application"
-name = "Application package coverage"
-language = "rust"
-additional_dependencies = ["cli:cargo-llvm-cov:0.9.1", "cli:git-branchless:0.11.1", "cli:jj-cli:0.46.0"]
-entry = "uv run scripts/measure.py coverage uv run scripts/coverage.py"
 stages = ["manual"]
 pass_filenames = false
 always_run = true

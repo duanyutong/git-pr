@@ -1,5 +1,7 @@
+pub(crate) mod hyperlinks;
 pub(crate) mod output;
 pub(crate) mod progress;
+pub(crate) mod results;
 
 use std::collections::{BTreeMap, HashSet};
 
@@ -26,7 +28,8 @@ const BOOLEAN: [&str; 18] = [
     "h",
     "help",
 ];
-const STRING: [&str; 9] = [
+const STRING: [&str; 10] = [
+    "hyperlinks",
     "command-timeout",
     "read-timeout",
     "stop-after",
@@ -48,6 +51,7 @@ pub(crate) struct Flags {
     pub labels: Vec<String>,
     pub tip_labels: Vec<String>,
     pub args: Vec<String>,
+    pub hyperlinks: Option<hyperlinks::Mode>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -161,6 +165,12 @@ impl Flags {
                 "conflicting --stack-up and deprecated --reverse values; use --stack-up alone"
                     .into(),
             ));
+        }
+        if flags.supplied.contains("hyperlinks") {
+            flags.hyperlinks = Some(
+                hyperlinks::Mode::parse(flags.string("hyperlinks"))
+                    .map_err(|error| ParseError::Invalid(format!("--hyperlinks: {error}")))?,
+            );
         }
         Ok(flags)
     }

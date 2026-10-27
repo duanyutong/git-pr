@@ -147,27 +147,24 @@ fn unavailable_commands_and_directories_retain_actionable_os_errors() {
 
 #[test]
 fn broken_output_streams_produce_failure_status_without_panicking() {
-    use std::{
-        os::{fd::OwnedFd, unix::net::UnixStream},
-        process::Stdio,
-    };
+    use std::{io::pipe, process::Stdio};
     let temp = tempfile::tempdir().unwrap();
-    let (reader, writer) = UnixStream::pair().unwrap();
+    let (reader, writer) = pipe().unwrap();
     drop(reader);
     let output = command(&temp)
         .arg("--help")
-        .stdout(Stdio::from(OwnedFd::from(writer)))
+        .stdout(Stdio::from(writer))
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(1));
     let error = String::from_utf8(output.stderr).unwrap();
     assert!(error.contains("could not write stdout") && !error.contains("panicked"));
 
-    let (reader, writer) = UnixStream::pair().unwrap();
+    let (reader, writer) = pipe().unwrap();
     drop(reader);
     let output = command(&temp)
         .arg("--help")
-        .stderr(Stdio::from(OwnedFd::from(writer)))
+        .stderr(Stdio::from(writer))
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(1));
@@ -246,5 +243,20 @@ fn verbose_failure_reports_discovery_timings_on_stderr() {
         assert!(stderr.contains("start command: git rev-parse"));
         assert!(stderr.contains("Timing summary: failed"));
         assert!(stderr.contains("You need to run it in a git repository"));
+    }
+}
+
+#[test]
+fn invalid_hyperlinks_fail_before_repository_discovery() {
+    for args in [
+        vec!["--hyperlinks"],
+        vec!["--hyperlinks="],
+        vec!["--hyperlinks=wrong"],
+    ] {
+        let result = run(&args);
+        assert_eq!(result.status.code(), Some(2));
+        let error = String::from_utf8(result.stderr).unwrap();
+        assert!(error.contains("hyperlinks"));
+        assert!(!error.contains("could not discover"));
     }
 }

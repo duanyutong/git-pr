@@ -2,15 +2,12 @@
 
 pub(crate) mod resolve;
 pub(crate) mod store;
+mod types;
+
+pub(crate) use types::{Binding, Head};
 
 use crate::{git::Git, model::Repository};
 use anyhow::{Context, Result, bail};
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Head {
-    pub repository: String,
-    pub reference: String,
-}
 
 impl Head {
     pub(crate) fn new(repo: &Repository, reference: &str) -> Result<Self> {
@@ -51,17 +48,6 @@ impl Head {
                     && reference.strip_prefix("refs/heads/") == Some(self.reference.as_str())
             })
     }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Binding {
-    pub anchor: Option<String>,
-    pub anchor_oid: Option<String>,
-    pub head: Head,
-    /// A pinned review is distinct from the current review found by head name.
-    pub review: Option<u64>,
-    pub adopted: bool,
-    pub previous_anchor: Option<String>,
 }
 
 pub(crate) fn repository(repo: &Repository) -> String {

@@ -19,7 +19,7 @@ The hook interpreter and compiler requests must remain consistent with `project.
 Use `prek run ruff-check --all-files` for Python linting, `prek run ruff-format --all-files` for Python formatting and `prek run pyright --all-files --hook-stage manual` for Python type checking.
 Hooks and recipes require no repository-specific `PATH` changes or virtual-environment activation.
 The recipe `just test` runs acceptance through a managed hook containing the declared git-branchless and Jujutsu dependencies.
-Coverage recipes similarly run their collectors inside hooks containing cargo-llvm-cov and, where repository tests require it, git-branchless.
+The Rust unit coverage recipe runs its collector inside a hook containing cargo-llvm-cov.
 Manual lint selects its own hooks explicitly, so invoking it does not execute acceptance tests or coverage.
 CI obtains the pinned just and prek command runners through `uv run` and caches prek environments alongside the Cargo caches.
 Cache keys separate operating systems, architectures and declared Rust toolchains; fallback restoration reuses the most recent compatible cache when dependency or hook configuration changes.
@@ -29,7 +29,7 @@ Tool installation and update behaviour is delegated to prek rather than maintain
 
 The commands `just typecheck` and `cargo test --locked <name>` provide focused checks during development.
 The command `just test-unit` runs the declared in-memory suites; `just coverage-unit` enforces their independent coverage boundary.
-The [unit coverage specification](unit-coverage.md) identifies covered policy, remaining gaps and excluded external effects.
+The [unit coverage specification](unit-coverage.md) identifies the enforced policy scope and excluded external effects.
 The recipe `just fmt` applies formatting through prek and reports changes for review.
 The recipe `just lint` runs hygiene followed by the manual Clippy, dependency-policy, unused-dependency and Python type checks.
 The recipe `just check` runs lint, all test targets, separate doctests and the production release build.
@@ -38,8 +38,9 @@ These commands remain explicit validation gates and are also executed by CI; pus
 Use `just assurance` for reproducible generated contracts, native Git observations, bounded workflows, known-defect sensitivity and retained fuzz corpus replay.
 Use `just mutants [BASE]` to assess assertions within the declared critical function scope and `just fuzz [SECONDS] [SEED]` for bounded, instrumented semantic exploration.
 The [assurance guide](assurance.md) specifies prerequisites, independent contracts, case and seed controls, mutation interpretation, retained evidence and campaign limits.
-`just coverage-branches` requires complete unit branch outcomes under the pinned nightly instrumentation in isolated storage and runs as a separate CI gate.
-The stable application coverage gate requires complete application line coverage; neither completeness requirement establishes all input combinations or execution paths.
+The stable Rust unit coverage gate requires 100% executable lines, regions and functions within the declared core implementation scope.
+The separate Python versioning sanity guard requires at least 95% statement coverage; ordinary validation and coverage require no nightly compiler.
+Native adapters retain behavioural acceptance obligations without an aggregate application percentage target.
 Local recipes execute on the host operating system; the [platform coverage contract](testing.md#platform-coverage) explains why CI also validates macOS and Linux and when additional native execution is relevant.
 The release profile uses optimisation level 3, fat link-time optimisation, one code-generation unit, aborting panics and stripped symbols for release binaries.
 Fat LTO permits optimisation across crate boundaries; one code-generation unit permits optimisation across the crate.
@@ -61,7 +62,7 @@ Pre-commit hooks perform formatting, spelling, syntax and repository-hygiene che
 Pre-push verifies committed version history and runs prek's built-in trailing-whitespace, end-of-file and large-file checks.
 The whitespace and end-of-file hooks apply automatic fixes at pre-commit and use `--check` at pre-push to report defects without modifying files.
 It invokes `uv run --locked scripts/version.py pre-push`; version verification requires no Rust compilation.
-The Python implementation and its behavioural tests are identical in `git-pr` and `git-ls`; package identity is read from the relevant manifest snapshot.
+The Python versioning implementation reads package identity from the relevant local manifest snapshot and verifies its behaviour in disposable repositories.
 Existing hook installations read `prek.toml` on invocation and require no reinstallation for this policy change.
 Successful CI on `main` triggers annotated version tags, as specified in [versioning](versioning.md).
 
@@ -96,7 +97,7 @@ src/
 
 | Directory | Responsibility |
 | --- | --- |
-| `src/cli/` | Argument parsing in `mod.rs`, help resources, result formatting in `output.rs` and interactive rendering in `progress.rs`. |
+| `src/cli/` | Argument parsing in `mod.rs`, help resources, plain formatting in `output.rs`, hyperlink policy in `hyperlinks.rs`, interactive result layout in `results.rs` and terminal coordination in `progress.rs`. |
 | `src/commands/` | Injected command contracts and coordination in `mod.rs`, native process execution, cancellation and the editor helper. |
 | `src/config/` | Configuration assembly in `mod.rs`, precedence in `settings.rs`, batched discovery, checkpoints, files and paths. |
 | `src/credentials/` | Credential-document interpretation in `mod.rs`, native credential decoding and platform access. |

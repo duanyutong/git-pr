@@ -67,6 +67,10 @@ git config --global git-pr.defaultDraft true       # User default.
 git config --local git-pr.defaultDraft false       # Repository override.
 git config --local git-pr.addLabel 'review, needs-ci'
 git config --local git-pr.addTipLabel ''  # Inherited tip labels cleared.
+git config --global git-pr.hyperlinks auto
+git config --local git-pr.hyperlinks never  # Complete visible PR URLs.
+git config --global git-pr.previewLimit 20  # Commits visible in the selection preview.
+git config --local git-pr.previewLimit 0    # Complete selection preview.
 git config --show-origin --get-regexp '^git-pr\.'
 ```
 
@@ -96,17 +100,31 @@ Routine push, creation and native-link announcements occupy the live line rather
 Warnings, dry-run previews, checkpoint messages and recovery instructions remain durable.
 
 The selected-stack preview abbreviates stacks exceeding eight commits, showing the first and last four commits and the omitted count.
-The final default listing separates each selected, unskipped PR into a block containing its number, created, updated or unchanged status, complete title and full URL, together with aggregate counts above the list.
+The final default listing presents every selected, unskipped PR as an aligned number and complete title, with non-zero outcome counts and repository context above the list.
+Every PR row begins with an outcome glyph before its number: green `+` for created, yellow `~` for updated and subdued `=` for unchanged.
+The glyphs remain visible without colour, including when all outcomes match; the heading retains ordinary created, updated and unchanged counts without additional glyphs.
+Outcome markers do not change stack order.
+Hyperlink-capable output uses clickable PR numbers; otherwise, complete URLs appear beneath the titles.
 Titles wrap at word boundaries and preserve Unicode grapheme clusters; exceptionally long words split only between grapheme clusters.
 An updated status includes confirmed title, description and label changes in the current invocation.
-The preview and final listing follow `git-pr.stackUp`, with the base at the bottom and tip at the top by default.
+The preview and final listing follow `git-pr.stackUp`, labelled `tip first` by default and `tip last` when inverted.
 Use `--stack-up=false` to invert both displays; custom output templates retain their existing representation.
-Preview truncation and section rules respect grapheme boundaries and terminal character widths.
+Titles wrap beneath their starting column, or beneath the PR identity when a narrow pane leaves insufficient title space.
+Preview truncation respects grapheme boundaries and terminal character widths; complete URLs remain intact for copying even when the terminal wraps them.
+
+The following invocation overrides hyperlink detection for rich results in an unfamiliar terminal:
+
+```sh
+git pr --hyperlinks=always
+```
+
+Use `git pr --hyperlinks=never` to retain visible URLs, or `git -c git-pr.hyperlinks=never pr` for a Git-scoped invocation override.
+The [hyperlink contract](configuration.md#terminal-hyperlinks) specifies detection, precedence and the preservation of plain and custom output.
 
 Rich lists require both output streams to be interactive.
 Redirected standard output retains the plain listing and custom-template representation.
 Colour is disabled for redirected standard error, CI, `TERM=dumb`, or a non-empty `NO_COLOR` environment variable.
-`NO_COLOR` disables colour while retaining interactive progress.
+`NO_COLOR` disables colour while retaining interactive progress and eligible hyperlinks.
 The renderer uses one worker, sleeps when idle or awaiting confirmation, and performs no Git or API operations.
 
 During ordinary activity, the status line shows the current operation and elapsed time.

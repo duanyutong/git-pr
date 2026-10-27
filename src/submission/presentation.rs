@@ -13,12 +13,22 @@ use crate::{
 use super::{Application, State, policy};
 
 impl Application {
+    pub(super) fn stage(&self, active: &str, completed: &str) {
+        self.commands
+            .terminal
+            .stage_with_completion(active, completed);
+    }
+
     pub(super) fn present_selection(&self, config: &Config, state: &mut State) {
         let mut visible: Vec<_> = state.selected().iter().collect();
         if config.stack_up {
             visible.reverse();
         }
-        if !self.commands.terminal.selection(&visible, config.stack_up) {
+        if !self
+            .commands
+            .terminal
+            .selection(&visible, config.stack_up, config.preview_limit)
+        {
             for commit in visible {
                 self.commands.out(&commit.to_string());
             }
@@ -64,10 +74,12 @@ impl Application {
             visible.reverse();
         }
         if config.output == "{url} {title}"
-            && self
-                .commands
-                .terminal
-                .results(&visible, &config.repo, config.stack_up)
+            && self.commands.terminal.results(
+                &visible,
+                &config.repo,
+                config.stack_up,
+                config.hyperlinks,
+            )
         {
             return;
         }

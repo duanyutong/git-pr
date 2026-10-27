@@ -1,3 +1,9 @@
+#[cfg(test)]
+#[path = "../tests/description_helpers.rs"]
+mod test_helpers;
+#[cfg(test)]
+pub(crate) use test_helpers::{extract_history, generate_body};
+
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::sync::Arc;
@@ -163,11 +169,6 @@ pub(crate) struct Body {
 }
 
 impl Body {
-    #[cfg(test)]
-    pub(crate) fn parse(source: &str) -> Result<Self> {
-        Self::analyse(source.into())
-    }
-
     fn analyse(source: Arc<str>) -> Result<Self> {
         #[cfg(test)]
         crate::tests::unit::support::BODY_ANALYSES.update(|count| count + 1);
@@ -218,24 +219,6 @@ impl Body {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn history(&self) -> Vec<HistoryEntry> {
-        let mut history = Vec::new();
-        self.append_history(&mut history, &mut HashSet::new());
-        history
-    }
-
-    /// None retains the exact observed bytes without allocating an unchanged body.
-    #[cfg(test)]
-    pub(crate) fn render_update(
-        &self,
-        message: &str,
-        stack_info: &str,
-        template: &str,
-    ) -> Result<Option<String>> {
-        self.render_footer(message, &Footer::borrowed(stack_info), template)
-    }
-
     pub(crate) fn render_footer(
         &self,
         message: &str,
@@ -280,13 +263,6 @@ impl Body {
         }
         Ok(Some(footer.body(&[existing, "\n\n---\n"], &[])))
     }
-
-    #[cfg(test)]
-    pub(crate) fn render(&self, message: &str, stack_info: &str, template: &str) -> Result<String> {
-        Ok(self
-            .render_update(message, stack_info, template)?
-            .unwrap_or_else(|| self.text().to_owned()))
-    }
 }
 
 /// Only the header and current row vary; the rest borrows the shared stack text.
@@ -299,14 +275,6 @@ pub(crate) struct Footer<'a> {
 }
 
 impl Footer<'_> {
-    #[cfg(test)]
-    fn borrowed(text: &str) -> Footer<'_> {
-        Footer {
-            before: text,
-            ..Footer::default()
-        }
-    }
-
     pub(crate) fn parts(&self) -> [&str; 4] {
         [&self.header, self.before, &self.current, self.after]
     }
@@ -372,11 +340,6 @@ pub(crate) struct BodyCache {
 }
 
 impl BodyCache {
-    #[cfg(test)]
-    pub(crate) fn get(&mut self, number: u64, source: &str) -> Result<&Body> {
-        self.get_shared(number, &Arc::from(source))
-    }
-
     pub(crate) fn get_shared(&mut self, number: u64, source: &Arc<str>) -> Result<&Body> {
         use std::collections::hash_map::Entry;
         let analyse = || {
@@ -393,11 +356,6 @@ impl BodyCache {
             Entry::Vacant(entry) => entry.insert(analyse()?),
         })
     }
-}
-
-#[cfg(test)]
-pub(crate) fn extract_history(body: &str) -> Vec<HistoryEntry> {
-    Body::parse(body).unwrap().history()
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -484,10 +442,6 @@ impl<'a> StackRenderer<'a> {
             has_unnumbered,
             style,
         }
-    }
-    #[cfg(test)]
-    pub(crate) fn render(&self, current: &Commit) -> String {
-        self.footer(current).parts().concat()
     }
 
     pub(crate) fn footer(&self, current: &Commit) -> Footer<'_> {
@@ -585,19 +539,6 @@ fn escape_context_text(text: &str) -> String {
         }
     }
     escaped
-}
-
-#[cfg(test)]
-pub(crate) fn generate_body(
-    message: &str,
-    existing: &str,
-    stack_info: &str,
-    template: &str,
-) -> String {
-    Body::parse(existing)
-        .unwrap()
-        .render(message, stack_info, template)
-        .unwrap()
 }
 
 /// Constant-size navigation for each PR; historical full-stack lists are omitted explicitly.

@@ -63,7 +63,7 @@ impl Application {
     fn submit(mut self, flags: &Flags, env: &BTreeMap<String, String>) -> Result<()> {
         let diagnostics = self.commands.diagnostics.clone();
         self.commands.terminal.section("Repository");
-        self.commands.terminal.stage("Discovering repository");
+        self.stage("Discovering repository", "Repository discovered");
         let Loaded::Ready(mut config) =
             diagnostics.phase("configuration and repository discovery", || {
                 config::load(
@@ -81,12 +81,12 @@ impl Application {
             commands: &self.commands,
             repo: &config.repo,
         };
-        self.commands.terminal.stage("Validating working copy");
+        self.stage("Validating working copy", "Working copy validated");
         diagnostics.phase("working-copy validation", || Self::check_working_copy(git))?;
         if self.checkpoint(&config, Checkpoint::Validate) {
             return Ok(());
         }
-        self.commands.terminal.stage("Reading commits");
+        self.stage("Reading commits", "Commits read");
         let mut state = diagnostics.phase("commit discovery", || {
             State::discover(&mut config, &self.commands)
         })?;
@@ -127,11 +127,12 @@ impl Application {
             commands: &self.commands,
             repo: &config.repo,
         };
-        self.commands.terminal.stage(if config.dry_run {
-            "Previewing publication"
+        let (active, completed) = if config.dry_run {
+            ("Previewing publication", "Publication previewed")
         } else {
-            "Publishing branches"
-        });
+            ("Publishing branches", "Publication reconciled")
+        };
+        self.stage(active, completed);
         diagnostics.phase("publication and PR reconciliation", || self.push(&config, git, &github, &mut state, &publication))
             .context("publication or PR reconciliation failed; any completed local metadata writes, pushed refs and PR changes are retained. Inspect the reported operation before retrying")?;
         if self.checkpoint(&config, Checkpoint::Push) {
@@ -146,7 +147,7 @@ impl Application {
         if self.checkpoint(&config, Checkpoint::PrCreate) {
             return Ok(());
         }
-        self.commands.terminal.stage("Updating PR descriptions");
+        self.stage("Updating PR descriptions", "Reconciled descriptions");
         let associations = crate::identity::resolve::verify_bindings(
             &self.commands,
             &config.repo,
@@ -218,11 +219,18 @@ impl Application {
         } else {
             "Submission"
         });
-        self.commands.terminal.stage(if config.dry_run {
-            "Preparing preview"
-        } else {
-            "Preparing commits"
-        });
+        self.stage(
+            if config.dry_run {
+                "Preparing preview"
+            } else {
+                "Preparing commits"
+            },
+            if config.dry_run {
+                "Preview prepared"
+            } else {
+                "Commits prepared"
+            },
+        );
         state.validate_conflicts()?;
         if !state.selected().iter().any(|commit| !commit.skip) {
             return Ok(pull_requests::Publication::default());
@@ -258,7 +266,10 @@ impl Application {
         bases: &[String],
     ) -> Result<()> {
         if config.github_stack {
-            github.commands.terminal.stage("Linking native stack");
+            github
+                .commands
+                .terminal
+                .stage_with_completion("Linking native stack", "Native stack reconciled");
             let base = state
                 .stack
                 .iter()

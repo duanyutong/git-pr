@@ -1,3 +1,9 @@
+#[cfg(test)]
+#[path = "../tests/command_helpers.rs"]
+mod test_helpers;
+#[cfg(test)]
+pub(crate) use test_helpers::parallel;
+
 pub(crate) mod cancellation;
 mod system;
 pub(crate) use system::{Console, ProcessRunner, SystemClock};
@@ -76,10 +82,7 @@ pub(crate) trait CommandRunner: Debug + Send + Sync {
         cwd: &std::path::Path,
         env: &BTreeMap<OsString, OsString>,
         messages: &[(String, String)],
-    ) -> Result<CommandOutput> {
-        let _ = (program, args, cwd, env, messages);
-        bail!("command adapter does not support bulk message editing")
-    }
+    ) -> Result<CommandOutput>;
 
     fn execute(
         &self,
@@ -96,12 +99,20 @@ pub(crate) trait Terminal: Debug + Send + Sync {
     fn confirm(&self, prompt: &str) -> bool;
     fn section(&self, _label: &str) {}
     fn stage(&self, _label: &str) {}
+    fn stage_with_completion(&self, label: &str, _completed: &str) {
+        self.stage(label);
+    }
     fn finish(&self, _success: bool) {}
     fn detail(&self, text: &str) {
         self.out(text);
     }
     fn progress(&self, _label: &str, _done: usize, _total: usize) {}
-    fn selection(&self, _commits: &[&crate::model::Commit], _stack_up: bool) -> bool {
+    fn selection(
+        &self,
+        _commits: &[&crate::model::Commit],
+        _stack_up: bool,
+        _preview_limit: usize,
+    ) -> bool {
         false
     }
     fn results(
@@ -109,6 +120,7 @@ pub(crate) trait Terminal: Debug + Send + Sync {
         _commits: &[&crate::model::Commit],
         _repo: &crate::model::Repository,
         _stack_up: bool,
+        _hyperlinks: crate::cli::hyperlinks::Mode,
     ) -> bool {
         false
     }
@@ -317,14 +329,6 @@ impl Commands {
             self.terminal.err(&result);
         }
     }
-}
-
-#[cfg(test)]
-pub(crate) fn parallel<T: Send, R: Send>(
-    items: Vec<T>,
-    function: impl Fn(T) -> Result<R> + Sync,
-) -> Result<Vec<R>> {
-    parallel_cached(items, |_| None, function)
 }
 
 pub(crate) fn parallel_cached<T: Send, R: Send>(

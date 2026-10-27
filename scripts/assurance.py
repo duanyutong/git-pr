@@ -44,7 +44,7 @@ class Defect:
 DEFECTS = (
     Defect(
         "fetch-instead-of-push-destination",
-        "tests::regressions::failed_publication_verifies_every_push_destination_instead_of_the_fetch_url",
+        "tests::assurance::every_partial_push_destination_prefix_remains_uncertain_until_all_destinations_match",
         (
             Change(
                 "src/git/mod.rs",
@@ -60,17 +60,14 @@ DEFECTS = (
             Change(
                 "src/model/trailers.rs",
                 "if value.is_empty() {",
-                "if value.is_empty() || (key.eq_ignore_ascii_case(REMOTE_REF) && value.chars().count() < 2) {",
+                'if value.is_empty() || (key.eq_ignore_ascii_case("remote-ref") && value.chars().count() < 2) {',
             ),
         ),
     ),
     Defect(
         "pipe-containing-ref-inventory",
         "tests::regressions::pipe_branch_is_synchronised_without_moving_the_checked_out_branch",
-        tuple(
-            Change(path, ".rsplit_once('|')", ".split_once('|')", 2)
-            for path in ("src/git/mod.rs", "src/stack/selection.rs")
-        ),
+        (Change("src/git/mod.rs", ".rsplit_once('|')", ".split_once('|')"),),
     ),
     Defect(
         "single-character-trailer",
@@ -79,7 +76,7 @@ DEFECTS = (
             Change(
                 "src/model/trailers.rs",
                 "if value.is_empty() {",
-                "if value.chars().count() < 2 && !key.eq_ignore_ascii_case(REMOTE_REF) {",
+                'if value.chars().count() < 2 && !key.eq_ignore_ascii_case("remote-ref") {',
             ),
         ),
     ),
@@ -105,8 +102,8 @@ DEFECTS = (
         (
             Change(
                 "src/model/trailers.rs",
-                "let mut attrs: Vec<_> = attrs.iter().rev().collect();",
-                "let mut attrs: Vec<_> = attrs.iter().collect();",
+                "attrs.push((key, value));",
+                "attrs.insert(0, (key, value));",
             ),
         ),
     ),
@@ -245,7 +242,6 @@ def archive(gate: str) -> None:
         "properties": ("properties.json", "properties.log", "assurance.log"),
         "sensitivity": ("sensitivity.json", "sensitivity"),
         "mutants": ("mutants.json", "mutants"),
-        "branches": ("branches",),
     }[gate]
     previous = [EVIDENCE / name for name in names if (EVIDENCE / name).exists()]
     if not previous:
@@ -287,6 +283,17 @@ def detected(status: int | str, output: str, test: str) -> bool:
     )
 
 
+def validate_selectors(output: str) -> None:
+    """Reject absent or ambiguous exact regressions against Cargo's compiled inventory."""
+    tests = [line.removesuffix(": test") for line in output.splitlines() if line.endswith(": test")]
+    selectors = [defect.test for defect in DEFECTS]
+    if len(selectors) != len(set(selectors)):
+        raise AssertionError("duplicate sensitivity selectors")
+    for selector in selectors:
+        if tests.count(selector) != 1:
+            raise AssertionError(f"sensitivity selector must identify exactly one test: {selector}")
+
+
 def sensitivity(report: dict) -> None:
     """Require a passing baseline and actual assertion failure for each historical defect."""
     directory = EVIDENCE / "sensitivity"
@@ -299,6 +306,15 @@ def sensitivity(report: dict) -> None:
         source = pathlib.Path(temporary)
         report["source_sha256"] = snapshot(source)
         report["defects"] = []
+        inventory = execute(
+            ["cargo", "test", "--locked", "-p", "git-pr", "--lib", "--", "--list"],
+            directory / "inventory.log",
+            cwd=source,
+            environment=environment,
+        )
+        report["commands"].append(inventory)
+        require_success(inventory)
+        validate_selectors((ROOT / inventory["log"]).read_text())
         for defect in DEFECTS:
             command = [
                 "cargo",

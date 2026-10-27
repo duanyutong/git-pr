@@ -18,6 +18,9 @@
     	Create/update a GitHub Stack after pushing PRs (disabled by default)
   -include-draft
     	Include draft commits (override config)
+  -hyperlinks mode
+    	PR links in rich results: auto|always|never (config git-pr.hyperlinks; default auto)
+    	Use never to show full URLs; always bypasses detection only in rich results, not pipes or custom formats
   -include-other-authors
     	Create PRs for commits from other authors (default to false: skip)
   -no-stack

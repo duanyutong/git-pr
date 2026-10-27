@@ -25,6 +25,7 @@ Valid revision expressions continue to resolve after the initial Jujutsu snapsho
 | `-t` | Overrides default tags for the invocation when non-empty; per-commit `Tags` trailers remain applicable. |
 | `--add-label`, `--add-tip-label` | Repeatable label lists for all submitted PRs or the submission tip. CLI values replace the corresponding Git-configured list. |
 | `--output` | Preset or custom output template; defaults to `url-title`. |
+| `--hyperlinks` | `auto`, `always` or `never` for links in rich PR results; overrides `git-pr.hyperlinks`; `auto`. Use `never` to retain visible URLs. |
 | `--gh-hosts` | GitHub host configuration; defaults to `~/.config/gh/hosts.yml`. A leading `~` expands against `HOME`. |
 | `--compact-stack` | Uses at most three adjacent-PR links instead of a complete stack list; overrides `git-pr.compactStack`; false. |
 | `--read-timeout` | Positive structured-command deadline in seconds; overrides `git-pr.readTimeout`; 120. |
@@ -66,6 +67,7 @@ Malformed Git configuration and invalid Boolean values are reported as errors.
 | --- | --- |
 | `defaultDraft` | Creates all new PRs as drafts when true; when false, matching `draftPattern` titles still create drafts; `true`. |
 | `stackUp` | Displays the base at the bottom and tip at the top; `true`. A false value inverts the layout. |
+| `previewLimit` | Maximum number of commits displayed in the rich terminal selection preview; `20`. Set `0` to display every commit. |
 | `githubStack` | Native GitHub stack management; `false`. |
 | `compactStack` | Adjacent-PR navigation instead of complete stack history; `false`. |
 | `readTimeout` | Positive structured-command deadline in seconds; `120`. |
@@ -77,6 +79,7 @@ Malformed Git configuration and invalid Boolean values are reported as errors.
 | `addLabel` | Comma-separated labels for all submitted PRs; empty. |
 | `addTipLabel` | Comma-separated labels for the tip; empty. |
 | `output` | Output preset or template; `url-title`. |
+| `hyperlinks` | Links in rich PR results: `auto`, `always` or `never`; `auto`. |
 | `branchFromTitle` | Accepted Boolean setting; currently inactive. |
 
 Git performs Boolean conversion for `defaultDraft`, `stackUp`, the deprecated `reverse` alias, `githubStack`, `stackEmoji`, `compactStack`, `skipDraft` and `branchFromTitle`.
@@ -94,9 +97,42 @@ Examples of configuration commands appear in [common commands](commands.md#confi
 
 Output presets are `url-title`, `url` and `markdown`.
 Templates support `{url}`, `{number}`, `{title}`, `{branch}`, `{hash}`, `{shorthash}`, `{host}`, `{repo}`, `{author}` and `{email}`.
-The default template, `"{url} {title}"`, displays each PR's URL and title in the terminal summary.
+The default template, `"{url} {title}"`, displays each PR's URL and title in plain output; its interactive presentation may use linked PR numbers.
 Replacement is a single pass: placeholder-like text inside a commit title remains literal.
 Invalid placeholder names are rejected.
+
+### Terminal hyperlinks
+
+`--hyperlinks=auto|always|never` and `--hyperlinks auto|always|never` select the same three modes as `git-pr.hyperlinks`.
+The final explicit CLI value takes precedence over the effective Git setting, including when the CLI value is `auto`; the default is `auto` when neither is present.
+Values are lowercase enum names, not Booleans, and empty or valueless settings are invalid.
+Invalid CLI values fail before repository discovery; invalid effective Git values fail before authentication or publication.
+Overridden invalid values do not prevent execution, although malformed Git configuration files remain errors.
+Git resolves includes and scope precedence, including settings in a separate Jujutsu workspace's backing Git repository.
+
+Automatic mode recognises direct VS Code and Zed terminals through `TERM_PROGRAM=vscode` or `TERM_PROGRAM=zed`.
+An unknown terminal, invalid terminal identity or the presence of `TMUX`, `STY`, `SSH_CONNECTION` or `SSH_TTY` selects complete visible URLs.
+These checks are conservative capability estimates; no terminal query is sent.
+`always` bypasses that estimate within eligible rich results, and `never` displays complete URLs beneath each PR.
+Neither mode forces rich formatting into redirected output, CI, dumb terminals or non-default output templates.
+An explicitly supplied template equivalent to `{url} {title}` remains eligible for the default rich presentation.
+No hyperlink environment override is supported; `FORCE_HYPERLINK` does not supersede the CLI or Git setting.
+
+Hyperlinks are independent of colour, so `NO_COLOR` suppresses styling without disabling links.
+Each linked PR number opens its repository's PR page; copying displayed text may copy only the number.
+Use `never` or a plain URL output preset when complete addresses are required for copying or logs.
+The setting affects console presentation only and is independent of `compactStack`, which controls PR-description navigation.
+
+### Selected-commit preview
+
+The rich terminal selection preview displays up to `git-pr.previewLimit` commits, with a default of 20.
+For limits of at least two, larger selections retain commits at both ends, dividing the limit equally and assigning any additional slot to the first end in the configured display order.
+A single intervening row reports the number of omitted commits.
+The value must be a non-negative integer; `0` disables collapse.
+Plain selection output and final PR results do not collapse commit lists.
+Git resolves configuration scopes and includes; `git -c git-pr.previewLimit=0 pr` supplies an invocation-specific override.
+
+### PR body templates
 
 PR body templates are resolved relative to the discovered repository root, including when submission is invoked from a subdirectory.
 The existing template precedence therefore applies consistently throughout the working tree.
