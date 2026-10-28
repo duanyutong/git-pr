@@ -1532,6 +1532,7 @@ fn restacked_description_history_survives_merged_association_cleanup_and_repeat(
     world.run(&["--no-stack"]).unwrap();
     let preserved = {
         let memory = world.0.lock().unwrap();
+        assert!(memory.stdout.contains("· 11 historical"));
         for number in 901..=911 {
             assert!(
                 memory
@@ -1557,6 +1558,12 @@ fn restacked_description_history_survives_merged_association_cleanup_and_repeat(
     let memory = world.0.lock().unwrap();
     assert_eq!(memory.prs[&101], preserved[0]);
     assert_eq!(memory.prs[&102], preserved[1]);
+    assert!(
+        memory
+            .stdout
+            .contains("Pull requests · 2 unchanged · 11 historical")
+    );
+    assert!(memory.stderr.contains("PR descriptions: 2 unchanged"));
     drop(memory);
     assert_eq!(config_writes(&world), 0);
 }

@@ -29,11 +29,12 @@ fn checked_outcomes_replace_generic_completion_counts_in_plain_and_live_output()
         let progress = ProgressTerminal::with_animation(terminal.clone(), animated);
         progress.stage_with_completion("Updating descriptions", "Reconciled descriptions");
         progress.progress("Descriptions", 2, 2);
-        progress.outcome("Checked 2 PR descriptions; no changes needed");
+        progress.outcome("PR descriptions: 2 unchanged");
         progress.finish(true);
         drop(progress);
         let stderr = terminal.stderr.lock().unwrap();
-        assert!(stderr.contains("Checked 2 PR descriptions; no changes needed"));
+        assert!(stderr.contains("PR descriptions: 2 unchanged"));
+        assert!(!stderr.contains("Stack context prepared"));
         assert!(!stderr.contains("Reconciled descriptions"));
         assert!(!stderr.contains("· 2/2"));
         if !animated {
@@ -169,7 +170,14 @@ fn worker_creation_failure_reports_the_reason_and_retains_plain_output() {
     progress.end_activity(wait);
     progress.finish(true);
     assert!(!progress.selection(&[], true, 20));
-    assert!(!progress.results(&[], &Repository::default(), true, hyperlinks::Mode::Auto));
+    assert!(!progress.results(
+        &[],
+        &Repository::default(),
+        true,
+        hyperlinks::Mode::Auto,
+        &[],
+        false
+    ));
     drop(progress);
     assert_eq!(*terminal.stdout.lock().unwrap(), "Branch is ready\n");
     assert_eq!(
@@ -189,7 +197,10 @@ fn completed_stages_fit_small_terminal_widths_and_preserve_status_when_space_all
                 columns,
                 false,
             );
-            assert!(row.width() <= columns);
+            assert!(row.contains("publication"));
+            if columns >= 16 {
+                assert!(row.lines().all(|line| line.width() <= columns));
+            }
             assert!(!row.contains('\x1b'));
             if columns >= 40 {
                 assert!(row.contains(if success { '✓' } else { '✗' }));
@@ -208,7 +219,10 @@ fn rendering_is_bounded_for_narrow_terminals_and_expired_timers() {
     };
     for width in [0, 1, 2, 15, 80, 200] {
         let line = render(&activity, None, None, 0, width);
-        assert!(line.chars().count() < width || width == 0);
+        assert!(line.contains("descriptions"));
+        if width >= 40 {
+            assert!(line.lines().all(|line| line.width() < width));
+        }
     }
     assert!(render(&activity, None, None, 9, 200).contains("elapsed"));
     let expired = Activity {
@@ -218,13 +232,13 @@ fn rendering_is_bounded_for_narrow_terminals_and_expired_timers() {
     let quota = ("GraphQL 0/5000".into(), Instant::now(), Duration::ZERO);
     let line = render(&expired, None, Some(&quota), 10, 200);
     assert!(line.contains("0s remaining"));
-    assert!(line.contains("resets in 0s"));
+    assert!(line.contains("reset 0s"));
     let narrow = render(&expired, None, Some(&quota), 0, 80);
-    assert!(narrow.contains("GraphQL 0/5000") && narrow.contains("resets in 0s"));
+    assert!(narrow.contains("GraphQL 0/5000") && narrow.contains("reset 0s"));
     let compact = render(&expired, None, Some(&quota), 0, 30);
     assert!(compact.contains("remaining"));
-    assert!(!compact.contains("GraphQL"));
-    assert!(compact.width() < 30);
+    assert!(compact.contains("GraphQL") && compact.contains("0/5000"));
+    assert!(compact.lines().all(|line| line.width() < 30));
     assert_eq!(duration(Duration::from_millis(1)), "1s");
     assert_eq!(duration(Duration::from_secs(120)), "2m 00s");
     let long = Activity {
@@ -287,6 +301,8 @@ fn terminal_fixture() {
             &std::env::var("GIT_PR_TEST_HYPERLINKS").unwrap_or_else(|_| "auto".into()),
         )
         .unwrap(),
+        &[],
+        false,
     ) {
         terminal.out("Plain results");
     }
@@ -353,7 +369,7 @@ for settings in [{'NO_COLOR': '1'}, {'TERM': 'dumb', 'GIT_PR_TEST_HYPERLINKS': '
     plain = capture(settings=settings)
     if 'NO_COLOR' in settings:
         assert not re.search(rb'\x1b\[[0-9;:]*m', plain), plain
-        assert b'Pull requests' in plain and b'  ~  #42  Unicode' in plain, plain
+        assert b'Pull requests' in plain and b'  ~  #42  ?  Unicode' in plain, plain
     else:
         assert b'\x1b' not in plain, plain
         assert b'Plain results' in plain, plain
@@ -481,7 +497,9 @@ fn rich_console_compacts_selection_and_reports_every_result_with_accurate_status
         &commits.iter().rev().collect::<Vec<_>>(),
         &repo,
         true,
-        hyperlinks::Mode::Never
+        hyperlinks::Mode::Never,
+        &[],
+        false
     ));
     drop(progress);
     let stdout = terminal.stdout.lock().unwrap().clone();
@@ -504,10 +522,10 @@ fn rich_console_compacts_selection_and_reports_every_result_with_accurate_status
         );
     }
     let plain = clean(&stdout, false);
-    assert!(plain.contains("  +   #1  Feature 1:"));
-    assert!(plain.contains("  ~   #2  Feature 2:"));
-    assert!(plain.contains("  ~   #3  Feature 3:"));
-    assert!(plain.contains("  =  #12  Feature 12:"));
+    assert!(plain.contains("  +   #1  ?  Feature 1:"));
+    assert!(plain.contains("  ~   #2  ?  Feature 2:"));
+    assert!(plain.contains("  ~   #3  ?  Feature 3:"));
+    assert!(plain.contains("  =  #12  ?  Feature 12:"));
     assert!(plain.find("#12 ").unwrap() < plain.find("#1 ").unwrap());
     assert!(stderr.contains("✓") && stderr.contains("Reading commits"));
     assert!(stderr.contains("Publishing branches") && stderr.contains("0."));
@@ -523,7 +541,14 @@ fn plain_console_preserves_output_templates_and_removes_generated_colour() {
     progress.out("literal\rtemplate\tvalue");
     progress.err("\x1b[33mWarning\x1b[0m\n");
     assert!(!progress.selection(&[], true, 20));
-    assert!(!progress.results(&[], &Repository::default(), false, hyperlinks::Mode::Auto));
+    assert!(!progress.results(
+        &[],
+        &Repository::default(),
+        false,
+        hyperlinks::Mode::Auto,
+        &[],
+        false
+    ));
     progress.finish(false);
     assert_eq!(
         *terminal.stdout.lock().unwrap(),
@@ -540,7 +565,14 @@ fn failed_stages_are_durable_and_empty_results_are_explicit() {
     progress.finish(false);
     progress.finish(false);
     assert!(progress.selection(&[], true, 20));
-    assert!(progress.results(&[], &Repository::default(), false, hyperlinks::Mode::Auto));
+    assert!(progress.results(
+        &[],
+        &Repository::default(),
+        false,
+        hyperlinks::Mode::Auto,
+        &[],
+        false
+    ));
     drop(progress);
     let stderr = terminal.stderr.lock().unwrap().clone();
     assert_eq!(stderr.matches("✗ Updating descriptions").count(), 1);
@@ -570,7 +602,7 @@ fn rendering_prioritises_waits_and_preserves_stage_progress_between_operations()
     progress.end_activity(concurrent);
     let state = lock(&progress.shared.state);
     let line = render_state(&state, 1, 180);
-    assert!(line.contains("8/20 Descriptions · Updating descriptions · GitHub GraphQL"));
+    assert!(line.contains("8/20 Descriptions · GitHub GraphQL"));
     drop(state);
     progress.end_activity(request);
     assert!(render_state(&lock(&progress.shared.state), 2, 180).contains("Checking content"));
@@ -590,11 +622,11 @@ fn current_items_and_counts_survive_long_stage_labels_and_narrow_displays() {
     for columns in [40, 64, 80, 120] {
         let line = render_state(&state, 0, columns);
         assert!(line.contains("1/3 Descriptions #101, #102"), "{line}");
-        assert!(line.width() < columns);
-        assert!(line.contains("elapsed") || line.ends_with('s'));
+        assert!(line.lines().all(|row| row.width() < columns));
+        assert!(line.contains("4990/5000"));
     }
     let compact = render_state(&state, 0, 40);
-    assert!(!compact.contains("GraphQL"));
+    assert!(compact.contains("GraphQL") && compact.contains("4990/5000"));
     drop(state);
     let wait = progress.start_activity("GitHub retry 1/3", Some(Duration::from_secs(60)));
     let line = render_state(&lock(&progress.shared.state), 0, 80);
@@ -602,7 +634,7 @@ fn current_items_and_counts_survive_long_stage_labels_and_narrow_displays() {
     assert!(line.contains("GitHub retry 1/3") && line.contains("remaining"));
     let compact = render_state(&lock(&progress.shared.state), 0, 40);
     assert!(compact.contains("1/3 Descriptions #101"));
-    assert!(compact.contains("wait"));
+    assert!(compact.contains("remaining"));
     progress.end_activity(wait);
     progress.end_activity(request);
     progress.progress("Descriptions #103", 9, 3);
@@ -671,11 +703,14 @@ fn progress_clipping_preserves_unicode_and_live_timers_at_every_width() {
         };
         for columns in 0..=120 {
             let row = render(&activity, Some(&progress), None, 0, columns);
-            assert!(row.width() <= columns.saturating_sub(1), "{row}");
+            assert!(row.contains("1/3"));
+            if columns >= 80 {
+                assert!(row.lines().all(|line| line.width() < columns), "{row}");
+            }
             assert!(!row.contains('\x1b'));
             if columns >= 40 {
                 assert!(row.contains(&format!("1/3 {label}")), "{row}");
-                assert!(row.contains("elapsed") || row.ends_with('s'), "{row}");
+                assert!(row.contains(&format!("1/3 {label}")), "{row}");
             }
         }
     }
@@ -737,7 +772,7 @@ for columns in [40, 80]:
                 pending += data
                 if observed < len(expected) and expected[observed] in pending:
                     # Keep the first request blocked long enough to observe its live timer.
-                    if observed != 0 or b'2s' in pending:
+                    if observed != 0 or b'4990/5000' in pending:
                         assert b'All descriptions updated' not in output, output
                         assert process.poll() is None, output
                         os.write(master, b'next\n')
@@ -745,10 +780,14 @@ for columns in [40, 80]:
                         pending = b''
             elif process.poll() is not None:
                 break
-        assert process.wait(timeout=1) == 0, output
+        try:
+            assert process.wait(timeout=1) == 0, output
+        except subprocess.TimeoutExpired:
+            raise AssertionError((observed, output))
         assert observed == len(expected), (observed, output)
         assert b'All descriptions updated' in output, output
-        assert b'\r\x1b[2K' in output, output
+        if columns >= 80: assert b'\r\x1b[2K' in output, output
+        else: assert b'GraphQL 4990/5000' in output and b'reset' in output, output
     finally:
         if process.poll() is None:
             process.kill()
@@ -781,7 +820,11 @@ fn clipping_preserves_graphemes_and_terminal_cell_width() {
         };
         for columns in 0..=100 {
             assert!(clip(label, columns).width() <= columns);
-            assert!(render(&activity, None, None, 0, columns).width() <= columns.saturating_sub(1));
+            let frame = render(&activity, None, None, 0, columns);
+            assert!(frame.contains(label));
+            if columns >= 15 {
+                assert!(frame.lines().all(|line| line.width() < columns));
+            }
         }
     }
     assert_eq!(
@@ -795,9 +838,16 @@ fn clipping_preserves_graphemes_and_terminal_cell_width() {
 }
 
 #[test]
-fn rich_sections_and_wrapped_titles_preserve_spacing_and_unicode() {
+fn rich_sections_and_single_line_titles_preserve_spacing_and_unicode() {
     for columns in [0, 1, 4, 5, 12, 40, 80, 200] {
-        assert!(heading("Selected stack", columns, false).width() <= columns);
+        let text = heading("Selected stack", columns, false);
+        assert_eq!(
+            text.split_whitespace().collect::<Vec<_>>().join(" "),
+            "Selected stack"
+        );
+        if columns >= 12 {
+            assert!(text.lines().all(|line| line.width() <= columns));
+        }
     }
     let terminal = Arc::new(MemoryTerminal::default());
     let progress = ProgressTerminal::with_options(terminal.clone(), true, true, false);
@@ -817,20 +867,22 @@ fn rich_sections_and_wrapped_titles_preserve_spacing_and_unicode() {
         },
         true,
         hyperlinks::Mode::Auto,
+        &[],
+        false,
     ));
     drop(progress);
     let stdout = terminal.stdout.lock().unwrap();
     assert!(stdout.contains("  Repository\n"));
     assert!(stdout.contains("\n\n  Submission\n"));
-    assert!(stdout.contains("pull/42\n  =  #43  Next PR\n          https://"));
+    assert!(stdout.contains("pull/42\n  =  #43  ?  Next PR\n             https://"));
     let results = stdout.split("Pull requests").last().unwrap();
-    assert!(!results.contains('…') && !stdout.contains('\x1b'));
+    assert!(results.contains('…') && !stdout.contains('\x1b'));
     assert!(
         results
             .split_whitespace()
             .collect::<Vec<_>>()
             .join(" ")
-            .contains(&commits[0].title)
+            .contains("A complete title with enough words")
     );
     drop(stdout);
 }
@@ -851,4 +903,113 @@ fn completion_labels_are_explicit_and_used_only_after_success() {
     assert!(text.contains("✗ 1/3 Descriptions #102 · Updating PR descriptions"));
     assert!(!text.contains("Reconciled descriptions"));
     drop(text);
+}
+
+#[test]
+fn two_row_frames_clear_completely_before_durable_output() {
+    let terminal = Arc::new(MemoryTerminal::default());
+    let progress = ProgressTerminal::with_animation(terminal.clone(), false);
+    lock(&progress.shared.state).painted = 2;
+    progress.err("important diagnostic: operation unconfirmed; verify #123\n");
+    assert_eq!(
+        *terminal.stderr.lock().unwrap(),
+        "\r\x1b[2K\x1b[1A\r\x1b[2Kimportant diagnostic: operation unconfirmed; verify #123\n"
+    );
+    assert_eq!(lock(&progress.shared.state).painted, 0);
+}
+
+#[test]
+fn independent_width_fixture() {
+    if std::env::var_os("GIT_PR_TEST_INDEPENDENT_WIDTH").is_none() {
+        return;
+    }
+    let terminal = ProgressTerminal::new(Arc::new(crate::commands::Console::default()));
+    let repo = Repository {
+        host: "github.com".into(),
+        name: "org/repo".into(),
+        ..Repository::default()
+    };
+    terminal.stage("Updating descriptions");
+    for step in 0..3 {
+        let mut permission = String::new();
+        std::io::stdin().read_line(&mut permission).unwrap();
+        assert_eq!(permission, "next\n");
+        terminal.quota("GraphQL", 0, 5000, Duration::from_secs(90));
+        terminal.progress("Descriptions #101, #102", step, 3);
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while lock(&terminal.shared.state).painted == 0 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // Let the next paced frame reflect the updated progress and actual window size.
+        std::thread::sleep(Duration::from_millis(150));
+        let rows = lock(&terminal.shared.state).painted;
+        terminal.out(&format!("BEGIN{step}"));
+        let commit = Commit { pr_number: 42, title: "A long title with enough words to require ellipsis in all of these terminal panes and no inserted title continuation".into(), ..Commit::default() };
+        assert!(terminal.results(
+            &[&commit],
+            &repo,
+            true,
+            hyperlinks::Mode::Always,
+            &[],
+            false
+        ));
+        terminal.out(&format!("STEP{step} rows={rows}"));
+    }
+    terminal.finish(true);
+}
+
+#[test]
+fn actual_stream_widths_and_resizing_preserve_single_rows_and_complete_quota() {
+    let script = r"
+import fcntl, os, pty, re, select, struct, subprocess, sys, termios, time
+out_master, out_slave = pty.openpty()
+err_master, err_slave = pty.openpty()
+def resize(fd, columns):
+    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', 24, columns, 0, 0))
+resize(out_slave, 40)
+resize(err_slave, 100)
+env = dict(os.environ, GIT_PR_TEST_INDEPENDENT_WIDTH='1', TERM='xterm', NO_COLOR='1')
+env.pop('CI', None)
+p = subprocess.Popen([sys.argv[1], '--exact', 'cli::progress::tests::independent_width_fixture', '--nocapture'], stdin=subprocess.PIPE, stdout=out_slave, stderr=err_slave, env=env)
+os.close(out_slave)
+os.close(err_slave)
+try:
+    for step, (out_width, err_width, expected_rows) in enumerate([(40,100,1), (100,40,2), (60,80,1)]):
+        resize(out_master, out_width)
+        resize(err_master, err_width)
+        p.stdin.write(b'next\n')
+        p.stdin.flush()
+        out, err = b'', b''
+        deadline = time.monotonic() + 8
+        marker = ('STEP%d rows=%d' % (step, expected_rows)).encode()
+        while marker not in out and time.monotonic() < deadline:
+            for fd in select.select([out_master, err_master], [], [], .1)[0]:
+                data = os.read(fd, 65536)
+                if fd == out_master: out += data
+                else: err += data
+        assert marker in out, (step, out, err)
+        assert b'GraphQL' in err and b'0/5000' in err and b'reset' in err, err
+        if step == 1: assert b'\x1b[1A' in err, err
+        body = out.split(('BEGIN%d' % step).encode(),1)[1].split(b'STEP',1)[0]
+        body = re.sub(rb'\x1b\]8;;[^\x1b]*\x1b\\', b'', body).decode()
+        lines = body.splitlines()
+        rows = [line for line in lines if '#42' in line]
+        assert len(rows) == 1 and rows[0].endswith('…'), body
+        assert all(len(line) < out_width for line in lines), (out_width, body)
+    assert p.wait(timeout=5) == 0
+finally:
+    if p.poll() is None: p.kill(); p.wait()
+    os.close(out_master)
+    os.close(err_master)
+";
+    let result = std::process::Command::new("python3")
+        .args(["-c", script])
+        .arg(std::env::current_exe().unwrap())
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
 }

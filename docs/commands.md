@@ -120,7 +120,9 @@ An updated status includes confirmed title, description and label changes in the
 The preview and final listing follow `git-pr.stackUp`, labelled `tip first` by default and `tip last` when inverted.
 Use `--stack-up=false` to invert both displays; custom output templates retain their existing representation.
 Titles wrap beneath their starting column, or beneath the PR identity when a narrow pane leaves insufficient title space.
-Preview truncation respects grapheme boundaries and terminal character widths; complete URLs remain intact for copying even when the terminal wraps them.
+Interactive title and visible-address truncation respects grapheme boundaries and terminal display-cell widths.
+PR title rows remain single-line; summaries and operational status retain complete facts through deliberate additional rows where necessary.
+Use `--output=url` for complete copyable addresses, or redirect output to retain complete titles and addresses without inserted wrapping.
 
 The following invocation overrides hyperlink detection for rich results in an unfamiliar terminal:
 

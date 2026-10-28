@@ -1212,6 +1212,8 @@ fn full_stack_preserves_other_author_and_draft_context_without_extra_publication
             {
                 let memory = w.0.lock().unwrap();
                 assert_eq!(memory.prs.len(), 2);
+                assert!(!memory.stderr.contains("Stack context:"));
+                assert!(memory.stdout.contains("Pull requests · 2 created"));
                 for pr in memory.prs.values() {
                     let body = pr["body"].as_str().unwrap();
                     assert_eq!(body.contains("Feature 2"), !compact);
@@ -1350,6 +1352,7 @@ fn presentation_handles_unknown_authors_and_each_pr_status_without_io() {
     assert!(s.stack[0].skip);
     assert!(w.0.lock().unwrap().stdout.contains("@unknown"));
     config.stack_up = false;
+    config.output = "{title}".into();
     app.print_results(
         &config,
         &[
@@ -1363,6 +1366,7 @@ fn presentation_handles_unknown_authors_and_each_pr_status_without_io() {
                 ..commit(3)
             },
         ],
+        &[],
     );
     assert!(w.0.lock().unwrap().stdout.contains("(created)"));
     assert!(w.0.lock().unwrap().stdout.contains("(updated)"));
@@ -1916,11 +1920,16 @@ fn partial_history_uses_observed_merge_status_and_preserves_bodies_on_failure() 
             repo: &config.repo,
         };
         let before = w.0.lock().unwrap().prs[&101]["body"].clone();
-        w.0.lock().unwrap().trace.clear();
+        {
+            let mut memory = w.0.lock().unwrap();
+            memory.trace.clear();
+            memory.stderr.clear();
+        }
         let result = crate::submission::Application::update_descriptions(&config, git, &github, &s);
         let m = w.0.lock().unwrap();
         if missing && emoji {
             assert!(result.is_err());
+            assert!(!m.stderr.contains("Stack context:"));
             assert_eq!(m.prs[&101]["body"], before);
             assert!(!m.trace.iter().any(|e| {
                 e["method"] == "PATCH"
@@ -1929,7 +1938,8 @@ fn partial_history_uses_observed_merge_status_and_preserves_bodies_on_failure() 
                         .is_some_and(|q| q.starts_with("mutation"))
             }));
         } else {
-            result.unwrap();
+            let numbers = result.unwrap();
+            assert!(numbers.contains(&101) && numbers.contains(&102));
             let body = m.prs[&101]["body"].as_str().unwrap();
             assert!(body.contains("#102"));
             assert_eq!(body.contains("* ✔️ #102"), emoji && merged);
@@ -2475,13 +2485,17 @@ fn final_status_reports_content_and_label_changes_only_in_the_current_invocation
         assert!(
             output
                 .lines()
-                .any(|row| row.contains("/pull/101 ") && row.ends_with("(updated)")),
+                .any(|row| row.trim_start().starts_with("~  #101")),
             "{change}: {output}"
         );
         w.0.lock().unwrap().stdout.clear();
         w.run(&flags).unwrap();
         assert!(
-            !w.0.lock().unwrap().stdout.contains("(updated)"),
+            !w.0.lock()
+                .unwrap()
+                .stdout
+                .lines()
+                .any(|row| row.trim_start().starts_with("~  #")),
             "{change}"
         );
     }
@@ -2510,7 +2524,7 @@ fn stack_orientation_controls_preview_and_results_without_reordering_submission(
             original.iter().map(|c| &c.hash).collect::<Vec<_>>()
         );
         w.0.lock().unwrap().stdout.clear();
-        w.app().print_results(&config, &original);
+        w.app().print_results(&config, &original, &[]);
         let results = w.0.lock().unwrap().stdout.clone();
         assert_eq!(
             results.find("Feature 3") < results.find("Feature 1"),

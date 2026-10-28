@@ -416,7 +416,7 @@ impl Application {
         }
         super::presentation::checked_outcome(
             &self.commands,
-            "branches",
+            "Branches",
             indices.len(),
             changing.len(),
         );
@@ -539,9 +539,9 @@ impl Application {
         git: Git<'_>,
         github: &GitHub<'_>,
         state: &State,
-    ) -> Result<()> {
+    ) -> Result<Vec<u64>> {
         if !state.selected().iter().any(|c| !c.skip) {
-            return Ok(());
+            return Ok(Vec::new());
         }
         let targets: Vec<_> = state.selected().iter().filter(|c| !c.skip).collect();
         github.commands.progress_prs(
@@ -633,7 +633,7 @@ impl Application {
             .count();
         super::presentation::checked_outcome(github.commands, "PR labels", targets.len(), changed);
 
-        Ok(())
+        Ok(renderer.numbers().to_vec())
     }
 }
 

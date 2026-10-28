@@ -27,6 +27,7 @@ Valid revision expressions continue to resolve after the initial Jujutsu snapsho
 | `-t` | Overrides default tags for the invocation when non-empty; per-commit `Tags` trailers remain applicable. |
 | `--add-label`, `--add-tip-label` | Repeatable label lists for all submitted PRs or the submission tip. CLI values replace the corresponding Git-configured list. |
 | `--output` | Preset or custom output template; defaults to `url-title`. |
+| `--use-icon-font` | Uses Nerd Fonts-compatible icon glyphs; defaults to `true`. Use `--use-icon-font=false` for standard Unicode symbols; overrides `git-pr.useIconFont`. |
 | `--hyperlinks` | `auto`, `always` or `never` for links in rich PR results; overrides `git-pr.hyperlinks`; `auto`. Use `never` to retain visible URLs. |
 | `--gh-hosts` | GitHub host configuration; defaults to `~/.config/gh/hosts.yml`. A leading `~` expands against `HOME`. |
 | `--compact-stack` | Uses at most three adjacent-PR links instead of a complete stack list; overrides `git-pr.compactStack`; false. |
@@ -81,10 +82,11 @@ Malformed Git configuration and invalid Boolean values are reported as errors.
 | `addLabel` | Comma-separated labels for all submitted PRs; empty. |
 | `addTipLabel` | Comma-separated labels for the tip; empty. |
 | `output` | Output preset or template; `url-title`. |
+| `useIconFont` | Icon-font glyphs in the default completion listing; `true`. A false value selects standard Unicode fallbacks. |
 | `hyperlinks` | Links in rich PR results: `auto`, `always` or `never`; `auto`. |
 | `branchFromTitle` | Accepted Boolean setting; currently inactive. |
 
-Git performs Boolean conversion for `defaultDraft`, `stackUp`, the deprecated `reverse` alias, `githubStack`, `stackEmoji`, `compactStack`, `skipDraft` and `branchFromTitle`.
+Git performs Boolean conversion for `defaultDraft`, `stackUp`, the deprecated `reverse` alias, `githubStack`, `stackEmoji`, `compactStack`, `skipDraft`, `useIconFont` and `branchFromTitle`.
 The accepted values therefore include Git's case-insensitive `yes`/`no`, `on`/`off`, `true`/`false` and integer forms.
 A Boolean key without a value means true; an explicitly empty value means false.
 
@@ -113,9 +115,9 @@ Overridden invalid values do not prevent execution, although malformed Git confi
 Git resolves includes and scope precedence, including settings in a separate Jujutsu workspace's backing Git repository.
 
 Automatic mode recognises direct VS Code and Zed terminals through `TERM_PROGRAM=vscode` or `TERM_PROGRAM=zed`.
-An unknown terminal, invalid terminal identity or the presence of `TMUX`, `STY`, `SSH_CONNECTION` or `SSH_TTY` selects complete visible URLs.
+An unknown terminal, invalid terminal identity or the presence of `TMUX`, `STY`, `SSH_CONNECTION` or `SSH_TTY` selects visible URL rows, subject to the interactive width budget.
 These checks are conservative capability estimates; no terminal query is sent.
-`always` bypasses that estimate within eligible rich results, and `never` displays complete URLs beneath each PR.
+`always` bypasses that estimate within eligible rich results, and `never` displays visible URLs beneath each PR, ellipsising addresses which exceed the terminal width.
 Neither mode forces rich formatting into redirected output, CI, dumb terminals or non-default output templates.
 An explicitly supplied template equivalent to `{url} {title}` remains eligible for the default rich presentation.
 No hyperlink environment override is supported; `FORCE_HYPERLINK` does not supersede the CLI or Git setting.
@@ -236,6 +238,31 @@ Compact presentation preserves content outside the managed footer and includes t
 It omits the complete historical list, emoji markers and configurable display orientation; navigation follows dependency order.
 Switching back to a full footer cannot recover historical entries which no longer occur in any observed description or local history.
 The complete footer remains the default.
+The default completion listing presents the numbered PRs from the description context in one continuous stack, with retained entries included in both the summary and the rows.
+Resource summaries report changed and unchanged counts; unchanged checks are rendered as, for example, `PR descriptions: 2 unchanged`.
+The rich results heading, repository context and PR rows share a two-space left margin.
+Each PR title remains on one line; descriptive overflow uses a trailing `…`, measured in terminal display cells before colour and hyperlink decoration.
+The terminal reserves one column against automatic wrapping, and re-reads the dimensions of the stream being rendered.
+Summary counts, repository identity, completed-stage outcomes and other operational facts remain complete, using deliberately arranged additional rows where necessary.
+Live status retains complete progress counters, active targets, quota values, retry reasons and relevant countdowns.
+Redundant stage wording and ordinary elapsed time yield space before operational facts; viable live frames use at most two rows.
+If a pane cannot accommodate a complete live frame, the renderer emits a complete ordinary status message instead of repeatedly painting overflow.
+Warnings, failures, unclassified operational text and debug evidence are not silently truncated.
+An identity wider than the entire pane remains intact; such exceptionally narrow panes may require native terminal wrapping.
+Visible fallback URLs are ellipsised within the interactive width budget; `--output=url`, explicit templates and redirected output retain complete destinations.
+Redirected default output also retains complete single-line titles without an artificial 80-column budget.
+Created, updated and unchanged counts describe selected PRs; other displayed PRs use a neutral context marker and contribute to the historical count.
+PR titles and lifecycle states reuse fresh observations; missing details are requested through read-only GraphQL batches of at most 25 PRs.
+Unavailable or malformed supplementary observations retain the PR number with an unverified indicator; they do not authorise replacement, publication or native membership changes.
+The lifecycle indicator distinguishes open, draft, merged and closed PRs, using green, grey, purple and red respectively.
+Historical titles and PR numbers are muted; their lifecycle indicators retain the corresponding state colours.
+A shortened title retains its PR identity and complete hyperlink destination; free-form text is not assumed to contain only unimportant words.
+The default glyphs use Nerd Fonts-compatible Octicon mappings; `git-pr.useIconFont=false` or `--use-icon-font=false` selects `○`, `◌`, `✓` and `×`, with `?` for unverified states.
+The CLI value takes precedence over Git configuration; Git performs Boolean conversion, include processing and scope resolution.
+Font selection is explicit and does not inspect installed fonts or infer glyph support from the terminal identity.
+Colour remains subject to the existing terminal capability checks and `NO_COLOR`.
+Non-default output templates continue to describe selected PRs in their requested format.
+Compact navigation omits historical description entries and consequently limits the completion listing to its numbered navigation context.
 
 Git performs integer conversion for configured command deadlines, including its supported numeric suffixes; CLI values are positive decimal seconds.
 CLI deadline values override their corresponding Git settings.

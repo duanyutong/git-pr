@@ -188,7 +188,9 @@ fn unchanged_metadata_preserves_human_and_bot_text_across_footer_and_native_mode
                             memory
                                 .stdout
                                 .lines()
-                                .filter(|line| line.starts_with("https://github.com/org/repo/pull/"))
+                                .filter(|line| line
+                                    .trim_start()
+                                    .starts_with("https://github.com/org/repo/pull/"))
                                 .count(),
                             12,
                             "{flags:?}: {}",
@@ -255,9 +257,9 @@ fn mixed_metadata_changes_update_only_affected_prs_and_do_not_repeat() {
                 let row = memory
                     .stdout
                     .lines()
-                    .find(|row| row.contains(&format!("/pull/{number} ")))
+                    .find(|row| row.contains(&format!("#{number}  ")))
                     .unwrap();
-                assert_eq!(row.ends_with("(updated)"), number <= 103, "{row}");
+                assert_eq!(row.trim_start().starts_with("~  #"), number <= 103, "{row}");
                 if number == 102 {
                     let body = memory.prs[&number]["body"].as_str().unwrap();
                     assert!(body.starts_with("Body 2\n"));

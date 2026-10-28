@@ -34,7 +34,7 @@ Python versioning tests reside separately in `scripts/test_version.py` and do no
 | Trailer interpretation | `model/trailers.rs`: malformed input, footer boundaries, multiline messages, dates and duplicate precedence. |
 | Description preservation | `stack/description.rs`: sentinel sections, legacy sections, historical membership, ordering, duplicates, compact navigation and content outside the managed section. |
 | Output and diagnostics | `cli/output.rs` and `diagnostics/errors.rs`: presets, templates, validation, substitution, absent Git version metadata and contextual exit-status classification. |
-| Interactive result policy | `cli/hyperlinks.rs` and `cli/results.rs`: explicit modes, conservative capability decisions, validated destinations, compact uniform and mixed outcomes, complete titles, Unicode wrapping and full-URL fallback. |
+| Interactive result policy | `cli/layout.rs`, `cli/hyperlinks.rs` and `cli/results.rs`: explicit modes, conservative capability decisions, validated destinations, complete stack context, independent change and lifecycle indicators, protected summary facts, Unicode-aware ellipsis and complete redirected output. |
 | Git value interpretation and acceptance | `git/policy.rs`: complete remote names, dotted repository names, short hashes, absent descriptions, empty commits and missing titles. |
 | Git operations | `git/mod.rs`: discovery, commit acceptance, rewrite prerequisites, push failure reconciliation, local ref guards and bookmark reconciliation. |
 | Structured snapshots | `git/snapshot.rs`: framed records, full object identities, complete histories, malformed observations and verified linear depth reuse. |

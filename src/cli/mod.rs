@@ -1,4 +1,5 @@
 pub(crate) mod hyperlinks;
+pub(crate) mod layout;
 pub(crate) mod output;
 pub(crate) mod progress;
 pub(crate) mod results;
@@ -8,7 +9,8 @@ use std::collections::{BTreeMap, HashSet};
 pub(crate) const USAGE: &str = include_str!("usage.txt");
 pub(crate) const DEFAULTS: &str = include_str!("flags.txt");
 
-const BOOLEAN: [&str; 20] = [
+const BOOLEAN: [&str; 21] = [
+    "use-icon-font",
     "compact-stack",
     "version",
     "v",
@@ -72,10 +74,10 @@ impl Flags {
     }
 
     pub(crate) fn boolean(&self, key: &str) -> bool {
-        self.booleans
-            .get(key)
-            .copied()
-            .unwrap_or(matches!(key, "stack-up" | "reverse" | "draft"))
+        self.booleans.get(key).copied().unwrap_or(matches!(
+            key,
+            "stack-up" | "reverse" | "draft" | "use-icon-font"
+        ))
     }
 
     pub(crate) fn string(&self, key: &str) -> &str {

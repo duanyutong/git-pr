@@ -14,14 +14,12 @@ use crate::{
 use super::{Application, State, policy};
 
 pub(super) fn checked_outcome(commands: &Commands, resource: &str, checked: usize, changed: usize) {
-    let result = if changed == 0 {
-        "no changes needed".into()
-    } else {
-        format!("{changed} changed")
+    let result = match (checked.saturating_sub(changed), changed) {
+        (_, 0) => format!("{checked} unchanged"),
+        (0, _) => format!("{changed} changed"),
+        (unchanged, _) => format!("{changed} changed · {unchanged} unchanged"),
     };
-    commands
-        .terminal
-        .outcome(&format!("Checked {checked} {resource}; {result}"));
+    commands.terminal.outcome(&format!("{resource}: {result}"));
 }
 
 pub(super) fn failure_outcome(commands: &Commands, error: &anyhow::Error) {
@@ -131,7 +129,7 @@ impl Application {
             .count();
         checked_outcome(
             &self.commands,
-            "pull requests",
+            "Pull requests",
             needs_pr.len(),
             created + updated,
         );
@@ -192,7 +190,12 @@ impl Application {
         }
     }
 
-    pub(super) fn print_results(&self, config: &Config, commits: &[Commit]) {
+    pub(super) fn print_results(
+        &self,
+        config: &Config,
+        commits: &[Commit],
+        summaries: &[crate::model::pull_request::PullRequestSummary],
+    ) {
         let mut visible: Vec<_> = commits.iter().filter(|c| !c.skip).collect();
         if config.stack_up {
             visible.reverse();
@@ -203,8 +206,29 @@ impl Application {
                 &config.repo,
                 config.stack_up,
                 config.hyperlinks,
+                summaries,
+                config.use_icon_font,
             )
         {
+            return;
+        }
+        if config.output == "{url} {title}" {
+            self.commands.out(&crate::cli::results::render(
+                &visible,
+                &config.repo,
+                config.stack_up,
+                crate::cli::results::Options {
+                    columns: self
+                        .commands
+                        .terminal
+                        .output_columns()
+                        .unwrap_or(usize::MAX),
+                    colour: false,
+                    hyperlinks: false,
+                    summaries,
+                    use_icon_font: config.use_icon_font,
+                },
+            ));
             return;
         }
         self.commands.out("");

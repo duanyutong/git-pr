@@ -8,10 +8,13 @@ use std::{
     thread::JoinHandle,
     time::{Duration, Instant},
 };
-use unicode_segmentation::UnicodeSegmentation as _;
 use unicode_width::UnicodeWidthStr as _;
 
-use super::{hyperlinks, results};
+use super::{
+    hyperlinks,
+    layout::{clip, complete_lines},
+    results,
+};
 
 use crate::{
     commands::Terminal,
@@ -41,7 +44,9 @@ struct State {
     detail: String,
     progress: Option<Progress>,
     quota: Option<(String, Instant, Duration)>,
-    painted: bool,
+    painted: usize,
+    fallback_reported: bool,
+    painted_width: usize,
     paused: bool,
     stopped: bool,
 }
@@ -149,10 +154,7 @@ impl ProgressTerminal {
     }
 
     fn clear(&self, state: &mut State) {
-        if state.painted {
-            self.shared.terminal.err("\r\x1b[2K");
-            state.painted = false;
-        }
+        clear_rows(self.shared.terminal.as_ref(), state);
     }
 
     fn end_stage(&self, state: &mut State, success: bool) {
@@ -204,6 +206,12 @@ impl Drop for ProgressTerminal {
 }
 
 impl Terminal for ProgressTerminal {
+    fn output_columns(&self) -> Option<usize> {
+        std::io::stdout()
+            .is_terminal()
+            .then(|| output_width().saturating_sub(1))
+    }
+
     fn out(&self, text: &str) {
         let mut state = lock(&self.shared.state);
         self.clear(&mut state);
@@ -274,7 +282,10 @@ impl Terminal for ProgressTerminal {
 
     fn detail(&self, text: &str) {
         if self.shared.rich {
-            lock(&self.shared.state).detail = single_line(text.trim());
+            let mut state = lock(&self.shared.state);
+            state.detail = single_line(text.trim());
+            state.fallback_reported = false;
+            drop(state);
             self.shared.wake.notify_all();
         } else {
             self.out(text);
@@ -282,11 +293,14 @@ impl Terminal for ProgressTerminal {
     }
 
     fn progress(&self, label: &str, done: usize, total: usize) {
-        lock(&self.shared.state).progress = Some(Progress {
+        let mut state = lock(&self.shared.state);
+        state.fallback_reported = false;
+        state.progress = Some(Progress {
             label: single_line(label),
             done: done.min(total),
             total,
         });
+        drop(state);
         self.shared.wake.notify_all();
     }
 
@@ -299,14 +313,11 @@ impl Terminal for ProgressTerminal {
             "\n{}\n{}\n\n",
             heading("Selected stack", width, self.shared.colour),
             paint(
-                &clip(
-                    &format!(
-                        "  {} commit{} · {}",
-                        commits.len(),
-                        if commits.len() == 1 { "" } else { "s" },
-                        results::orientation(stack_up)
-                    ),
-                    width
+                &format!(
+                    "  {} commit{} · {}",
+                    commits.len(),
+                    if commits.len() == 1 { "" } else { "s" },
+                    results::orientation(stack_up)
                 ),
                 "2",
                 self.shared.colour
@@ -326,8 +337,12 @@ impl Terminal for ProgressTerminal {
                 }
                 continue;
             }
-            let row = format!("  {}  {}", commit.short_hash(), single_line(&commit.title));
-            let _ = writeln!(text, "{}", clip(&row, width));
+            let prefix = format!("  {}  ", commit.short_hash());
+            let title = clip(
+                &single_line(&commit.title),
+                width.saturating_sub(prefix.width()),
+            );
+            let _ = writeln!(text, "{prefix}{title}");
         }
         self.write_rich(&text);
         true
@@ -339,6 +354,8 @@ impl Terminal for ProgressTerminal {
         repo: &Repository,
         stack_up: bool,
         mode: hyperlinks::Mode,
+        summaries: &[crate::model::pull_request::PullRequestSummary],
+        use_icon_font: bool,
     ) -> bool {
         if !self.shared.rich {
             return false;
@@ -351,6 +368,8 @@ impl Terminal for ProgressTerminal {
                 columns: output_width().saturating_sub(1),
                 colour: self.shared.colour,
                 hyperlinks: mode.enabled(self.hyperlinks),
+                summaries,
+                use_icon_font,
             },
         ));
         true
@@ -368,6 +387,7 @@ impl Terminal for ProgressTerminal {
                 .terminal
                 .err(&format!("{label}; waiting {}\n", duration(wait)));
         }
+        state.fallback_reported = false;
         state.activities.insert(
             id,
             Activity {
@@ -384,6 +404,7 @@ impl Terminal for ProgressTerminal {
     fn end_activity(&self, id: u64) {
         let mut state = lock(&self.shared.state);
         state.activities.remove(&id);
+        state.fallback_reported = false;
         if state.activities.is_empty() && state.stage.is_none() {
             self.clear(&mut state);
         }
@@ -392,7 +413,9 @@ impl Terminal for ProgressTerminal {
     }
 
     fn quota(&self, resource: &str, remaining: u64, limit: u64, reset: Duration) {
-        lock(&self.shared.state).quota = Some((
+        let mut state = lock(&self.shared.state);
+        state.fallback_reported = false;
+        state.quota = Some((
             format!("{} {remaining}/{limit}", single_line(resource)),
             Instant::now(),
             reset,
@@ -404,6 +427,7 @@ impl ProgressTerminal {
     fn begin_stage(&self, label: &str, completed: Option<&str>) {
         let mut state = lock(&self.shared.state);
         self.end_stage(&mut state, true);
+        state.fallback_reported = false;
         state.stage = Some(Activity {
             label: single_line(label),
             started: Instant::now(),
@@ -420,6 +444,16 @@ impl ProgressTerminal {
         let mut state = lock(&self.shared.state);
         self.clear(&mut state);
         self.shared.terminal.out(text);
+    }
+}
+
+fn clear_rows(terminal: &dyn Terminal, state: &mut State) {
+    if state.painted != 0 {
+        terminal.err("\r\x1b[2K");
+        for _ in 1..state.painted {
+            terminal.err("\x1b[1A\r\x1b[2K");
+        }
+        state.painted = 0;
     }
 }
 
@@ -447,14 +481,30 @@ fn animate(shared: &Shared) {
             state = next;
             continue;
         }
-        let text = render_state(&state, frame, width());
-        shared
-            .terminal
-            .err(&format!("\r\x1b[2K{}", paint(&text, "36", shared.colour)));
+        let columns = width();
+        let text = render_state(&state, frame, columns);
+        clear_rows(shared.terminal.as_ref(), &mut state);
+        if state.painted_width != columns {
+            state.fallback_reported = false;
+        }
+        let lines: Vec<_> = text.lines().collect();
+        if lines.len() <= 2 && lines.iter().all(|line| line.width() < columns) {
+            shared.terminal.err(&format!(
+                "\r\x1b[2K{}",
+                paint(&lines.join("\r\n"), "36", shared.colour)
+            ));
+            state.painted = lines.len();
+        } else if !state.fallback_reported {
+            // An exceptionally narrow pane must not hide operational facts or repaint overflow.
+            shared.terminal.err(&format!(
+                "{}\n",
+                text.lines().map(str::trim).collect::<Vec<_>>().join(" ")
+            ));
+            state.fallback_reported = true;
+        }
         frame = (frame + 1) % 10;
-        // Notifications update state immediately; bursts must not accelerate repainting.
         next_frame = Instant::now() + Duration::from_millis(100);
-        state.painted = true;
+        state.painted_width = columns;
     }
 }
 
@@ -469,18 +519,29 @@ fn stage_result(
     let code = if success { "32" } else { "31" };
     let elapsed = format!("{:.1}s", elapsed.as_secs_f64());
     let label_columns = columns.saturating_sub(elapsed.width() + 6).min(56);
-    let label = clip(label, label_columns);
-    let padding = " ".repeat(label_columns.saturating_sub(label.width()));
-    let row = format!("  {mark} {label}{padding}  {elapsed}");
-    if row.width() > columns {
-        clip(&row, columns)
-    } else {
-        format!(
-            "  {} {label}{padding}  {}",
-            paint(mark, code, colour),
-            paint(&elapsed, "2", colour)
-        )
+    if label.width() + elapsed.width() + 6 > columns {
+        // Completion labels and counts are facts; preserve them on deliberate rows.
+        let available = columns.saturating_sub(4);
+        let lines = complete_lines(label, available);
+        return lines
+            .iter()
+            .enumerate()
+            .map(|(index, line)| {
+                if index == 0 {
+                    format!("  {} {line}", paint(mark, code, colour))
+                } else {
+                    format!("    {line}")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
     }
+    let padding = " ".repeat(label_columns.saturating_sub(label.width()));
+    format!(
+        "  {} {label}{padding}  {}",
+        paint(mark, code, colour),
+        paint(&elapsed, "2", colour)
+    )
 }
 
 fn render_state(state: &State, frame: usize, width: usize) -> String {
@@ -489,12 +550,22 @@ fn render_state(state: &State, frame: usize, width: usize) -> String {
     let Some(active) = wait.or(state.stage.as_ref()).or(latest) else {
         return String::new();
     };
-    let mut label = active.label.clone();
+    let mut label = if wait.is_none() && state.progress.is_some() {
+        String::new()
+    } else {
+        active.label.clone()
+    };
     if wait.is_none() {
         if let Some(detail) = latest.filter(|a| !std::ptr::eq(*a, active)) {
-            let _ = write!(label, " · {}", detail.label);
+            if !label.is_empty() {
+                label.push_str(" · ");
+            }
+            label.push_str(&detail.label);
         } else if !state.detail.is_empty() {
-            let _ = write!(label, " · {}", state.detail);
+            if !label.is_empty() {
+                label.push_str(" · ");
+            }
+            label.push_str(&state.detail);
         }
     }
     render(
@@ -518,52 +589,51 @@ fn render(
     width: usize,
 ) -> String {
     let elapsed = activity.started.elapsed();
-    let compact = progress.is_some() && width < 64;
-    let timer = activity.wait.map_or_else(
-        || {
-            if compact {
-                format!("{}s", seconds(elapsed))
-            } else {
-                format!("{} elapsed", duration(elapsed))
-            }
-        },
-        |wait| {
-            let remaining = wait.saturating_sub(elapsed);
-            if compact {
-                format!("{}s wait", seconds(remaining))
-            } else {
-                format!("{} remaining", duration(remaining))
-            }
-        },
+    let available = width.saturating_sub(5);
+    let mut core = progress.map_or_else(
+        || activity.label.clone(),
+        |progress| format!("{}/{} {}", progress.done, progress.total, progress.label),
     );
-    let available = width.saturating_sub(1);
-    let (label, count) = progress.map_or_else(
-        || (activity.label.clone(), String::new()),
-        |progress| {
-            (
-                format!("{} · {}", progress.label, activity.label),
-                format!("{}/{} ", progress.done, progress.total),
-            )
-        },
-    );
-    let mut suffix = format!(" · {timer}");
-    if let Some((label, observed, reset)) = quota {
-        let quota = format!(
-            " · {label} · resets in {}",
-            duration(reset.saturating_sub(observed.elapsed()))
-        );
-        // Preserve the item identity and count before adding ancillary quota metadata.
-        let label_columns = progress.map_or(10, |progress| progress.label.width().min(32));
-        if suffix.width() + quota.width() + count.width() + label_columns + 4 <= available {
-            suffix.push_str(&quota);
-        }
+    if progress.is_some() && !activity.label.is_empty() {
+        let _ = write!(core, " · {}", activity.label);
     }
-    let label = clip(
-        &label,
-        available.saturating_sub(suffix.width() + count.width() + 4),
-    );
+    if let Some(wait) = activity.wait {
+        let _ = write!(
+            core,
+            " · {} remaining",
+            duration(wait.saturating_sub(elapsed))
+        );
+    }
+    if let Some((label, observed, reset)) = quota {
+        let _ = write!(
+            core,
+            " · {label} · reset {}",
+            duration(reset.saturating_sub(observed.elapsed())).replace(' ', "")
+        );
+    }
+    let mut detailed = core.clone();
+
+    if activity.wait.is_none() {
+        let _ = write!(detailed, " · {} elapsed", duration(elapsed));
+    }
+    let text = if detailed.width() <= available {
+        &detailed
+    } else {
+        &core
+    };
     let spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'][frame % 10];
-    clip(&format!("  {spinner} {count}{label}{suffix}"), available)
+    complete_lines(text, available)
+        .iter()
+        .enumerate()
+        .map(|(index, line)| {
+            if index == 0 {
+                format!("  {spinner} {line}")
+            } else {
+                format!("    {line}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn width() -> usize {
@@ -581,8 +651,11 @@ fn output_width() -> usize {
 }
 
 fn heading(label: &str, columns: usize, colour: bool) -> String {
-    let label = clip(&format!("  {}", single_line(label)), columns);
-    paint(&label, "1", colour)
+    complete_lines(&single_line(label), columns.saturating_sub(2))
+        .iter()
+        .map(|line| paint(&format!("  {line}"), "1", colour))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 pub(super) fn paint(text: &str, code: &str, colour: bool) -> String {
@@ -591,24 +664,6 @@ pub(super) fn paint(text: &str, code: &str, colour: bool) -> String {
     } else {
         text.into()
     }
-}
-
-fn clip(text: &str, columns: usize) -> String {
-    if text.width() <= columns {
-        return text.into();
-    }
-    if columns == 0 {
-        return String::new();
-    }
-    let mut used = 0;
-    let prefix: String = text
-        .graphemes(true)
-        .take_while(|grapheme| {
-            used += grapheme.width();
-            used < columns
-        })
-        .collect();
-    format!("{prefix}…")
 }
 
 pub(super) fn single_line(text: &str) -> String {

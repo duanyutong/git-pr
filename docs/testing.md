@@ -250,3 +250,11 @@ Native executable regressions require control-free redirected diagnostics and as
 Status regressions require confirmed published-head, description, title and label changes to appear as updated during the successful invocation, including recovered uncertain writes, without persisting that status into a subsequent unchanged invocation.
 Pseudo-terminal acceptance additionally verifies prompt input, cleared interruption diagnostics and exit status 130.
 The status renderer remains an execution boundary; quota scheduling and retry decisions belong to independently tested policy.
+
+## Terminal width and information retention
+
+Compact PR rows remain single-line and truncate only descriptive titles, with independent change and lifecycle indicators.
+Regression cases require retained selected and historical rows, all outcome counts, complete repository context, Unicode grapheme boundaries, safe hyperlinks and complete redirected text.
+Status cases assert complete progress, quota, retry and reset information independently of line-width assertions.
+Native pseudo-terminal tests exercise independently sized standard-output and standard-error streams, resizing between one-row and two-row frames, and complete clearing before durable output.
+Unclassified operational messages and substantive diagnostics remain complete; exceptionally narrow panes fall back to ordinary messages rather than clipped facts.

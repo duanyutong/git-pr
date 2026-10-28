@@ -7,6 +7,7 @@ test_filter = "::unit::"
 test_skip = []
 unit = [
   "src/cli/mod.rs",
+  "src/cli/layout.rs",
   "src/cli/hyperlinks.rs",
   "src/cli/results.rs",
   "src/cli/output.rs",

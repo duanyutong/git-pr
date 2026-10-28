@@ -94,6 +94,9 @@ pub(crate) trait CommandRunner: Debug + Send + Sync {
 }
 
 pub(crate) trait Terminal: Debug + Send + Sync {
+    fn output_columns(&self) -> Option<usize> {
+        None
+    }
     fn out(&self, text: &str);
     fn err(&self, text: &str);
     fn confirm(&self, prompt: &str) -> bool;
@@ -124,6 +127,8 @@ pub(crate) trait Terminal: Debug + Send + Sync {
         _repo: &crate::model::Repository,
         _stack_up: bool,
         _hyperlinks: crate::cli::hyperlinks::Mode,
+        _summaries: &[crate::model::pull_request::PullRequestSummary],
+        _use_icon_font: bool,
     ) -> bool {
         false
     }

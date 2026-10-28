@@ -868,7 +868,7 @@ fn git_configuration_scopes_includes_and_empty_overrides() {
     let global = f.home.join("user.gitconfig");
     std::fs::write(
         &system,
-        "[GIT-PR]\nOUTPUT = url\nADDLABEL = system\nHYPERLINKS = never\nPREVIEWLIMIT = 6\n",
+        "[GIT-PR]\nOUTPUT = url\nADDLABEL = system\nHYPERLINKS = never\nPREVIEWLIMIT = 6\nUSEICONFONT = OFF\n",
     )
     .unwrap();
     std::fs::write(&global, "").unwrap();
@@ -887,12 +887,13 @@ fn git_configuration_scopes_includes_and_empty_overrides() {
     assert_eq!(loaded_config(&f).labels, ["system"]);
     assert_eq!(loaded_config(&f).output, "{url}");
     assert_eq!(loaded_config(&f).preview_limit, 6);
+    assert!(!loaded_config(&f).use_icon_font);
     assert_eq!(
         loaded_config(&f).hyperlinks,
         crate::cli::hyperlinks::Mode::Never
     );
 
-    std::fs::write(f.home.join("included config"), "[git-pr]\noutput = markdown\naddLabel = global, review\nstackUp = OFF\ndefaultDraft = YES\nstackEmoji = on\nskipDraft = off\nbranchFromTitle = 1\nhyperlinks = always\n").unwrap();
+    std::fs::write(f.home.join("included config"), "[git-pr]\noutput = markdown\naddLabel = global, review\nstackUp = OFF\ndefaultDraft = YES\nstackEmoji = on\nskipDraft = off\nbranchFromTitle = 1\nuseIconFont = YES\nhyperlinks = always\n").unwrap();
     std::fs::write(
         f.home.join("conditional"),
         "[git-pr]\naddTipLabel = tip\nhyperlinks = auto\npreviewLimit = 12\n",
@@ -906,9 +907,12 @@ fn git_configuration_scopes_includes_and_empty_overrides() {
     assert_eq!(c.preview_limit, 12);
     assert_eq!(c.output, "[#{number}]({url}) {title}");
     assert!(!c.stack_up && c.draft && c.emoji && !c.skip_draft);
+    assert!(c.use_icon_font);
 
     f.git(&["config", "git-pr.hyperlinks", "never"]);
     f.git(&["config", "git-pr.previewLimit", "30"]);
+    f.git(&["config", "git-pr.useIconFont", "0"]);
+    assert!(!loaded_config(&f).use_icon_font);
     assert_eq!(loaded_config(&f).preview_limit, 30);
     assert_eq!(
         loaded_config(&f).hyperlinks,
@@ -937,6 +941,8 @@ fn git_configuration_scopes_includes_and_empty_overrides() {
     f.git(&["config", "--worktree", "git-pr.output", "markdown"]);
     f.git(&["config", "--worktree", "git-pr.hyperlinks", "always"]);
     f.git(&["config", "--worktree", "git-pr.previewLimit", "40"]);
+    f.git(&["config", "--worktree", "git-pr.useIconFont", "ON"]);
+    assert!(loaded_config(&f).use_icon_font);
     assert_eq!(loaded_config(&f).preview_limit, 40);
     assert_eq!(
         loaded_config(&f).hyperlinks,
@@ -971,6 +977,7 @@ fn git_configuration_rejects_invalid_values_and_command_failures() {
         "git-pr.githubStack",
         "git-pr.stackUp",
         "git-pr.defaultDraft",
+        "git-pr.useIconFont",
         "git-pr.stackEmoji",
         "git-pr.skipDraft",
         "git-pr.branchFromTitle",
@@ -981,6 +988,10 @@ fn git_configuration_rejects_invalid_values_and_command_failures() {
             error.contains(key) && error.contains("bad boolean"),
             "{error}"
         );
+        if key == "git-pr.useIconFont" {
+            f.run(&["--stop-after=validate", "--use-icon-font=false"])
+                .unwrap();
+        }
         f.git(&["config", "--unset", key]);
     }
     f.git(&["config", "git-pr.output", "invalid"]);

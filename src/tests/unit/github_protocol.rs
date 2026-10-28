@@ -2928,3 +2928,139 @@ fn association_decoding_ignores_unused_content_and_preserves_source_identity() {
         assert!(Arc::ptr_eq(&prs, &g.commit_prs("test").unwrap()));
     });
 }
+
+#[test]
+fn completion_observations_batch_missing_prs_and_preserve_lifecycle_evidence() {
+    use crate::model::pull_request::Lifecycle;
+    with_github(|g, w| {
+        g.get(101).unwrap();
+        {
+            let mut memory = w.0.lock().unwrap();
+            let template = memory.prs[&101].clone();
+            for number in 900..951 {
+                let mut pr = template.clone();
+                pr["number"] = json!(number);
+                pr["title"] = json!(format!("Retained {number}"));
+                pr["state"] = json!(match number % 4 {
+                    2 => "merged",
+                    3 => "closed",
+                    _ => "open",
+                });
+                pr["merged"] = json!(number % 4 == 2);
+                pr["draft"] = json!(number % 4 == 1);
+                memory.prs.insert(number, pr);
+            }
+            memory.trace.clear();
+        }
+        let numbers: Vec<_> = std::iter::once(101)
+            .chain(900..951)
+            .chain([900, 0])
+            .collect();
+        let summaries = g.summaries(&numbers);
+        assert_eq!(summaries.len(), 52);
+        assert_eq!(summaries[0].number, 101);
+        assert_eq!(summaries[0].lifecycle, Lifecycle::Draft);
+        for pr in &summaries[1..] {
+            assert_eq!(
+                pr.title.as_deref(),
+                Some(format!("Retained {}", pr.number).as_str())
+            );
+            assert_eq!(
+                pr.lifecycle,
+                match pr.number % 4 {
+                    0 => Lifecycle::Open,
+                    1 => Lifecycle::Draft,
+                    2 => Lifecycle::Merged,
+                    _ => Lifecycle::Closed,
+                }
+            );
+        }
+        assert_eq!(
+            w.trace()
+                .iter()
+                .filter(|event| event["path"] == "graphql")
+                .count(),
+            3
+        );
+        assert!(!g.session.prs().contains_key(&900));
+        w.0.lock().unwrap().trace.clear();
+        assert_eq!(g.summaries(&[101]).len(), 1);
+        assert_eq!(w.trace(), [] as [serde_json::Value; 0]);
+        g.expire_pr_observation_for_test(101);
+        w.0.lock().unwrap().prs.get_mut(&101).unwrap()["state"] = json!("closed");
+        assert_eq!(g.summaries(&[101])[0].lifecycle, Lifecycle::Closed);
+    });
+}
+
+#[test]
+fn completion_observation_failure_retains_unverified_rows_without_authorising_writes() {
+    use crate::model::pull_request::Lifecycle;
+    let valid =
+        json!({"number":77,"title":"Historical","state":"CLOSED","merged":true,"isDraft":false});
+    let mut bodies = vec![
+        "not json".to_owned(),
+        json!({"errors":[{"message":"denied"}]}).to_string(),
+    ];
+    for (key, value) in [
+        ("number", json!(78)),
+        ("title", json!(null)),
+        ("state", json!(null)),
+        ("state", json!("invalid")),
+        ("merged", json!(null)),
+        ("merged", json!(false)),
+    ] {
+        let mut node = valid.clone();
+        node[key] = value;
+        if key == "merged" && node[key] == false {
+            node["state"] = json!("MERGED");
+        }
+        bodies.push(json!({"data":{"repository":{"p0":node}}}).to_string());
+    }
+    for body in bodies {
+        with_github(|g, w| {
+            w.http("POST graphql", vec![Reply::Output(200, body)]);
+            w.0.lock().unwrap().trace.clear();
+            let summaries = g.summaries(&[77]);
+            assert_eq!(summaries.len(), 1);
+            assert_eq!(summaries[0].number, 77);
+            assert_eq!(summaries[0].lifecycle, Lifecycle::Unknown);
+            assert!(summaries[0].title.is_none());
+            assert!(w.0.lock().unwrap().stderr.contains("unverified"));
+            assert!(w.trace().iter().all(|event| {
+                event["method"] == "POST"
+                    && event["path"] == "graphql"
+                    && event["body"]["query"]
+                        .as_str()
+                        .unwrap()
+                        .starts_with("query")
+            }));
+            assert!(g.session.prs().is_empty());
+        });
+    }
+    with_github(|g, w| {
+        assert!(g.summaries(&[0]).is_empty());
+        assert_eq!(g.summaries(&[u64::MAX])[0].lifecycle, Lifecycle::Unknown);
+        w.http("POST graphql", vec![Reply::Failure("offline".into())]);
+        assert_eq!(g.summaries(&[77])[0].lifecycle, Lifecycle::Unknown);
+    });
+    with_github(|g, w| {
+        let mut config = g.config.clone();
+        config.repo.name = "invalid".into();
+        let invalid = GitHub {
+            config: &config,
+            session: Session::default(),
+            ..*g
+        };
+        w.0.lock().unwrap().trace.clear();
+        assert_eq!(invalid.summaries(&[77])[0].lifecycle, Lifecycle::Unknown);
+        assert_eq!(w.trace(), [] as [serde_json::Value; 0]);
+    });
+    assert_eq!(
+        Lifecycle::observed("open", Some(false), None),
+        Lifecycle::Unknown
+    );
+    assert_eq!(
+        Lifecycle::observed("closed", Some(false), None),
+        Lifecycle::Closed
+    );
+}

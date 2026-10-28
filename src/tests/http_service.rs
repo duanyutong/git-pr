@@ -42,13 +42,13 @@ pub(crate) fn respond(
                 .strip_prefix('n')
                 .filter(|index| !index.is_empty() && index.bytes().all(|b| b.is_ascii_digit()))
             {
-                repository[format!("p{index}")] = prs.get(&reference.as_u64().unwrap()).map_or(Value::Null, |pr| json!({"number":pr["number"], "merged":pr["merged"].as_bool().unwrap_or(false) || pr["merged_at"].is_string()}));
+                repository[format!("p{index}")] = prs.get(&reference.as_u64().unwrap()).map_or(Value::Null, |pr| json!({"number":pr["number"], "title":pr["title"], "state":pr["state"].as_str().unwrap_or("open").to_uppercase(), "isDraft":pr["draft"].as_bool().unwrap_or(false), "merged":pr["merged"].as_bool().unwrap_or(false) || pr["merged_at"].is_string()}));
                 continue;
             }
             let Some(index) = key.strip_prefix('h') else {
                 continue;
             };
-            let nodes: Vec<_> = prs.values().filter(|p| p["head"]["ref"] == *reference).map(|p| json!({"number":p["number"],"id":p.get("node_id").cloned().unwrap_or_else(||json!(format!("PR_{}",p["number"]))),"title":p["title"].as_str().unwrap_or(""),"body":p["body"].as_str().unwrap_or(""),"state":p["state"].as_str().unwrap_or("open").to_uppercase(),"merged":p.get("merged").unwrap_or(&json!(false)),"headRefName":p["head"]["ref"],"baseRefName":p["base"]["ref"],"headRepository":{"nameWithOwner":"org/repo"},"autoMergeRequest":if p["auto_merge"].is_object() {json!({"enabledAt":"2026-10-27T00:00:00Z"})} else {p["auto_merge"].clone()},"stack":p["stack"],"labels":{"nodes":p["labels"].as_array().into_iter().flatten().map(|l| if l.is_string(){json!({"name":l})} else {l.clone()}).collect::<Vec<_>>(),"pageInfo":{"hasNextPage":false}}})).collect();
+            let nodes: Vec<_> = prs.values().filter(|p| p["head"]["ref"] == *reference).map(|p| json!({"number":p["number"],"id":p.get("node_id").cloned().unwrap_or_else(||json!(format!("PR_{}",p["number"]))),"title":p["title"].as_str().unwrap_or(""),"body":p["body"].as_str().unwrap_or(""),"state":p["state"].as_str().unwrap_or("open").to_uppercase(),"merged":p.get("merged").unwrap_or(&json!(false)),"isDraft":p["draft"].as_bool().unwrap_or(false),"headRefName":p["head"]["ref"],"baseRefName":p["base"]["ref"],"headRepository":{"nameWithOwner":"org/repo"},"autoMergeRequest":if p["auto_merge"].is_object() {json!({"enabledAt":"2026-10-27T00:00:00Z"})} else {p["auto_merge"].clone()},"stack":p["stack"],"labels":{"nodes":p["labels"].as_array().into_iter().flatten().map(|l| if l.is_string(){json!({"name":l})} else {l.clone()}).collect::<Vec<_>>(),"pageInfo":{"hasNextPage":false}}})).collect();
             repository[format!("p{index}")] =
                 json!({"nodes":nodes,"pageInfo":{"hasNextPage":false}});
         }

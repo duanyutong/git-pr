@@ -36,6 +36,8 @@ struct RestObservation {
     state: String,
     merged: bool,
     merged_at: Option<String>,
+    #[serde(default)]
+    draft: Option<bool>,
     head: RestReference,
     base: RestReference,
     stack: Option<crate::model::pull_request::NativeStack>,
@@ -92,6 +94,7 @@ pub(super) fn decode_rest(
         state: pr.state,
         merged: pr.merged,
         merged_at: pr.merged_at,
+        draft: pr.draft,
         head: crate::model::pull_request::Reference { name: pr.head.name },
         base: crate::model::pull_request::Reference { name: pr.base.name },
         stack: pr.stack,
@@ -172,6 +175,112 @@ struct HeadObservation<'a> {
 }
 
 impl GitHub<'_> {
+    pub(crate) fn summaries(
+        &self,
+        numbers: &[u64],
+    ) -> Vec<crate::model::pull_request::PullRequestSummary> {
+        use crate::model::pull_request::{Lifecycle, PullRequestSummary};
+        let mut seen = HashSet::new();
+        let numbers: Vec<_> = numbers
+            .iter()
+            .copied()
+            .filter(|n| *n != 0 && seen.insert(*n))
+            .collect();
+        let mut summaries = std::collections::BTreeMap::new();
+        {
+            let prs = self.session.prs();
+            let times = guard(&self.session.pr_times);
+            for number in &numbers {
+                if let Some(pr) = prs.get(number)
+                    && times.get(number).is_some_and(|time| self.fresh(time))
+                {
+                    summaries.insert(*number, pr.summary());
+                }
+            }
+        }
+        let missing: Vec<_> = numbers
+            .iter()
+            .copied()
+            .filter(|n| !summaries.contains_key(n))
+            .collect();
+        for chunk in missing.chunks(BATCH_SIZE) {
+            match self.summary_batch(chunk) {
+                Ok(observed) => summaries.extend(observed.into_iter().map(|pr| (pr.number, pr))),
+                Err(error) => self.commands.warn(&format!(
+                    "could not verify PR details for the completion listing; retained rows are shown as unverified: {error:#}"
+                )),
+            }
+        }
+        numbers
+            .into_iter()
+            .map(|number| {
+                summaries.remove(&number).unwrap_or(PullRequestSummary {
+                    number,
+                    title: None,
+                    lifecycle: Lifecycle::Unknown,
+                })
+            })
+            .collect()
+    }
+
+    fn summary_batch(
+        &self,
+        numbers: &[u64],
+    ) -> Result<Vec<crate::model::pull_request::PullRequestSummary>> {
+        use crate::model::pull_request::{Lifecycle, PullRequestSummary};
+        use std::fmt::Write as _;
+        let (owner, name) = self
+            .config
+            .repo
+            .name
+            .split_once('/')
+            .context("invalid repository identity")?;
+        let mut declarations = String::from("$owner:String!,$name:String!");
+        let mut fields = String::new();
+        let mut variables = json!({"owner": owner, "name": name});
+        for (i, number) in numbers.iter().enumerate() {
+            let number =
+                i32::try_from(*number).context("PR number exceeds the GraphQL integer range")?;
+            let _ = write!(declarations, ",$n{i}:Int!");
+            let _ = write!(
+                fields,
+                "p{i}:pullRequest(number:$n{i}){{number title state merged isDraft}} "
+            );
+            variables[format!("n{i}")] = json!(number);
+        }
+        let response: Value = serde_json::from_slice(&self.request_url(
+            "POST", &format!("https://api.{}/graphql", self.config.repo.host),
+            Some(&json!({"query":format!("query({declarations}){{repository(owner:$owner,name:$name){{{fields}}}}}"),"variables":variables})),
+        )?.body).context("invalid PR summary response")?;
+        if let Some(errors) = response.get("errors") {
+            bail!("failed to observe PR summaries: {errors}");
+        }
+        numbers
+            .iter()
+            .enumerate()
+            .map(|(i, &number)| {
+                let pr = &response["data"]["repository"][format!("p{i}")];
+                if pr["number"] != number {
+                    bail!("missing or unexpected PR summary identity #{number}");
+                }
+                let state = pr["state"]
+                    .as_str()
+                    .context("missing PR state")?
+                    .to_ascii_lowercase();
+                let lifecycle =
+                    Lifecycle::observed(&state, pr["merged"].as_bool(), pr["isDraft"].as_bool());
+                if lifecycle == Lifecycle::Unknown {
+                    bail!("incomplete PR lifecycle observation for #{number}");
+                }
+                Ok(PullRequestSummary {
+                    number,
+                    title: Some(pr["title"].as_str().context("missing PR title")?.to_owned()),
+                    lifecycle,
+                })
+            })
+            .collect()
+    }
+
     pub(crate) fn merged_prs(&self, numbers: &[u64]) -> Result<HashSet<u64>> {
         let mut merged = HashSet::new();
         let mut missing = Vec::new();
@@ -442,7 +551,7 @@ impl GitHub<'_> {
                     });
                 let _ = write!(
                     fields,
-                    "p{i}:pullRequests(headRefName:$h{i},first:100{after},orderBy:{{field:UPDATED_AT,direction:DESC}}){{nodes{{id number title body state merged headRefName baseRefName headRepository{{nameWithOwner}} autoMergeRequest{{enabledAt}} labels(first:100){{nodes{{name}} pageInfo{{hasNextPage endCursor}}}} {stack}}} pageInfo{{hasNextPage endCursor}}}} "
+                    "p{i}:pullRequests(headRefName:$h{i},first:100{after},orderBy:{{field:UPDATED_AT,direction:DESC}}){{nodes{{id number title body state merged isDraft headRefName baseRefName headRepository{{nameWithOwner}} autoMergeRequest{{enabledAt}} labels(first:100){{nodes{{name}} pageInfo{{hasNextPage endCursor}}}} {stack}}} pageInfo{{hasNextPage endCursor}}}} "
                 );
                 variables[format!("h{i}")] = json!(head.reference);
             }
@@ -676,6 +785,12 @@ fn decode_nodes(
 
 /// Move response values into REST-shaped fields without copying description text.
 pub(super) fn normalise_node(node: &mut Value) {
+    if let Some(draft) = node
+        .as_object_mut()
+        .and_then(|fields| fields.remove("isDraft"))
+    {
+        node["draft"] = draft;
+    }
     if let Some(request) = node
         .as_object_mut()
         .and_then(|fields| fields.remove("autoMergeRequest"))

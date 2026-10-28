@@ -15,6 +15,7 @@ pub(crate) struct PullRequest {
     pub state: String,
     pub merged: bool,
     pub merged_at: Option<String>,
+    pub draft: Option<bool>,
     pub head: Reference,
     pub base: Reference,
     pub stack: Option<NativeStack>,
@@ -79,6 +80,43 @@ impl PullRequest {
     pub(crate) const fn is_merged(&self) -> bool {
         self.merged || self.merged_at.is_some()
     }
+
+    pub(crate) fn summary(&self) -> PullRequestSummary {
+        PullRequestSummary {
+            number: self.number,
+            title: Some(self.title.clone()),
+            lifecycle: Lifecycle::observed(&self.state, Some(self.is_merged()), self.draft),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Lifecycle {
+    Open,
+    Draft,
+    Merged,
+    Closed,
+    Unknown,
+}
+
+impl Lifecycle {
+    pub(crate) fn observed(state: &str, merged: Option<bool>, draft: Option<bool>) -> Self {
+        match (state, merged, draft) {
+            ("open" | "closed" | "merged", Some(true), _) => Self::Merged,
+            ("closed", Some(false), _) => Self::Closed,
+            ("open", Some(false), Some(true)) => Self::Draft,
+            ("open", Some(false), Some(false)) => Self::Open,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+/// Presentation evidence; never used to authorise publication or replace a PR.
+#[derive(Clone, Debug)]
+pub(crate) struct PullRequestSummary {
+    pub number: u64,
+    pub title: Option<String>,
+    pub lifecycle: Lifecycle,
 }
 
 /// Complete metadata acquired only when publication requires a base transition.

@@ -723,6 +723,8 @@ impl Terminal for World {
         _: &crate::model::Repository,
         _: bool,
         _: crate::cli::hyperlinks::Mode,
+        _: &[crate::model::pull_request::PullRequestSummary],
+        _: bool,
     ) -> bool {
         self.0.lock().unwrap().rich_output
     }

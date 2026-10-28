@@ -160,11 +160,11 @@ impl Application {
             &config.repo,
             state.selected(),
         )?;
-        diagnostics.phase("PR descriptions and stack sections", || Self::update_descriptions(&config, git, &github, &state))
+        let numbers = diagnostics.phase("PR descriptions and stack sections", || Self::update_descriptions(&config, git, &github, &state))
             .context("PR content reconciliation failed after publication; pushed refs and completed PR changes are retained")?;
         diagnostics.phase("native stack links", || Self::native_stack(&config, &github, &state, &publication.bases))
             .context("native stack reconciliation failed after publication; pushed refs and completed PR changes are retained")?;
-        self.finish_submission(&github, &mut state, &publication, &associations)
+        self.finish_submission(&github, &mut state, &publication, &associations, &numbers)
     }
 
     fn finish_submission(
@@ -173,6 +173,7 @@ impl Application {
         state: &mut State,
         publication: &pull_requests::Publication,
         associations: &crate::identity::store::Records,
+        numbers: &[u64],
     ) -> Result<()> {
         publication.finish(github, state)?;
         if let Err(error) = crate::identity::resolve::cleanup(github, associations, &state.stack) {
@@ -184,7 +185,12 @@ impl Application {
             commit.metadata_updated |= github.was_updated(commit.pr_number);
         }
         self.commands.terminal.finish(true);
-        self.print_results(github.config, state.selected());
+        let summaries = if github.config.output == "{url} {title}" {
+            github.summaries(numbers)
+        } else {
+            Vec::new()
+        };
+        self.print_results(github.config, state.selected(), &summaries);
         Ok(())
     }
 

@@ -40,6 +40,7 @@ pub(crate) struct Config {
     pub stop_after: Option<Checkpoint>,
     pub output: String,
     pub hyperlinks: hyperlinks::Mode,
+    pub use_icon_font: bool,
     pub auto_accept: bool,
     pub github_stack: bool,
     pub no_stack: bool,
@@ -123,19 +124,9 @@ pub(crate) fn load(
         skip_draft = booleans.boolean("git-pr.skipDraft").unwrap_or(false);
     }
     let stack_up = stack_up(flags, &booleans, commands)?;
-    let draft = if flags.supplied.contains("draft") {
-        flags.boolean("draft")
-    } else {
-        booleans.boolean("git-pr.defaultDraft").unwrap_or(true)
-    };
+    let draft = boolean_setting(flags, &booleans, "draft", "git-pr.defaultDraft", true);
     let emoji = booleans.boolean("git-pr.stackEmoji").unwrap_or(false);
-    let configured_output = strings.string("git-pr.output");
-    let output = settings::fallback(flags.string("output"), env, "GIT_PR_OUTPUT");
-    let output = output::resolve_format(if output.is_empty() {
-        &configured_output
-    } else {
-        output
-    })?;
+    let output = output_format(flags, env, &strings)?;
     let draft_patterns = DraftPatterns::new(&comma_list(&draft_patterns(flags, &strings)))?;
     let repo = discover(commands, root, files, &strings)?;
     let home = env.get("HOME").map_or("", String::as_str);
@@ -168,6 +159,13 @@ pub(crate) fn load(
         stop_after,
         output,
         hyperlinks,
+        use_icon_font: boolean_setting(
+            flags,
+            &booleans,
+            "use-icon-font",
+            "git-pr.useIconFont",
+            true,
+        ),
         auto_accept: settings::enabled(flags, env, "yes", "GIT_PR_YES"),
         github_stack,
         no_stack,
@@ -182,6 +180,16 @@ pub(crate) fn load(
         selection,
         transition_journal: strings.string("git-pr.transitionJournal"),
     })))
+}
+
+fn output_format(
+    flags: &Flags,
+    env: &BTreeMap<String, String>,
+    strings: &Values,
+) -> Result<String> {
+    let configured = strings.string("git-pr.output");
+    let value = settings::fallback(flags.string("output"), env, "GIT_PR_OUTPUT");
+    output::resolve_format(if value.is_empty() { &configured } else { value })
 }
 
 fn hyperlink_mode(flags: &Flags, strings: &Values) -> Result<hyperlinks::Mode> {
@@ -441,10 +449,20 @@ fn save_tags(flags: &Flags, commands: &Commands, dry_run: bool) -> Result<bool> 
 }
 
 fn compact_stack(flags: &Flags, booleans: &Values) -> bool {
-    if flags.supplied.contains("compact-stack") {
-        return flags.boolean("compact-stack");
+    boolean_setting(
+        flags,
+        booleans,
+        "compact-stack",
+        "git-pr.compactStack",
+        false,
+    )
+}
+
+fn boolean_setting(flags: &Flags, booleans: &Values, flag: &str, key: &str, default: bool) -> bool {
+    if flags.supplied.contains(flag) {
+        return flags.boolean(flag);
     }
-    booleans.boolean("git-pr.compactStack").unwrap_or(false)
+    booleans.boolean(key).unwrap_or(default)
 }
 
 fn stack_up(flags: &Flags, booleans: &Values, commands: &Commands) -> Result<bool> {
@@ -491,6 +509,7 @@ fn boolean_settings(
     for (flag, key) in [
         ("draft", "git-pr.defaultDraft"),
         ("compact-stack", "git-pr.compactStack"),
+        ("use-icon-font", "git-pr.useIconFont"),
     ] {
         if !flags.supplied.contains(flag) {
             keys.push(key);

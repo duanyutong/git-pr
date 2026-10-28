@@ -92,16 +92,8 @@ fn diagnostics_preserve_submission_effects_in_both_native_modes() {
                     .stderr
                     .contains("title and description already current")
             );
-            assert!(
-                measured
-                    .stderr
-                    .contains("Checked 2 PR descriptions; no changes needed")
-            );
-            assert!(
-                measured
-                    .stderr
-                    .contains("Checked 2 PR labels; no changes needed")
-            );
+            assert!(measured.stderr.contains("PR descriptions: 2 unchanged"));
+            assert!(measured.stderr.contains("PR labels: 2 unchanged"));
             assert_eq!(
                 measured.stderr.matches("start command: git push").count(),
                 0

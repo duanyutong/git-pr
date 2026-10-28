@@ -322,6 +322,12 @@ pub(crate) enum Renderer<'a> {
 }
 
 impl Renderer<'_> {
+    pub(crate) fn numbers(&self) -> &[u64] {
+        match self {
+            Self::Full(renderer) => &renderer.numbers,
+            Self::Compact(renderer) => &renderer.numbers,
+        }
+    }
     pub(crate) fn footer(&self, current: &Commit) -> Footer<'_> {
         match self {
             Self::Full(renderer) => renderer.footer(current),
@@ -369,6 +375,7 @@ pub(crate) struct Style<'a> {
 #[derive(Debug)]
 pub(crate) struct StackRenderer<'a> {
     text: String,
+    numbers: Vec<u64>,
     positions: HashMap<&'a str, (usize, usize, usize, &'a Commit, bool)>,
     len: usize,
     has_unnumbered: bool,
@@ -402,6 +409,10 @@ impl<'a> StackRenderer<'a> {
             }
         }
         let len = entries.len();
+        let numbers = entries
+            .iter()
+            .filter_map(|(number, _, _)| (*number != 0).then_some(*number))
+            .collect();
         let mut indexed: Vec<_> = entries.into_iter().enumerate().collect();
         if style.stack_up {
             indexed.reverse();
@@ -437,6 +448,7 @@ impl<'a> StackRenderer<'a> {
         }
         Self {
             text,
+            numbers,
             positions,
             len,
             has_unnumbered,
