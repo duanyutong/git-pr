@@ -256,6 +256,14 @@ The status renderer remains an execution boundary; quota scheduling and retry de
 Compact PR rows remain single-line and truncate only descriptive titles, with independent change and lifecycle indicators.
 Regression cases require retained selected and historical rows, all outcome counts, complete repository context, Unicode grapheme boundaries, safe hyperlinks and complete redirected text.
 Status cases assert complete progress, quota, retry and reset information independently of line-width assertions.
+Long-request regressions require request destinations to yield space to operational fields, retain aligned and coloured live frames at 40, 80 and 124 columns, and clear before durable completion.
+The terminal-screen contract uses the independent `vt100` emulator to assert the visible screen after stage completion, failure, ordinary output, warnings, confirmation and destruction.
+It captures transient detail from application workflows for both native-stack updates and unchanged reconciliation, and checks all captured detail messages at 40, 80 and 124 columns with colour enabled and disabled.
+Generated cases vary detail length, CJK text, combining marks, single-codepoint emoji, viewport width and resizing, whilst requiring earlier durable text and subsequent output to survive clearing.
+Complex joined emoji are additionally checked against grapheme-width layout properties because the emulator models codepoint cells rather than graphical font shaping.
+Native pseudo-terminal captures replay actual renderer bytes through the same screen oracle, including terminal newline processing and asynchronous animation.
+Known-defect sensitivity requires restoration of unbounded detail handling and permanent-spinner fallback to fail their corresponding screen assertions.
+Hyperlink regressions require eligible interactive output to emit OSC 8 links independently of terminal identity, SSH and multiplexer metadata, whilst preserving explicit URL fallback and control-free redirected output.
 Native pseudo-terminal tests exercise independently sized standard-output and standard-error streams, resizing between one-row and two-row frames, and complete clearing before durable output.
 Unclassified operational messages and substantive diagnostics remain complete; exceptionally narrow panes fall back to ordinary messages rather than clipped facts.
 

@@ -109,6 +109,7 @@ pub(crate) trait Terminal: Debug + Send + Sync {
     fn outcome(&self, completed: &str) {
         self.err(&format!("{completed}\n"));
     }
+    /// Transient descriptive context; interactive output may abbreviate it.
     fn detail(&self, text: &str) {
         self.out(text);
     }
@@ -134,6 +135,10 @@ pub(crate) trait Terminal: Debug + Send + Sync {
     }
     fn start_activity(&self, _label: &str, _wait: Option<Duration>) -> u64 {
         0
+    }
+    /// The detail is descriptive context which interactive renderers may shorten.
+    fn start_activity_with_detail(&self, label: &str, detail: &str) -> u64 {
+        self.start_activity(&format!("{label} {detail}"), None)
     }
     fn end_activity(&self, _id: u64) {}
     fn quota(&self, _resource: &str, _remaining: u64, _limit: u64, _reset: Duration) {}
@@ -209,6 +214,13 @@ impl Commands {
         Activity {
             terminal: self.terminal.as_ref(),
             id: self.terminal.start_activity(label, wait),
+        }
+    }
+
+    pub(crate) fn activity_with_detail(&self, label: &str, detail: &str) -> Activity<'_> {
+        Activity {
+            terminal: self.terminal.as_ref(),
+            id: self.terminal.start_activity_with_detail(label, detail),
         }
     }
 

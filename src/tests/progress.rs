@@ -214,6 +214,7 @@ fn completed_stages_fit_small_terminal_widths_and_preserve_status_when_space_all
 fn rendering_is_bounded_for_narrow_terminals_and_expired_timers() {
     let activity = Activity {
         label: "Updating PR descriptions".into(),
+        detail: String::new(),
         started: Instant::now(),
         wait: None,
     };
@@ -316,7 +317,7 @@ import fcntl, os, pty, re, select, signal, struct, subprocess, sys, termios, tim
 env = dict(os.environ, GIT_PR_TEST_PROGRESS='1', TERM='xterm')
 env.pop('CI', None)
 env.pop('NO_COLOR', None)
-for key in ['TERM_PROGRAM', 'TMUX', 'STY', 'SSH_CONNECTION', 'SSH_TTY', 'FORCE_HYPERLINK', 'GIT_PR_TEST_HYPERLINKS']:
+for key in ['TERM_PROGRAM', 'TMUX', 'STY', 'SSH_CONNECTION', 'SSH_TTY', 'VTE_VERSION', 'WT_SESSION', 'KONSOLE_VERSION', 'FORCE_HYPERLINK', 'GIT_PR_TEST_HYPERLINKS']:
     env.pop(key, None)
 command = [sys.argv[1], '--exact', 'cli::progress::tests::terminal_fixture', '--nocapture']
 def capture(interrupt=False, settings=None, pipe_stdout=False):
@@ -361,7 +362,8 @@ def capture(interrupt=False, settings=None, pipe_stdout=False):
 output = capture()
 assert b'\r\x1b[2K' in output, output
 assert b'remaining' in output and b'accepted' in output and b'Final output' in output, output
-assert b'Pull requests' in output and b'1 updated' in output and b'\x1b[33m~\x1b[0m  \x1b[36m#42\x1b[0m' in output, output
+assert b'Pull requests' in output and b'1 updated' in output and b'\x1b[33m~\x1b[0m' in output, output
+assert b'\x1b]8;;https://github.com/org/repo/pull/42\x1b\\\x1b[36m#42\x1b[0m\x1b]8;;\x1b\\' in output, output
 assert 'org/repo · tip last'.encode() in output and '1 commit · tip last'.encode() in output, output
 assert b'Plain results' not in output and b'Plain selection' not in output, output
 assert 'café 日本語'.encode() in output, output
@@ -369,24 +371,18 @@ for settings in [{'NO_COLOR': '1'}, {'TERM': 'dumb', 'GIT_PR_TEST_HYPERLINKS': '
     plain = capture(settings=settings)
     if 'NO_COLOR' in settings:
         assert not re.search(rb'\x1b\[[0-9;:]*m', plain), plain
-        assert b'Pull requests' in plain and b'  ~  #42  ?  Unicode' in plain, plain
+        assert b'Pull requests' in plain and b'\x1b]8;;https://github.com/org/repo/pull/42' in plain, plain
     else:
         assert b'\x1b' not in plain, plain
         assert b'Plain results' in plain, plain
 assert b'\r\x1b[2K' in capture(pipe_stdout=True)
-for program in ['vscode', 'zed']:
-    linked = capture(settings={'TERM_PROGRAM': program, 'NO_COLOR': '1'})
+for program in ['vscode', 'zed', 'iTerm.app', 'WezTerm', 'Windows_Terminal', 'unfamiliar', os.fsdecode(b'\xff')]:
+    linked = capture(settings={'TERM_PROGRAM': program, 'NO_COLOR': '1', 'SSH_CONNECTION': 'example', 'SSH_TTY': '/dev/pts/1', 'TMUX': '/tmp/example', 'STY': 'session'})
     assert b'  ~  \x1b]8;;https://github.com/org/repo/pull/42\x1b\\#42\x1b]8;;\x1b\\' in linked, linked
     assert not re.search(rb'\x1b\[[0-9;:]*m', linked), linked
 for settings in [
-    {'TERM_PROGRAM': 'unknown'},
-    {'TERM_PROGRAM': os.fsdecode(b'\xff')},
-    {'TERM_PROGRAM': 'zed', 'TMUX': '/tmp/example'},
-    {'TERM_PROGRAM': 'zed', 'STY': 'session'},
-    {'TERM_PROGRAM': 'zed', 'SSH_CONNECTION': 'example'},
-    {'TERM_PROGRAM': 'zed', 'SSH_TTY': '/dev/tty'},
     {'TERM_PROGRAM': 'zed', 'GIT_PR_TEST_HYPERLINKS': 'never'},
-    {'TERM_PROGRAM': 'unknown', 'FORCE_HYPERLINK': '1'},
+    {'TERM_PROGRAM': 'unknown', 'GIT_PR_TEST_HYPERLINKS': 'never', 'FORCE_HYPERLINK': '1'},
 ]:
     fallback = capture(settings=settings)
     assert b'\x1b]8;' not in fallback and b'https://github.com/org/repo/pull/42' in fallback, fallback
@@ -401,6 +397,123 @@ piped = subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True, e
 assert b'waiting 2s' in piped.stderr, piped.stderr
 assert b'\x1b' not in piped.stderr, piped.stderr
 assert b'declined' in piped.stdout and b'Final output' in piped.stdout, piped.stdout
+";
+    let result = std::process::Command::new("python3")
+        .args(["-c", script])
+        .arg(std::env::current_exe().unwrap())
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+}
+
+const LONG_REQUEST: &str =
+    "example-org/app/commits/0123456789abcdef0123456789abcdef01234567/pulls?per_page=100&page=1";
+
+#[test]
+fn request_details_yield_space_to_stage_counters_and_quota() {
+    let terminal = Arc::new(MemoryTerminal::default());
+    let progress = ProgressTerminal::with_animation(terminal, false);
+    progress.stage("Preparing commits");
+    progress.quota("REST", 14093, 15000, Duration::from_secs(274));
+    let request = progress.start_activity_with_detail("GitHub GET", LONG_REQUEST);
+    for columns in [80, 124, 160] {
+        let row = render_state(&lock(&progress.shared.state), 0, columns);
+        assert_eq!(row.lines().count(), 1, "{row}");
+        assert!(
+            row.starts_with("  ⠋ Preparing commits · GitHub GET "),
+            "{row}"
+        );
+        assert!(row.width() < columns, "{row}");
+        assert!(row.contains("REST 14093/15000 · reset 4m34s"), "{row}");
+        if columns < 160 {
+            assert!(row.contains('…') && !row.contains(LONG_REQUEST), "{row}");
+        } else {
+            assert!(row.contains(LONG_REQUEST), "{row}");
+        }
+    }
+    progress.progress("Commits #101", 1, 3);
+    for columns in [40, 80, 124] {
+        let row = render_state(&lock(&progress.shared.state), 0, columns);
+        assert!(row.contains("1/3 Commits #101"), "{row}");
+        assert!(row.contains("REST 14093/15000"), "{row}");
+        assert!(row.lines().count() <= 2, "{row}");
+        assert!(row.lines().all(|line| line.width() < columns), "{row}");
+    }
+    let wait = progress.start_activity("GitHub retry 1/3", Some(Duration::from_secs(60)));
+    let row = render_state(&lock(&progress.shared.state), 0, 124);
+    assert!(row.contains("retry 1/3") && row.contains("remaining"));
+    assert!(!row.contains("example-org"));
+    progress.end_activity(wait);
+    progress.end_activity(request);
+    assert!(!render_state(&lock(&progress.shared.state), 0, 124).contains("example-org"));
+}
+
+#[test]
+fn long_request_fixture() {
+    if std::env::var_os("GIT_PR_TEST_LONG_REQUEST").is_none() {
+        return;
+    }
+    let terminal = ProgressTerminal::new(Arc::new(crate::commands::Console::default()));
+    terminal.stage_with_completion("Preparing commits", "Commits prepared");
+    terminal.quota("REST", 14093, 15000, Duration::from_secs(274));
+    let request = terminal.start_activity_with_detail("GitHub GET", LONG_REQUEST);
+    let mut permission = String::new();
+    std::io::stdin().read_line(&mut permission).unwrap();
+    assert_eq!(permission, "done\n");
+    terminal.end_activity(request);
+    terminal.finish(true);
+}
+
+#[test]
+fn long_requests_stay_coloured_and_aligned_until_cleared_in_real_terminals() {
+    let script = r"
+import fcntl, os, pty, re, select, struct, subprocess, sys, termios, time
+for columns in [40, 80, 124]:
+    master, slave = pty.openpty()
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 24, columns, 0, 0))
+    env = dict(os.environ, GIT_PR_TEST_LONG_REQUEST='1', TERM='xterm')
+    env.pop('CI', None)
+    env.pop('NO_COLOR', None)
+    p = subprocess.Popen([sys.argv[1], '--exact', 'cli::progress::tests::long_request_fixture', '--nocapture'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=slave, env=env)
+    os.close(slave)
+    output = b''
+    try:
+        deadline = time.monotonic() + 8
+        frames = []
+        while time.monotonic() < deadline:
+            if select.select([master], [], [], .1)[0]:
+                output += os.read(master, 65536)
+            frames = [frame.decode() for frame in re.findall(rb'\x1b\[36m(.*?)\x1b\[0m', output, re.S) if b'REST 14093/15000' in frame]
+            if frames: break
+        assert frames, output
+        for frame in frames:
+            lines = frame.splitlines()
+            lines = [line for line in lines if line]
+            assert lines[0].startswith('  ') and 'Preparing commits' in lines[0], frame
+            assert all(len(line) < columns for line in lines), frame
+            assert len(lines) <= (2 if columns == 40 else 1), frame
+            if columns >= 80: assert '…' in frame, frame
+        assert b'page=1' not in output, output
+        p.stdin.write(b'done\n')
+        p.stdin.flush()
+        deadline = time.monotonic() + 5
+        while b'Commits prepared' not in output and time.monotonic() < deadline:
+            if select.select([master], [], [], .1)[0]:
+                try: data = os.read(master, 65536)
+                except OSError: break
+                if not data: break
+                output += data
+        p.communicate(timeout=5)
+        assert p.returncode == 0
+        assert b'\r\x1b[2K  \x1b[32m' in output, output
+        assert b'Commits prepared' in output, output
+    finally:
+        if p.poll() is None: p.kill(); p.wait()
+        os.close(master)
 ";
     let result = std::process::Command::new("python3")
         .args(["-c", script])
@@ -687,6 +800,7 @@ fn stage_summaries_retain_final_counts_and_partial_failure_without_stale_counts(
 fn progress_clipping_preserves_unicode_and_live_timers_at_every_width() {
     let activity = Activity {
         label: "Updating descriptions with a long explanation".into(),
+        detail: String::new(),
         started: Instant::now().checked_sub(Duration::from_secs(2)).unwrap(),
         wait: None,
     };
@@ -815,6 +929,7 @@ fn clipping_preserves_graphemes_and_terminal_cell_width() {
     for label in ["日本語", "👩‍💻界café", "a\u{301}bc"] {
         let activity = Activity {
             label: label.into(),
+            detail: String::new(),
             started: Instant::now(),
             wait: None,
         };
@@ -866,7 +981,7 @@ fn rich_sections_and_single_line_titles_preserve_spacing_and_unicode() {
             ..Repository::default()
         },
         true,
-        hyperlinks::Mode::Auto,
+        hyperlinks::Mode::Never,
         &[],
         false,
     ));

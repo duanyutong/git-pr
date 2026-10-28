@@ -124,14 +124,15 @@ Interactive title and visible-address truncation respects grapheme boundaries an
 PR title rows remain single-line; summaries and operational status retain complete facts through deliberate additional rows where necessary.
 Use `--output=url` for complete copyable addresses, or redirect output to retain complete titles and addresses without inserted wrapping.
 
-The following invocation overrides hyperlink detection for rich results in an unfamiliar terminal:
+Interactive rich results use OSC 8 hyperlinks by default, including in remote sessions and unfamiliar terminal emulators.
+The following invocation retains visible URLs when the terminal does not provide clickable hyperlinks:
 
 ```sh
-git pr --hyperlinks=always
+git pr --hyperlinks=never
 ```
 
-Use `git pr --hyperlinks=never` to retain visible URLs, or `git -c git-pr.hyperlinks=never pr` for a Git-scoped invocation override.
-The [hyperlink contract](configuration.md#terminal-hyperlinks) specifies detection, precedence and the preservation of plain and custom output.
+Use `git -c git-pr.hyperlinks=never pr` for a Git-scoped invocation override, or configure `git-pr.hyperlinks=never` persistently through Git.
+The [hyperlink contract](configuration.md#terminal-hyperlinks) specifies eligibility, precedence and the preservation of plain and custom output.
 
 Rich lists require both output streams to be interactive.
 Redirected standard output retains the plain listing and custom-template representation.

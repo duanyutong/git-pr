@@ -107,6 +107,28 @@ DEFECTS = (
             ),
         ),
     ),
+    Defect(
+        "unbounded-transient-detail",
+        "cli::progress::screen_tests::workflow_details_leave_only_durable_output_on_the_terminal_screen",
+        (
+            Change(
+                "src/cli/progress.rs",
+                'detail = format!("· {}", state.detail);',
+                'label.push_str(&format!(" · {}", state.detail));',
+            ),
+        ),
+    ),
+    Defect(
+        "permanent-spinner-fallback",
+        "cli::progress::screen_tests::oversized_operational_facts_never_leave_a_permanent_spinner",
+        (
+            Change(
+                "src/cli/progress.rs",
+                'shared.terminal.err(&format!("  {notice}\\n"));',
+                'shared.terminal.err(&format!("⠙ {notice}\\n"));',
+            ),
+        ),
+    ),
 )
 
 
@@ -182,6 +204,7 @@ def properties(report: dict) -> None:
     for name, test_filter in (
         ("properties", "tests::unit::properties::"),
         ("assurance", "::assurance::"),
+        ("terminal-screen", "cli::progress::screen_tests::"),
     ):
         result = execute(
             ["cargo", "test", "--locked", "-p", "git-pr", "--lib", "--", test_filter],
@@ -239,7 +262,7 @@ def snapshot(destination: pathlib.Path) -> dict[str, str]:
 def archive(gate: str) -> None:
     """Retain previous evidence before starting another campaign of the same kind."""
     names = {
-        "properties": ("properties.json", "properties.log", "assurance.log"),
+        "properties": ("properties.json", "properties.log", "assurance.log", "terminal-screen.log"),
         "sensitivity": ("sensitivity.json", "sensitivity"),
         "mutants": ("mutants.json", "mutants"),
     }[gate]

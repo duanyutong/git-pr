@@ -30,7 +30,8 @@ Assurance commands do not submit against the developer's working stack, copy per
 
 ## Generated properties and workflow campaigns
 
-The property suite uses [Proptest](https://proptest-rs.github.io/proptest/intro.html) with an ordinary budget of 128 cases for each of seventeen properties and a fixed default seed of `5138697615354058066`.
+The core property suite uses [Proptest](https://proptest-rs.github.io/proptest/intro.html) with an ordinary budget of 128 cases for each of seventeen properties and a fixed default seed of `5138697615354058066`.
+The terminal-screen suite adds an independently interpreted screen-lifecycle property with the same ordinary case budget and environment overrides.
 `PROPTEST_CASES` and `PROPTEST_RNG_SEED` override those defaults, and `GIT_PR_ASSURANCE_CASES` controls the native generated-ref sample count, ordinarily eight and bounded at 256.
 The assurance wrapper rejects nonpositive case counts and records its effective input settings.
 For example, the following command expands the generated campaigns while retaining known-defect and corpus validation:
@@ -66,9 +67,12 @@ The original source is restored between experiments, and the developer's source 
 | One-character trailer rejection | Reject a one-character non-`Remote-Ref` trailer and consequently discard the footer. | `single_character_tags_preserve_the_published_branch_and_label` |
 | Ambiguous default branch discovery | Ask Git for an abbreviated symbolic target and interpret that abbreviation as an unambiguous remote branch. | `trunk_discovery_ignores_shadowing_local_branches_and_tags` |
 | Duplicate trailer precedence reversal | Reverse parsed attribute order so that duplicate keys select a different effective value. | `duplicate_trailer_winners_survive_rewriting` |
+| Unbounded transient detail | Treat a workflow description as an unbounded operational label. | `workflow_details_leave_only_durable_output_on_the_terminal_screen` |
+| Permanent loading glyph | Restore a spinner to an ordinary fallback notice. | `oversized_operational_facts_never_leave_a_permanent_spinner` |
 
 The first five classes concern previously corrected defects; the sixth was independently detected by the new generated trailer assertions.
-A successful sensitivity run demonstrates that these six exact defects are detected by the named assertions.
+The terminal cases require workflow detail to remain within the transient display budget and ordinary fallback notices to remain free of loading glyphs.
+A successful sensitivity run demonstrates that these eight exact defects are detected by the named assertions.
 It does not establish that every conceivable variation of those defects has been enumerated.
 
 ## Mutation analysis

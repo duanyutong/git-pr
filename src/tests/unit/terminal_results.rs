@@ -51,7 +51,7 @@ fn render(
 }
 
 #[test]
-fn hyperlink_modes_are_explicit_and_detection_is_conservative() {
+fn hyperlink_modes_are_explicit() {
     assert_eq!(Mode::default(), Mode::Auto);
     for (name, expected) in [
         ("auto", Mode::Auto),
@@ -59,12 +59,7 @@ fn hyperlink_modes_are_explicit_and_detection_is_conservative() {
         ("never", Mode::Never),
     ] {
         assert_eq!(Mode::parse(name).unwrap(), expected);
-        for supported in [false, true] {
-            assert_eq!(
-                expected.enabled(supported),
-                name == "always" || (name == "auto" && supported)
-            );
-        }
+        assert_eq!(expected.enabled(), name != "never");
         for args in [
             vec![format!("--hyperlinks={name}")],
             vec!["--hyperlinks".into(), name.into()],
@@ -95,20 +90,6 @@ fn hyperlink_modes_are_explicit_and_detection_is_conservative() {
             .hyperlinks
             .is_none()
     );
-    for program in [
-        None,
-        Some("vscode"),
-        Some("zed"),
-        Some("unknown"),
-        Some("xterm-256color"),
-    ] {
-        for intermediary in [false, true] {
-            assert_eq!(
-                hyperlinks::supported(program, intermediary),
-                !intermediary && matches!(program, Some("vscode" | "zed"))
-            );
-        }
-    }
 }
 
 #[test]

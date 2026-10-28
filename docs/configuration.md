@@ -114,10 +114,11 @@ Invalid CLI values fail before repository discovery; invalid effective Git value
 Overridden invalid values do not prevent execution, although malformed Git configuration files remain errors.
 Git resolves includes and scope precedence, including settings in a separate Jujutsu workspace's backing Git repository.
 
-Automatic mode recognises direct VS Code and Zed terminals through `TERM_PROGRAM=vscode` or `TERM_PROGRAM=zed`.
-An unknown terminal, invalid terminal identity or the presence of `TMUX`, `STY`, `SSH_CONNECTION` or `SSH_TTY` selects visible URL rows, subject to the interactive width budget.
-These checks are conservative capability estimates; no terminal query is sent.
-`always` bypasses that estimate within eligible rich results, and `never` displays visible URLs beneath each PR, ellipsising addresses which exceed the terminal width.
+Automatic mode emits OSC 8 hyperlinks whenever interactive rich results are eligible, independently of the terminal emulator, SSH connection or multiplexer.
+The [OSC 8 specification](https://gist.github.com/egmontkob/eb114294efbcd5adb1944c9f3cb5feda#detecting-availability-of-the-feature) defines no portable hyperlink capability query; automatic mode therefore provides a best-effort default rather than verified support.
+No terminal identity allowlist, capability probe or connection veto is applied.
+`always` also emits hyperlinks within eligible rich results, and `never` displays visible URLs beneath each PR, ellipsising addresses which exceed the terminal width.
+Use `git-pr.hyperlinks=never` or `--hyperlinks=never` when the terminal does not provide clickable OSC 8 links.
 Neither mode forces rich formatting into redirected output, CI, dumb terminals or non-default output templates.
 An explicitly supplied template equivalent to `{url} {title}` remains eligible for the default rich presentation.
 No hyperlink environment override is supported; `FORCE_HYPERLINK` does not supersede the CLI or Git setting.
@@ -245,8 +246,10 @@ Each PR title remains on one line; descriptive overflow uses a trailing `…`, m
 The terminal reserves one column against automatic wrapping, and re-reads the dimensions of the stream being rendered.
 Summary counts, repository identity, completed-stage outcomes and other operational facts remain complete, using deliberately arranged additional rows where necessary.
 Live status retains complete progress counters, active targets, quota values, retry reasons and relevant countdowns.
+Request destinations and text supplied through the transient-detail boundary are descriptive context and may be shortened with a Unicode-aware ellipsis to keep the live status on one aligned, coloured row when its operational fields fit.
+This includes native-stack branch lists, publication announcements and PR titles used as intermediate detail.
 Redundant stage wording and ordinary elapsed time yield space before operational facts; viable live frames use at most two rows.
-If a pane cannot accommodate a complete live frame, the renderer emits a complete ordinary status message instead of repeatedly painting overflow.
+If a pane cannot accommodate a complete live frame, the renderer emits an ordinary notice containing complete operational facts, without an animation glyph or transient descriptive detail.
 Warnings, failures, unclassified operational text and debug evidence are not silently truncated.
 An identity wider than the entire pane remains intact; such exceptionally narrow panes may require native terminal wrapping.
 Visible fallback URLs are ellipsised within the interactive width budget; `--output=url`, explicit templates and redirected output retain complete destinations.

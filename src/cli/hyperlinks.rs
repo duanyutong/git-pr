@@ -23,17 +23,14 @@ impl Mode {
     }
 
     /// Rich-output eligibility is enforced separately by the terminal boundary.
-    pub(crate) const fn enabled(self, supported: bool) -> bool {
+    pub(crate) const fn enabled(self) -> bool {
         match self {
-            Self::Auto => supported,
-            Self::Always => true,
+            // OSC 8 has no portable capability query; eligible interactive output
+            // uses links without relying on emulator names or connection metadata.
+            Self::Auto | Self::Always => true,
             Self::Never => false,
         }
     }
-}
-
-pub(crate) fn supported(program: Option<&str>, intermediary: bool) -> bool {
-    !intermediary && matches!(program, Some("vscode" | "zed"))
 }
 
 pub(crate) fn destination(repo: &Repository, number: u64) -> Option<String> {

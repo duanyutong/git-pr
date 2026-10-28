@@ -417,7 +417,13 @@ class SensitivityTests(unittest.TestCase):
             root = pathlib.Path(temporary)
             evidence = root / "target/validation/assurance"
             evidence.mkdir(parents=True)
-            for name in ("properties.json", "properties.log", "assurance.log", "mutants.json"):
+            for name in (
+                "properties.json",
+                "properties.log",
+                "assurance.log",
+                "terminal-screen.log",
+                "mutants.json",
+            ):
                 (evidence / name).write_text(name)
             with (
                 unittest.mock.patch.object(assurance, "ROOT", root),
@@ -429,7 +435,7 @@ class SensitivityTests(unittest.TestCase):
             self.assertEqual(len(archives), 1)
             self.assertEqual(
                 sorted(path.name for path in archives[0].iterdir()),
-                ["assurance.log", "properties.json", "properties.log"],
+                ["assurance.log", "properties.json", "properties.log", "terminal-screen.log"],
             )
             self.assertEqual((archives[0] / "properties.log").read_text(), "properties.log")
             self.assertEqual(list(evidence.iterdir()), [evidence / "mutants.json"])

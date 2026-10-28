@@ -114,15 +114,15 @@ impl GitHub<'_> {
         let mut schedule = self.session.dispatch();
         queue.finish(|| "ready".into());
         let graphql = url.ends_with("/graphql");
-        let label = if graphql && writes > 0 {
-            format!("Updating {writes} PR description(s)")
+        let _activity = if graphql && writes > 0 {
+            self.commands
+                .activity(&format!("Updating {writes} PR description(s)"), None)
         } else {
-            format!(
-                "GitHub {method} {}",
-                url.split("/repos/").last().unwrap_or(url)
+            self.commands.activity_with_detail(
+                &format!("GitHub {method}"),
+                url.split("/repos/").last().unwrap_or(url),
             )
         };
-        let _activity = self.commands.activity(&label, None);
         let mut waited = Duration::ZERO;
         let mut attempt = 0;
         let result = loop {

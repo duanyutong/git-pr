@@ -24,6 +24,7 @@ use crate::{
 #[derive(Debug)]
 struct Activity {
     label: String,
+    detail: String,
     started: Instant,
     wait: Option<Duration>,
 }
@@ -78,7 +79,6 @@ pub(crate) fn colour_enabled() -> bool {
 pub(crate) struct ProgressTerminal {
     shared: Arc<Shared>,
     worker: Mutex<Option<JoinHandle<()>>>,
-    hyperlinks: bool,
 }
 
 impl ProgressTerminal {
@@ -86,19 +86,12 @@ impl ProgressTerminal {
         let animated = std::io::stderr().is_terminal()
             && std::env::var_os("CI").is_none()
             && std::env::var("TERM").is_ok_and(|term| term != "dumb");
-        let mut progress = Self::with_options(
+        Self::with_options(
             terminal,
             animated,
             animated && std::io::stdout().is_terminal(),
             colour_enabled(),
-        );
-        progress.hyperlinks = hyperlinks::supported(
-            std::env::var("TERM_PROGRAM").ok().as_deref(),
-            ["TMUX", "STY", "SSH_CONNECTION", "SSH_TTY"]
-                .iter()
-                .any(|key| std::env::var_os(key).is_some()),
-        );
-        progress
+        )
     }
 
     #[cfg(test)]
@@ -149,7 +142,6 @@ impl ProgressTerminal {
         Self {
             shared,
             worker: Mutex::new(worker),
-            hyperlinks: false,
         }
     }
 
@@ -367,7 +359,7 @@ impl Terminal for ProgressTerminal {
             results::Options {
                 columns: output_width().saturating_sub(1),
                 colour: self.shared.colour,
-                hyperlinks: mode.enabled(self.hyperlinks),
+                hyperlinks: mode.enabled(),
                 summaries,
                 use_icon_font,
             },
@@ -376,29 +368,11 @@ impl Terminal for ProgressTerminal {
     }
 
     fn start_activity(&self, label: &str, wait: Option<Duration>) -> u64 {
-        let mut state = lock(&self.shared.state);
-        state.next = state.next.wrapping_add(1);
-        let id = state.next;
-        let label = single_line(label);
-        if !self.shared.animated
-            && let Some(wait) = wait.filter(|wait| *wait >= Duration::from_secs(1))
-        {
-            self.shared
-                .terminal
-                .err(&format!("{label}; waiting {}\n", duration(wait)));
-        }
-        state.fallback_reported = false;
-        state.activities.insert(
-            id,
-            Activity {
-                label,
-                wait,
-                started: Instant::now(),
-            },
-        );
-        drop(state);
-        self.shared.wake.notify_all();
-        id
+        self.begin_activity(label, "", wait)
+    }
+
+    fn start_activity_with_detail(&self, label: &str, detail: &str) -> u64 {
+        self.begin_activity(label, detail, None)
     }
 
     fn end_activity(&self, id: u64) {
@@ -424,12 +398,40 @@ impl Terminal for ProgressTerminal {
 }
 
 impl ProgressTerminal {
+    fn begin_activity(&self, label: &str, detail: &str, wait: Option<Duration>) -> u64 {
+        let mut state = lock(&self.shared.state);
+        state.next = state.next.wrapping_add(1);
+        let id = state.next;
+        let label = single_line(label);
+        if !self.shared.animated
+            && let Some(wait) = wait.filter(|wait| *wait >= Duration::from_secs(1))
+        {
+            self.shared
+                .terminal
+                .err(&format!("{label}; waiting {}\n", duration(wait)));
+        }
+        state.fallback_reported = false;
+        state.activities.insert(
+            id,
+            Activity {
+                label,
+                detail: single_line(detail),
+                wait,
+                started: Instant::now(),
+            },
+        );
+        drop(state);
+        self.shared.wake.notify_all();
+        id
+    }
+
     fn begin_stage(&self, label: &str, completed: Option<&str>) {
         let mut state = lock(&self.shared.state);
         self.end_stage(&mut state, true);
         state.fallback_reported = false;
         state.stage = Some(Activity {
             label: single_line(label),
+            detail: String::new(),
             started: Instant::now(),
             wait: None,
         });
@@ -460,52 +462,66 @@ fn clear_rows(terminal: &dyn Terminal, state: &mut State) {
 fn animate(shared: &Shared) {
     let mut frame = 0;
     let mut next_frame = Instant::now();
-    let mut state = lock(&shared.state);
     loop {
+        let mut state = lock(&shared.state);
         if state.stopped || crate::commands::cancellation::interrupting() {
             return;
         }
         if state.paused || (state.activities.is_empty() && state.stage.is_none()) {
-            state = shared
-                .wake
-                .wait(state)
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            drop(
+                shared
+                    .wake
+                    .wait(state)
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            );
             continue;
         }
         let remaining = next_frame.saturating_duration_since(Instant::now());
         if !remaining.is_zero() {
-            let (next, _) = shared
-                .wake
-                .wait_timeout(state, remaining)
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            state = next;
+            drop(
+                shared
+                    .wake
+                    .wait_timeout(state, remaining)
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            );
             continue;
         }
-        let columns = width();
-        let text = render_state(&state, frame, columns);
-        clear_rows(shared.terminal.as_ref(), &mut state);
-        if state.painted_width != columns {
-            state.fallback_reported = false;
-        }
-        let lines: Vec<_> = text.lines().collect();
-        if lines.len() <= 2 && lines.iter().all(|line| line.width() < columns) {
-            shared.terminal.err(&format!(
-                "\r\x1b[2K{}",
-                paint(&lines.join("\r\n"), "36", shared.colour)
-            ));
-            state.painted = lines.len();
-        } else if !state.fallback_reported {
-            // An exceptionally narrow pane must not hide operational facts or repaint overflow.
-            shared.terminal.err(&format!(
-                "{}\n",
-                text.lines().map(str::trim).collect::<Vec<_>>().join(" ")
-            ));
-            state.fallback_reported = true;
-        }
+        paint_frame(shared, &mut state, frame, width());
+        drop(state);
         frame = (frame + 1) % 10;
         next_frame = Instant::now() + Duration::from_millis(100);
-        state.painted_width = columns;
     }
+}
+
+fn paint_frame(shared: &Shared, state: &mut State, frame: usize, columns: usize) {
+    let text = render_state(state, frame, columns);
+    clear_rows(shared.terminal.as_ref(), state);
+    if state.painted_width != columns {
+        state.fallback_reported = false;
+    }
+    let lines: Vec<_> = text.lines().collect();
+    if lines.len() <= 2 && lines.iter().all(|line| line.width() < columns) {
+        shared.terminal.err(&format!(
+            "\r\x1b[2K{}",
+            paint(&lines.join("\r\n"), "36", shared.colour)
+        ));
+        state.painted = lines.len();
+    } else if !state.fallback_reported {
+        // Preserve facts in narrow panes without making transient descriptions or
+        // an animation frame permanent terminal history.
+        if let Some(mut activity) = current_activity(state) {
+            activity.detail.clear();
+            let notice = render_text(
+                &activity,
+                state.progress.as_ref(),
+                state.quota.as_ref(),
+                usize::MAX,
+            );
+            shared.terminal.err(&format!("  {notice}\n"));
+        }
+        state.fallback_reported = true;
+    }
+    state.painted_width = columns;
 }
 
 fn stage_result(
@@ -545,16 +561,27 @@ fn stage_result(
 }
 
 fn render_state(state: &State, frame: usize, width: usize) -> String {
+    current_activity(state).map_or_else(String::new, |activity| {
+        render(
+            &activity,
+            state.progress.as_ref(),
+            state.quota.as_ref(),
+            frame,
+            width,
+        )
+    })
+}
+
+fn current_activity(state: &State) -> Option<Activity> {
     let latest = state.activities.last_key_value().map(|(_, value)| value);
     let wait = state.activities.values().rev().find(|a| a.wait.is_some());
-    let Some(active) = wait.or(state.stage.as_ref()).or(latest) else {
-        return String::new();
-    };
+    let active = wait.or(state.stage.as_ref()).or(latest)?;
     let mut label = if wait.is_none() && state.progress.is_some() {
         String::new()
     } else {
         active.label.clone()
     };
+    let mut detail = String::new();
     if wait.is_none() {
         if let Some(detail) = latest.filter(|a| !std::ptr::eq(*a, active)) {
             if !label.is_empty() {
@@ -562,23 +589,21 @@ fn render_state(state: &State, frame: usize, width: usize) -> String {
             }
             label.push_str(&detail.label);
         } else if !state.detail.is_empty() {
-            if !label.is_empty() {
-                label.push_str(" · ");
+            detail = format!("· {}", state.detail);
+        }
+        if let Some(latest) = latest {
+            if !detail.is_empty() && !latest.detail.is_empty() {
+                detail.push(' ');
             }
-            label.push_str(&state.detail);
+            detail.push_str(&latest.detail);
         }
     }
-    render(
-        &Activity {
-            label,
-            started: active.started,
-            wait: active.wait,
-        },
-        state.progress.as_ref(),
-        state.quota.as_ref(),
-        frame,
-        width,
-    )
+    Some(Activity {
+        label,
+        detail,
+        started: active.started,
+        wait: active.wait,
+    })
 }
 
 fn render(
@@ -588,41 +613,9 @@ fn render(
     frame: usize,
     width: usize,
 ) -> String {
-    let elapsed = activity.started.elapsed();
-    let available = width.saturating_sub(5);
-    let mut core = progress.map_or_else(
-        || activity.label.clone(),
-        |progress| format!("{}/{} {}", progress.done, progress.total, progress.label),
-    );
-    if progress.is_some() && !activity.label.is_empty() {
-        let _ = write!(core, " · {}", activity.label);
-    }
-    if let Some(wait) = activity.wait {
-        let _ = write!(
-            core,
-            " · {} remaining",
-            duration(wait.saturating_sub(elapsed))
-        );
-    }
-    if let Some((label, observed, reset)) = quota {
-        let _ = write!(
-            core,
-            " · {label} · reset {}",
-            duration(reset.saturating_sub(observed.elapsed())).replace(' ', "")
-        );
-    }
-    let mut detailed = core.clone();
-
-    if activity.wait.is_none() {
-        let _ = write!(detailed, " · {} elapsed", duration(elapsed));
-    }
-    let text = if detailed.width() <= available {
-        &detailed
-    } else {
-        &core
-    };
+    let text = render_text(activity, progress, quota, width);
     let spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'][frame % 10];
-    complete_lines(text, available)
+    complete_lines(&text, width.saturating_sub(5))
         .iter()
         .enumerate()
         .map(|(index, line)| {
@@ -634,6 +627,56 @@ fn render(
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn render_text(
+    activity: &Activity,
+    progress: Option<&Progress>,
+    quota: Option<&(String, Instant, Duration)>,
+    width: usize,
+) -> String {
+    let elapsed = activity.started.elapsed();
+    let available = width.saturating_sub(5);
+    let mut core = progress.map_or_else(
+        || activity.label.clone(),
+        |progress| format!("{}/{} {}", progress.done, progress.total, progress.label),
+    );
+    if progress.is_some() && !activity.label.is_empty() {
+        let _ = write!(core, " · {}", activity.label);
+    }
+    let mut suffix = String::new();
+    if let Some(wait) = activity.wait {
+        let _ = write!(
+            suffix,
+            " · {} remaining",
+            duration(wait.saturating_sub(elapsed))
+        );
+    }
+    if let Some((label, observed, reset)) = quota {
+        let _ = write!(
+            suffix,
+            " · {label} · reset {}",
+            duration(reset.saturating_sub(observed.elapsed())).replace(' ', "")
+        );
+    }
+    if !activity.detail.is_empty() {
+        let budget = available.saturating_sub(core.width() + suffix.width() + 1);
+        if budget != 0 {
+            core.push(' ');
+            core.push_str(&clip(&activity.detail, budget));
+        }
+    }
+    core.push_str(&suffix);
+    let mut detailed = core.clone();
+
+    if activity.wait.is_none() {
+        let _ = write!(detailed, " · {} elapsed", duration(elapsed));
+    }
+    if detailed.width() <= available {
+        detailed
+    } else {
+        core
+    }
 }
 
 fn width() -> usize {
@@ -719,3 +762,7 @@ fn duration(value: Duration) -> String {
 #[cfg(test)]
 #[path = "../tests/progress.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "../tests/terminal_screen.rs"]
+mod screen_tests;

@@ -86,12 +86,12 @@ Every row carries a leading outcome glyph: `+` for created, `~` for updated and 
 Colour supplements these distinct glyphs; mixed outcomes retain stack order.
 Hyperlink mode resolves from the final explicit CLI value, effective Git setting and `auto` default, in that order.
 Hyperlinks remain restricted to eligible rich results; redirected and custom output retain their established representations under every mode.
-Terminal identity is a conservative estimate, and unknown support retains complete visible URLs.
+Automatic hyperlinks follow rich-output eligibility independently of terminal identity or connection metadata; explicit `never` retains visible URLs.
 The `terminal_results` unit cases, native configuration scope tests and pseudo-terminal progress tests exercise these contracts independently of live PRs.
 
 ## Bounded generated dimensions
 
-The ordinary property suite executes seventeen generated properties with 128 cases per property and a fixed default seed of `5138697615354058066`.
+The core property suite executes seventeen generated properties with 128 cases per property and a fixed default seed of `5138697615354058066`.
 `PROPTEST_CASES` and `PROPTEST_RNG_SEED` permit larger, independently seeded campaigns without modifying the suite.
 The shrink budget is 4,096 iterations per failure, and Proptest replays retained failure seeds before generating further cases.
 Retained seeds reside in [proptest-regressions/tests/unit/properties.txt](../proptest-regressions/tests/unit/properties.txt), alongside explicit deterministic examples which state the required behaviour independently of generator internals.
@@ -102,6 +102,23 @@ Generated snapshot campaigns contain one through nine independently framed recor
 Selection campaigns use stacks of up to 31 commits, duplicate and reordered arguments, independent exclusion decisions, filtered ancestry boundaries and every Boolean combination governing ref synchronisation.
 Description campaigns vary Unicode human text, Markdown punctuation, unrelated HTML comments, managed section placement, line endings, repeated history identities and six malformed delimiter arrangements.
 These bounds concern represented inputs; they do not imply exhaustive enumeration of their Cartesian product.
+
+## Transient terminal screen contract
+
+The renderer shall distinguish durable output and operational facts from descriptive detail which is eligible for interactive ellipsis.
+Descriptions supplied through the generic detail boundary shall receive the same display budget as request destinations, independently of message wording or the producing workflow.
+No animation glyph or transient description shall remain on the visible screen after its live region is cleared for completion, failure, durable output, warnings, confirmation or destruction.
+Ordinary fallback notices may preserve oversized operational facts, but shall not retain loading glyphs or descriptive detail.
+Clearing shall preserve preceding durable output and shall not consume subsequent output.
+
+The terminal-screen suite uses an independent `vt100` screen model rather than treating emitted erase sequences as evidence that erasure succeeded.
+It obtains detail from real application workflows running against in-memory command and HTTP fixtures, including native-stack creation and unchanged reconciliation.
+The deterministic matrix uses 40, 80 and 124 columns with colour enabled and disabled; a native pseudo-terminal matrix additionally replays actual Console bytes and newline processing at those widths.
+The generated screen property ordinarily executes 128 cases with independently varied initial and resized widths from 40 through 179 columns, zero through 149 Unicode or control-character tokens, colour, completion outcome and clearing boundary.
+It honours `PROPTEST_CASES` and `PROPTEST_RNG_SEED`, and retains minimised failure seeds under `proptest-regressions/tests/terminal_screen.txt`.
+The screen model covers cursor movement, line erasure, wrapping and its defined resize semantics; graphical-terminal-specific reflow and joined-emoji shaping remain outside that model.
+Separate grapheme-width assertions retain joined-emoji coverage without attributing graphical shaping support to the emulator.
+Sensitivity experiments must reject the restored unbounded-detail decision and a restored permanent loading glyph through executed screen assertions.
 
 ## Bounded state transitions and failure positions
 
