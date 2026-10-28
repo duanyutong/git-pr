@@ -9,10 +9,6 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: acceptance-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 env:
   RUST_TEST_THREADS: '6'
   CARGO_TERM_COLOR: always
@@ -20,6 +16,9 @@ env:
 jobs:
   validation:
     name: Validation (${{ matrix.os }})
+    concurrency:
+      group: acceptance-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}-validation-${{ matrix.os }}
+      cancel-in-progress: true
     strategy:
       fail-fast: false
       matrix:
@@ -90,6 +89,9 @@ jobs:
 
   boundaries:
     name: ${{ matrix.gate }}
+    concurrency:
+      group: acceptance-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}-boundaries-${{ matrix.gate }}
+      cancel-in-progress: true
     strategy:
       fail-fast: false
       matrix:
@@ -163,3 +165,60 @@ jobs:
             target/validation/assurance/
             target/validation/fuzz/
             proptest-regressions/
+
+  release:
+    name: Release
+    needs: [validation, boundaries]
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      needs.validation.result == 'success' &&
+      needs.boundaries.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    concurrency:
+      group: release-tags
+      cancel-in-progress: false
+      queue: max
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+      - name: Development tool versions
+        id: tools
+        run: |
+          . scripts/dev-tools.env
+          echo "uv=$UV_VERSION" >> "$GITHUB_OUTPUT"
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: ${{ steps.tools.outputs.uv }}
+          enable-cache: true
+          cache-python: true
+      - name: Provision versioning environment
+        run: uv sync --locked --no-dev
+      - name: Configure tag identity
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+      - name: Verify and publish annotated tags
+        env:
+          VALIDATED_HEAD: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+          GIT_TERMINAL_PROMPT: '0'
+          GIT_CONFIG_COUNT: '2'
+          GIT_CONFIG_KEY_0: credential.helper
+          GIT_CONFIG_VALUE_0: ''
+          GIT_CONFIG_KEY_1: credential.https://github.com.helper
+          GIT_CONFIG_VALUE_1: '!gh auth git-credential'
+        run: |
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$VALIDATED_HEAD" refs/remotes/origin/main; then
+            printf 'Validated revision %s is no longer in origin/main; refusing to publish tags.\n' "$VALIDATED_HEAD" >&2
+            exit 1
+          fi
+          uv run --locked --no-dev scripts/version.py tag-range 0000000000000000000000000000000000000000 "$VALIDATED_HEAD"

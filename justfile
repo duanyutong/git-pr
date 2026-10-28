@@ -19,6 +19,7 @@ typecheck:
     cargo check --workspace --all-targets --all-features --locked
 
 test:
+    uv run --locked scripts/test_workflows.py
     uv run --locked scripts/test_version.py
     uv run scripts/test_coverage.py
     uv run scripts/test_assurance.py

@@ -258,3 +258,15 @@ Regression cases require retained selected and historical rows, all outcome coun
 Status cases assert complete progress, quota, retry and reset information independently of line-width assertions.
 Native pseudo-terminal tests exercise independently sized standard-output and standard-error streams, resizing between one-row and two-row frames, and complete clearing before durable output.
 Unclassified operational messages and substantive diagnostics remain complete; exceptionally narrow panes fall back to ordinary messages rather than clipped facts.
+
+## CI workflow contracts
+
+`just test` runs `scripts/test_workflows.py` against the parsed workflow definitions.
+The contracts require both complete acceptance matrices before main-push publication, read-only validation credentials, built-in Contents write permission only for Release, isolated cancellation groups and exactly one publisher.
+Disposable Git repositories execute the actual publication guard and demonstrate that an ordinary advance retains the original validated revision while a rewrite refuses the removed revision before the tag helper runs.
+A dummy credential helper verifies command-scoped authentication without production credentials, network access or persistent tokens.
+Routine publication requires no custom credential settings or token-minting action.
+
+GitHub documents `concurrency.queue: max`; actionlint 1.7.12 does not yet recognise that field.
+The parsed workflow contract validates the exact queue and cancellation combination independently.
+Local actionlint validation may exclude only that documented unsupported-key diagnostic while retaining all other workflow checks; hosted queue and rollup behaviour require observation after an authorised push.
