@@ -1,6 +1,9 @@
 //! Native topology reconciliation; Git publication is owned exclusively by Git.
 
-use super::GitHub;
+use super::{
+    GitHub,
+    policy::{self, NativeAction},
+};
 use crate::model::{Commit, PullRequest};
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
@@ -62,6 +65,133 @@ pub(crate) enum StackOutcome {
 }
 
 impl GitHub<'_> {
+    pub(crate) fn check_stack_eligibility(
+        &self,
+        commits: &[Commit],
+        base: &str,
+        restoring: bool,
+    ) -> Result<()> {
+        let selected: Vec<_> = commits.iter().filter(|commit| !commit.skip).collect();
+        if selected.len() < 2 {
+            return Ok(());
+        }
+        let mut observed = Vec::new();
+        let mut desired = Vec::new();
+        for commit in selected {
+            let pr = self.publication_pr(commit.remote_ref())?;
+            desired.push(pr.as_ref().map_or(0, |pr| pr.number));
+            if let Some(pr) = pr {
+                observed.push(pr);
+            }
+        }
+        self.refresh_prs(&observed.iter().map(|pr| pr.number).collect::<Vec<_>>())?;
+        for pr in &mut observed {
+            *pr = self.get(pr.number)?;
+            policy::require_open(pr)?;
+        }
+        // Eligible observations cannot block any native operation; avoid topology
+        // requests solely for preflight when no eligibility decision needs them.
+        if observed.iter().all(|pr| pr.auto_merge == Some(false)) {
+            return Ok(());
+        }
+        let action = if restoring {
+            NativeAction::Rebuild
+        } else {
+            for pr in &mut observed {
+                *pr = self.get_with_stack(pr.number)?;
+            }
+            let topology = self.selected_topology(&observed)?;
+            Self::native_plan(topology.as_ref(), &desired, base)
+        };
+        Self::check_native_plan(action, &desired, &observed)
+    }
+
+    fn selected_topology(&self, observed: &[Arc<PullRequest>]) -> Result<Option<Topology>> {
+        let stacks: BTreeSet<_> = observed
+            .iter()
+            .filter_map(|pr| pr.stack.as_ref().map(|stack| stack.number))
+            .collect();
+        if stacks.contains(&0) {
+            bail!(
+                "invalid native stack identity #0 in PR observation; no native stack changes were made"
+            );
+        }
+        if stacks.len() > 1 {
+            bail!(
+                "selected PRs belong to multiple native stacks; resolve their membership before linking"
+            );
+        }
+        stacks
+            .first()
+            .map(|&number| self.observe_topology(number, observed))
+            .transpose()
+    }
+
+    fn native_plan(topology: Option<&Topology>, desired: &[u64], base: &str) -> NativeAction {
+        let current: Vec<_> = topology.map_or_else(Vec::new, |topology| {
+            topology.pull_requests.iter().map(|pr| pr.number).collect()
+        });
+        let base_agrees = topology.is_none_or(|topology| {
+            current.first() != desired.first() || topology.base.name == base
+        });
+        policy::native_action(desired, &current, base_agrees)
+    }
+
+    fn check_native_plan(
+        action: NativeAction,
+        desired: &[u64],
+        observed: &[Arc<PullRequest>],
+    ) -> Result<()> {
+        let affected = match action {
+            NativeAction::Unchanged => return Ok(()),
+            NativeAction::Append(start) => &desired[start..],
+            NativeAction::Create | NativeAction::Rebuild => desired,
+        };
+        policy::require_native_eligibility(
+            observed
+                .iter()
+                .filter(|pr| affected.contains(&pr.number))
+                .map(AsRef::as_ref),
+        )
+    }
+
+    fn native_request(&self, path: &str, body: Option<&serde_json::Value>) -> Result<Vec<u8>> {
+        use crate::model::outcome::Operation;
+        self.commands.outcomes.start(Operation::NativeStack);
+        self.request("POST", path, body)
+            .inspect(|_| self.commands.outcomes.confirm(Operation::NativeStack))
+            .map_err(|error| {
+                if error
+                    .downcast_ref::<super::http::HttpStatusError>()
+                    .is_some_and(|status| {
+                        matches!(status.status.as_u16(), 400..=499) && status.status.as_u16() != 408
+                    })
+                {
+                    self.commands.outcomes.reject(Operation::NativeStack);
+                }
+                let number = error
+                    .downcast_ref::<super::http::HttpStatusError>()
+                    .filter(|status| status.status.as_u16() == 422)
+                    .and_then(|status| serde_json::from_str::<serde_json::Value>(&status.body).ok())
+                    .and_then(|body| {
+                        body["message"]
+                            .as_str()?
+                            .strip_prefix("Pull request #")?
+                            .strip_suffix(" has auto-merge enabled")?
+                            .parse::<u64>()
+                            .ok()
+                    });
+                if let Some(number) = number {
+                    error.context(policy::NativeEligibility {
+                        enabled: vec![number],
+                        unknown: Vec::new(),
+                    })
+                } else {
+                    error
+                }
+            })
+    }
+
     pub(crate) fn check_transition_stack(
         &self,
         number: u64,
@@ -84,16 +214,22 @@ impl GitHub<'_> {
     }
 
     pub(crate) fn unstack_transition(&self, number: u64) -> Result<()> {
+        self.commands
+            .outcomes
+            .start(crate::model::outcome::Operation::NativeStack);
         let result = self.request_url(
             "POST",
             &self.repo_url(&format!("stacks/{number}/unstack")),
             None,
         );
         // A lost acknowledgement is resolved by fresh membership observations.
-        if let Ok(response) = result
-            && response.status != 204
-        {
-            bail!("native stack transition is incomplete; some PRs remain stacked");
+        if let Ok(response) = result {
+            self.commands
+                .outcomes
+                .confirm(crate::model::outcome::Operation::NativeStack);
+            if response.status != 204 {
+                bail!("native stack transition is incomplete; some PRs remain stacked");
+            }
         }
         Ok(())
     }
@@ -123,6 +259,9 @@ impl GitHub<'_> {
         let selected: Vec<_> = commits.iter().filter(|c| !c.skip).collect();
         if selected.len() < 2 {
             self.warn_blocked(commits);
+            self.commands
+                .terminal
+                .outcome("Native linking not needed: fewer than two active PRs");
             return Ok(StackOutcome::Unchanged);
         }
         let desired: Vec<_> = selected.iter().map(|c| c.pr_number).collect();
@@ -139,32 +278,12 @@ impl GitHub<'_> {
                 observed.push(self.get_with_stack(number)?);
             }
         }
-        let stacks: BTreeSet<_> = observed
-            .iter()
-            .filter_map(|pr| pr.stack.as_ref().map(|s| s.number))
-            .collect();
-        if stacks.contains(&0) {
-            bail!(
-                "invalid native stack identity #0 in PR observation; no native stack changes were made"
-            );
-        }
-        if stacks.len() > 1 {
-            bail!(
-                "selected PRs belong to multiple native stacks; resolve their membership before linking"
-            );
-        }
-        let topology = stacks
-            .first()
-            .map(|&number| self.observe_topology(number, &observed))
-            .transpose()?;
+        let topology = self.selected_topology(&observed)?;
         let joined = selected
             .iter()
             .map(|c| c.remote_ref())
             .collect::<Vec<_>>()
             .join(" ");
-        let current: Vec<_> = topology.as_ref().map_or_else(Vec::new, |t| {
-            t.pull_requests.iter().map(|p| p.number).collect()
-        });
         for (i, pr) in observed.iter().enumerate() {
             super::policy::require_publication_base(
                 pr,
@@ -175,37 +294,40 @@ impl GitHub<'_> {
                 },
             )?;
         }
-        let stack_base_agrees = topology
-            .as_ref()
-            .is_none_or(|t| current.first() != desired.first() || t.base.name == base);
-        if stack_base_agrees
-            && (current == desired || current.windows(desired.len()).any(|slice| slice == desired))
-        {
+        let action = Self::native_plan(topology.as_ref(), &desired, base);
+        Self::check_native_plan(action, &desired, &observed)?;
+        if action == NativeAction::Unchanged {
             self.commands
                 .terminal
                 .detail(&format!("GitHub Stack unchanged: {joined}"));
+            self.commands
+                .terminal
+                .outcome("Native stack already up to date");
             return Ok(StackOutcome::Unchanged);
         }
         if let Some(topology) = topology {
-            if stack_base_agrees && desired.starts_with(&current) {
-                self.request(
-                    "POST",
+            if let NativeAction::Append(start) = action {
+                self.native_request(
                     &format!("stacks/{}/add", topology.number),
-                    Some(&json!({"pull_requests":&desired[current.len()..]})),
+                    Some(&json!({"pull_requests":&desired[start..]})),
                 )?;
             } else if self.rebuild(&topology, &observed, &desired, base, &joined)?
                 == StackOutcome::Declined
             {
                 self.commands.out("skipped GitHub Stack rebuild");
+                self.commands
+                    .terminal
+                    .outcome("Native stack rebuild skipped");
                 self.warn_blocked(commits);
                 return Ok(StackOutcome::Declined);
             }
         } else {
-            self.request("POST", "stacks", Some(&json!({"pull_requests":desired})))?;
+            self.native_request("stacks", Some(&json!({"pull_requests":desired})))?;
         }
         self.commands
             .terminal
             .detail(&format!("GitHub Stack updated: {joined}"));
+        self.commands.terminal.outcome("Native stack linked");
         Ok(StackOutcome::Updated)
     }
     fn rebuild(
@@ -239,7 +361,13 @@ impl GitHub<'_> {
             "https://api.{}/repos/{}/stacks/{}/unstack",
             self.config.repo.host, self.config.repo.name, topology.number
         );
+        self.commands
+            .outcomes
+            .start(crate::model::outcome::Operation::NativeStack);
         let remainder = self.request_url("POST", &url, None)?;
+        self.commands
+            .outcomes
+            .confirm(crate::model::outcome::Operation::NativeStack);
         if remainder.status != 204 {
             bail!(
                 "stack #{} could not be dissolved: some PRs remain stacked",
@@ -255,6 +383,14 @@ impl GitHub<'_> {
             drop(times);
         }
         self.refresh_prs(desired)?;
+        policy::require_native_eligibility(
+            desired
+                .iter()
+                .map(|number| self.get(*number))
+                .collect::<Result<Vec<_>>>()?
+                .iter()
+                .map(AsRef::as_ref),
+        )?;
         for (i, original) in observed.iter().enumerate() {
             let base = if i == 0 {
                 base
@@ -269,7 +405,7 @@ impl GitHub<'_> {
                 base,
             )?;
         }
-        self.request("POST", "stacks", Some(&json!({"pull_requests":desired})))?;
+        self.native_request("stacks", Some(&json!({"pull_requests":desired})))?;
         Ok(StackOutcome::Updated)
     }
 }

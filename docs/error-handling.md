@@ -33,6 +33,7 @@ Other access, execution and decoding failures shall retain a diagnostic rather t
 | Incomplete REST PR content or inconsistent creation identity | Reject missing reconciled fields and unexpected heads, bases or repositories before adopting an identity or changing cached content; an invalid creation response shall explain that a PR may already exist and require remote verification before retrying. |
 | Overlapping or non-advancing REST association pages | Deduplicate matching PR identities; reject a full page with no new identities, identify the requested association and page, and leave the incomplete result uncached. |
 | Inconsistent native-stack identity or membership | Identify the requested stack and conflicting observation; reject empty, duplicate or missing member identities before any native-stack mutation. |
+| Auto-merge conflicts with a required native membership change | Identify the blocking PRs during preparation where possible; require explicitly disabled auto-merge for affected PRs, or disabling optional native linking, without changing merge settings automatically. |
 | Existing PR base differs from the planned base | Permit recovery to the configured trunk only with verified merged-downstack identity and ancestry; otherwise stop before rewriting or publication, without offering a confirmation bypass. |
 | Recovery retarget or publication is uncertain | Observe before proceeding, retain confirmed base changes, and stop if identity, head, membership or base differs; never reopen or replace a closed PR implicitly. |
 | Native member requires base recovery | Require a separately verified native transition; native-mode preferences and confirmation flags shall not bypass this refusal. |
@@ -71,6 +72,10 @@ Retry policy remains restricted to explicitly recognised throttling responses; t
 Successful invocation budgets and completion barriers remain subject to the [submission efficiency contract](submission-efficiency.md).
 
 The final PR listing is emitted only after description reconciliation and native linking have completed successfully.
+An independent failure summary is emitted on standard error and reports confirmed effects separately from operations whose outcomes remain unconfirmed.
+Checked resources shall not be described as changed, and an operation that was never attempted shall not be described as reconciled successfully.
+When no branch or PR mutation was confirmed or remains unconfirmed, the summary states that no branches were pushed or PR content changed.
+Native-stack mutations retain their own outcome, including a partially completed rebuild.
 Errors after publication shall retain their phase-specific partial-effect diagnostics without printing that completion listing.
 An HTTP 502 during a description mutation may represent partial application; this release does not retry that mutation blindly or treat its absence from the completion listing as proof of rollback.
 

@@ -87,6 +87,8 @@ Verified linear ancestry supplies selection depths even when the remote trunk ha
 Descendant discovery uses bounded candidate reduction followed by verification against every input batch; 129 branch tips require four ancestry subprocesses, whilst divergent histories remain explicitly ambiguous.
 
 Workflow coverage includes first, changed and unchanged submissions; range and non-contiguous selection; descendant descriptions; all checkpoints; dry-run effects; author and draft filtering; labels, templates and history; native stack linking, rejection, rebuilding and partial failure.
+Native eligibility regressions distinguish disabled, enabled and unconfirmed auto-merge observations, reject incompatible creation or rebuilding before effects, and retain server evidence for later validation failures.
+Output regressions distinguish checked resources, confirmed changes and unconfirmed mutations, and require equivalent submission effects for verbose and debug aliases.
 Managed-footer regressions require explicit rejection of unmatched, reversed, nested and duplicate delimiters, preservation of observed human text and zero content mutations on repeated failed submissions.
 Description-initialisation regressions reject reserved delimiters in commit messages and PR templates before the affected creation or content update, retain existing descriptions and permit safe repair and idempotent repetition in both footer styles and native modes.
 Malformed remote regressions include raw slashes, whitespace and line boundaries in synthetic credentials, covering parser errors, verbose output, warnings, both command-failure protocols and percent-encoded equivalents.

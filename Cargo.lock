@@ -464,7 +464,7 @@ dependencies = [
 
 [[package]]
 name = "git-pr"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "anyhow",
  "base64",

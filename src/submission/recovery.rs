@@ -379,6 +379,18 @@ impl Recovery {
         };
         self.check_final_graph(git, &state.stack)?;
         let mut current = self.fresh(github, &state.stack, false)?;
+        if self.restore_native() {
+            let base = state
+                .stack
+                .iter()
+                .enumerate()
+                .skip(state.start)
+                .find(|(_, commit)| !commit.skip)
+                .map_or(github.config.repo.trunk.as_str(), |(index, _)| {
+                    bases[index].as_str()
+                });
+            github.check_stack_eligibility(state.selected(), base, true)?;
+        }
         if self.staging.is_none() && !self.direct_is_safe(git, &state.stack)? {
             bail!(
                 "prepared commits require a different publication transition; retry from fresh state"
@@ -410,6 +422,10 @@ impl Recovery {
                     "native stack transition is incomplete; publication stopped and journal retained"
                 );
             }
+            github
+                .commands
+                .outcomes
+                .confirm(crate::model::outcome::Operation::NativeStack);
         }
         if let Some(reference) = &self.staging {
             let anchor = Commit {

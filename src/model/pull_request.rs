@@ -18,6 +18,9 @@ pub(crate) struct PullRequest {
     pub head: Reference,
     pub base: Reference,
     pub stack: Option<NativeStack>,
+    /// None denotes missing evidence; an explicit API null denotes disabled auto-merge.
+    #[serde(deserialize_with = "auto_merge")]
+    pub auto_merge: Option<bool>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
@@ -50,6 +53,27 @@ pub(crate) fn nullable_body<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Arc<str>, D::Error> {
     Option::<Arc<str>>::deserialize(deserializer).map(Option::unwrap_or_default)
+}
+
+pub(crate) fn auto_merge<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<bool>, D::Error> {
+    Option::<serde_json::Value>::deserialize(deserializer).and_then(|request| {
+        let Some(request) = request else {
+            return Ok(Some(false));
+        };
+        if request["enabledAt"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty())
+            || matches!(
+                request["merge_method"].as_str(),
+                Some("merge" | "squash" | "rebase")
+            )
+        {
+            return Ok(Some(true));
+        }
+        Err(serde::de::Error::custom("invalid auto-merge observation"))
+    })
 }
 impl PullRequest {
     pub(crate) const fn is_merged(&self) -> bool {

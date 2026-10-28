@@ -338,6 +338,7 @@ impl Git<'_> {
             }
             args.extend(["--", &self.repo.remote]);
             args.extend(specs.iter().map(String::as_str));
+            self.record_publication(chunk, false);
             if let Err(error) = self.commands.git(&args) {
                 let refs: Vec<_> = chunk
                     .iter()
@@ -389,6 +390,7 @@ impl Git<'_> {
                     }
                 }
             }
+            self.record_publication(chunk, true);
             self.commands.terminal.progress(
                 "Branches",
                 commits.len() - remaining.len(),
@@ -396,6 +398,17 @@ impl Git<'_> {
             );
         }
         Ok(())
+    }
+
+    fn record_publication(&self, commits: &[&Commit], confirmed: bool) {
+        for commit in commits {
+            let operation = crate::model::outcome::Operation::Branch(commit.remote_ref().into());
+            if confirmed {
+                self.commands.outcomes.confirm(operation);
+            } else {
+                self.commands.outcomes.start(operation);
+            }
+        }
     }
 
     pub(crate) fn is_ancestor(&self, ancestor: &str, descendant: &str) -> Result<bool> {

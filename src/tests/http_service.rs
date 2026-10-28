@@ -48,7 +48,7 @@ pub(crate) fn respond(
             let Some(index) = key.strip_prefix('h') else {
                 continue;
             };
-            let nodes: Vec<_> = prs.values().filter(|p| p["head"]["ref"] == *reference).map(|p| json!({"number":p["number"],"id":p.get("node_id").cloned().unwrap_or_else(||json!(format!("PR_{}",p["number"]))),"title":p["title"].as_str().unwrap_or(""),"body":p["body"].as_str().unwrap_or(""),"state":p["state"].as_str().unwrap_or("open").to_uppercase(),"merged":p.get("merged").unwrap_or(&json!(false)),"headRefName":p["head"]["ref"],"baseRefName":p["base"]["ref"],"headRepository":{"nameWithOwner":"org/repo"},"stack":p["stack"],"labels":{"nodes":p["labels"].as_array().into_iter().flatten().map(|l| if l.is_string(){json!({"name":l})} else {l.clone()}).collect::<Vec<_>>(),"pageInfo":{"hasNextPage":false}}})).collect();
+            let nodes: Vec<_> = prs.values().filter(|p| p["head"]["ref"] == *reference).map(|p| json!({"number":p["number"],"id":p.get("node_id").cloned().unwrap_or_else(||json!(format!("PR_{}",p["number"]))),"title":p["title"].as_str().unwrap_or(""),"body":p["body"].as_str().unwrap_or(""),"state":p["state"].as_str().unwrap_or("open").to_uppercase(),"merged":p.get("merged").unwrap_or(&json!(false)),"headRefName":p["head"]["ref"],"baseRefName":p["base"]["ref"],"headRepository":{"nameWithOwner":"org/repo"},"autoMergeRequest":if p["auto_merge"].is_object() {json!({"enabledAt":"2026-10-27T00:00:00Z"})} else {p["auto_merge"].clone()},"stack":p["stack"],"labels":{"nodes":p["labels"].as_array().into_iter().flatten().map(|l| if l.is_string(){json!({"name":l})} else {l.clone()}).collect::<Vec<_>>(),"pageInfo":{"hasNextPage":false}}})).collect();
             repository[format!("p{index}")] =
                 json!({"nodes":nodes,"pageInfo":{"hasNextPage":false}});
         }
@@ -56,7 +56,7 @@ pub(crate) fn respond(
     }
     if path == "pulls" && method == "POST" {
         let number = prs.keys().max().copied().unwrap_or(100) + 1;
-        let pr = json!({"number":number,"node_id":format!("PR_{number}"),"title":payload["title"],"body":payload["body"],"head":{"ref":payload["head"],"repo":{"full_name":"org/repo"}},"base":{"ref":payload["base"],"repo":{"full_name":"org/repo"}},"draft":payload["draft"],"state":"open","merged":false,"labels":[]});
+        let pr = json!({"number":number,"node_id":format!("PR_{number}"),"title":payload["title"],"body":payload["body"],"head":{"ref":payload["head"],"repo":{"full_name":"org/repo"}},"base":{"ref":payload["base"],"repo":{"full_name":"org/repo"}},"draft":payload["draft"],"state":"open","merged":false,"auto_merge":null,"labels":[]});
         prs.insert(number, pr.clone());
         return Ok(pr);
     }
@@ -96,7 +96,13 @@ pub(crate) fn respond(
                 pr["base"]["ref"] = base.clone();
             }
         }
-        return Ok(pr.clone());
+        let mut observed = pr.clone();
+        observed
+            .as_object_mut()
+            .unwrap()
+            .entry("auto_merge")
+            .or_insert(Value::Null);
+        return Ok(observed);
     }
     if path.starts_with("commits/") {
         return Ok(json!(
@@ -157,6 +163,17 @@ pub(crate) fn respond(
             return Ok(Value::Null);
         }
         if method == "POST" {
+            for number in payload["pull_requests"].as_array().unwrap() {
+                let number = number.as_u64().unwrap();
+                if prs[&number]["auto_merge"].is_object() {
+                    return Err(crate::github::http::HttpStatusError {
+                        url: format!("https://api.github.com/repos/org/repo/{path}"),
+                        status: reqwest::StatusCode::UNPROCESSABLE_ENTITY,
+                        body: json!({"message":format!("Pull request #{number} has auto-merge enabled"),"status":"422"}).to_string(),
+                        quota: crate::github::limits::Quota::default(),
+                    }.into());
+                }
+            }
             for number in payload["pull_requests"].as_array().unwrap() {
                 prs.get_mut(&number.as_u64().unwrap()).unwrap()["stack"] = json!({"number":9});
             }

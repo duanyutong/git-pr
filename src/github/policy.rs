@@ -3,6 +3,91 @@
 use crate::git::policy::valid_oid;
 use crate::model::{Commit, PullRequest};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NativeAction {
+    Unchanged,
+    Create,
+    Append(usize),
+    Rebuild,
+}
+
+pub(crate) fn native_action(desired: &[u64], current: &[u64], base_agrees: bool) -> NativeAction {
+    if desired.len() < 2
+        || (base_agrees && current.windows(desired.len()).any(|slice| slice == desired))
+    {
+        NativeAction::Unchanged
+    } else if current.is_empty() {
+        NativeAction::Create
+    } else if base_agrees
+        && let Some(start) = current
+            .iter()
+            .position(|number| desired.first() == Some(number))
+        && desired.starts_with(&current[start..])
+        && !current[..start]
+            .iter()
+            .any(|number| desired.contains(number))
+    {
+        // Preserve the unselected prefix, including merged stack history.
+        NativeAction::Append(current.len() - start)
+    } else {
+        NativeAction::Rebuild
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct NativeEligibility {
+    pub enabled: Vec<u64>,
+    pub unknown: Vec<u64>,
+}
+
+impl std::fmt::Display for NativeEligibility {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let conflicts = [
+            (&self.enabled, "auto-merge enabled"),
+            (&self.unknown, "unconfirmed auto-merge state"),
+        ]
+        .into_iter()
+        .filter(|(numbers, _)| !numbers.is_empty())
+        .map(|(numbers, reason)| {
+            let numbers = numbers
+                .iter()
+                .map(|number| format!("#{number}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{reason} on PR(s) {numbers}")
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+        write!(
+            formatter,
+            "Native stack linking blocked: {conflicts}.\nTo use native stacks, verify these PRs and explicitly disable auto-merge.\nTo keep auto-merge, use --no-stack for optional native linking; required publication recovery still applies."
+        )
+    }
+}
+
+impl std::error::Error for NativeEligibility {}
+
+pub(crate) fn require_native_eligibility<'a>(
+    prs: impl Iterator<Item = &'a PullRequest>,
+) -> anyhow::Result<()> {
+    let mut failure = NativeEligibility {
+        enabled: Vec::new(),
+        unknown: Vec::new(),
+    };
+    for pr in prs {
+        match pr.auto_merge {
+            Some(false) => (),
+            Some(true) => failure.enabled.push(pr.number),
+            None => failure.unknown.push(pr.number),
+        }
+    }
+    if failure.enabled.is_empty() && failure.unknown.is_empty() {
+        Ok(())
+    } else {
+        Err(failure.into())
+    }
+}
+
 pub(crate) fn require_open(pr: &PullRequest) -> anyhow::Result<()> {
     if pr.state != "open" || pr.is_merged() {
         anyhow::bail!(

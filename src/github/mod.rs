@@ -347,6 +347,12 @@ impl GitHub<'_> {
             commit.title
         ));
         let payload = json!({"title":commit.title,"body":body,"head":commit.remote_ref(),"base":base,"draft":draft});
+        let effect = crate::model::outcome::Operation::Creation(commit.remote_ref().into());
+        self.commands.explain(&format!(
+            "Creating PR for head {:?} with base {base:?}.",
+            commit.remote_ref()
+        ));
+        self.commands.outcomes.start(effect.clone());
         let response = self.request("POST", "pulls", Some(&payload));
         let bytes = match response {
             Ok(bytes) => bytes,
@@ -360,6 +366,7 @@ impl GitHub<'_> {
                     return Err(error);
                 }
                 commit.pr_number = number;
+                self.commands.outcomes.confirm(effect);
                 return Ok(());
             }
         };
@@ -371,6 +378,7 @@ impl GitHub<'_> {
         .with_context(|| format!("invalid PR creation response for head {:?} and base {base:?}; a PR may already exist. Verify the remote PR before retrying submission", commit.remote_ref()))?;
         commit.pr_number = pr.number;
         commit.newly_created = true;
+        self.commands.outcomes.confirm(effect);
         self.session
             .heads()
             .entry(commit.remote_ref().into())
@@ -459,11 +467,14 @@ impl GitHub<'_> {
                     })
                     .collect();
                 if !additions.is_empty() {
+                    let effect = crate::model::outcome::Operation::Labels(number);
+                    self.commands.outcomes.start(effect.clone());
                     self.request(
                         "POST",
                         &format!("issues/{number}/labels"),
                         Some(&json!({"labels":additions})),
                     )?;
+                    self.commands.outcomes.confirm(effect);
                     Arc::make_mut(&mut pr).labels.extend(
                         additions
                             .into_iter()
@@ -476,7 +487,10 @@ impl GitHub<'_> {
                         &label,
                         percent_encoding::NON_ALPHANUMERIC,
                     );
+                    let effect = crate::model::outcome::Operation::Labels(number);
+                    self.commands.outcomes.start(effect.clone());
                     self.request("DELETE", &format!("issues/{number}/labels/{encoded}"), None)?;
+                    self.commands.outcomes.confirm(effect);
                     Arc::make_mut(&mut pr)
                         .labels
                         .retain(|value| !value.name().eq_ignore_ascii_case(&label));

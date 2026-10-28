@@ -6,6 +6,8 @@ Boolean options may use `=true` or `=false`, including the accepted Boolean spel
 A following positional `false` is a revision, not an option value.
 Repeated scalar options retain the final value; label options accumulate.
 The verbosity switches are cumulative up to level two; an explicit false value resets verbosity.
+The aliases `-v` and `--verbose` select verbose output, whilst `-vv` and `--debug` select debug output directly.
+Repeating `-v` or `--verbose` selects debug output, including mixed spellings.
 Unsupported symmetric-difference ranges, incomplete ranges and ranges combined with other commit arguments are rejected before repository discovery or working-copy changes.
 Valid revision expressions continue to resolve after the initial Jujutsu snapshot.
 
@@ -33,8 +35,8 @@ Valid revision expressions continue to resolve after the initial Jujutsu snapsho
 | `--timeout` | HTTP timeout in seconds; defaults to 20. Non-positive values expire immediately. |
 | `--stop-after` | Stops at a named checkpoint, as specified below. |
 | `--branch-from-title` | Accepted configuration switch; it does not currently alter branch selection. |
-| `-v` | Phase, command, HTTP and wait timings on standard error, followed by an elapsed-time summary. |
-| `-vv`, `-v -v` | Timing plus detailed subprocess and HTTP diagnostics. |
+| `-v`, `--verbose` | Application decision explanations and phase, command, HTTP and wait timings on standard error, followed by an elapsed-time summary. |
+| `-vv`, `-v -v`, `--debug` | Verbose output plus detailed subprocess and HTTP diagnostics. |
 | `--version`, `--help`, `-h` | Display version or usage and exit. |
 
 Environment switches `GIT_PR_DRY_RUN`, `GIT_PR_YES`, `GIT_PR_NO_STACK`, `GIT_PR_SKIP_DRAFT` and `GIT_PR_INCLUDE_DRAFT` enable their corresponding behaviour only when equal to `1`; an explicit false CLI value does not cancel such an enabling environment switch.
@@ -208,6 +210,7 @@ Publication uses full object identities and batches at most 128 refspecs within 
 Git hooks run normally for each publication batch.
 Pull-request observations and content mutations use at most 25 GraphQL aliases per request, with complete REST pagination where required.
 Native linking uses the GitHub stack API directly and does not invoke the `gh-stack` extension.
+When the selected PRs begin with the existing native stack's suffix, linking appends only the new PRs and preserves all preceding members, including merged history.
 An unchanged submission still verifies publication through Git and obtains fresh PR observations, but performs no metadata mutation or fixed visibility wait.
 Plain Git submissions require no rewrite backend.
 Each trailer-free change must have a maintained local branch or bookmark; publication identity is stored separately from its message.

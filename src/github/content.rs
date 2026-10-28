@@ -168,6 +168,11 @@ impl GitHub<'_> {
             pr.title.clone_from(&change.commit.title);
             pr.body = body;
             if current.title == desired.title && current.body == desired.body {
+                self.commands
+                    .outcomes
+                    .confirm(crate::model::outcome::Operation::Description(
+                        current.number,
+                    ));
                 self.remember_update(Arc::clone(&current));
             }
             change.before = current;
@@ -263,6 +268,9 @@ impl GitHub<'_> {
                 // Render from this observation: expiry may have acquired newer human text.
                 let (body, prepared) = Self::content_body(commit, &pr, deferred.take(), render)?;
                 if pr.title == *title && (Arc::ptr_eq(&pr.body, &body) || pr.body == body) {
+                    self.commands.explain(&format!(
+                        "PR #{number}: title and description already current."
+                    ));
                     consumed += 1;
                     progress.advance(1);
                     continue;
@@ -273,6 +281,8 @@ impl GitHub<'_> {
                     progress.advance(1);
                     continue;
                 }
+                self.commands
+                    .explain(&format!("PR #{number}: updating title or description."));
                 // Reserve bounded query overhead as well as JSON-escaped UTF-8 payload bytes.
                 let (input, size) = Self::encode_content(&pr.node_id, title, &body, prepared);
                 if payload_bytes + size > CONTENT_LIMIT {
@@ -375,6 +385,8 @@ impl GitHub<'_> {
         #[cfg(test)]
         crate::tests::unit::support::CONTENT_ENCODINGS.update(|n| n + 1);
         ensure_content_size(&encoded)?;
+        let effect = crate::model::outcome::Operation::Description(before.number);
+        self.commands.outcomes.start(effect.clone());
         let result = self.request_url_encoded(
             "PATCH",
             &self.repo_url(&format!("pulls/{}", before.number)),
@@ -399,6 +411,7 @@ impl GitHub<'_> {
                 error,
             )
         } else {
+            self.commands.outcomes.confirm(effect);
             self.remember_update(after);
             Ok(())
         }
@@ -424,6 +437,13 @@ impl GitHub<'_> {
             payload.extend_from_slice(&input);
         }
         payload.extend_from_slice(b"}}");
+        for change in observations.iter() {
+            self.commands
+                .outcomes
+                .start(crate::model::outcome::Operation::Description(
+                    change.before.number,
+                ));
+        }
         // The initial 256-byte allowance and 256 bytes per alias exceed this
         // envelope's fixed ASCII overhead; input bytes were already bounded.
         let response = self
@@ -466,6 +486,11 @@ impl GitHub<'_> {
         for change in observations {
             if data[format!("p{}", change.alias)]["pullRequest"]["number"] == change.after.number {
                 change.acknowledged = true;
+                self.commands
+                    .outcomes
+                    .confirm(crate::model::outcome::Operation::Description(
+                        change.after.number,
+                    ));
                 self.remember_update(Arc::clone(&change.after));
             } else {
                 incomplete = true;

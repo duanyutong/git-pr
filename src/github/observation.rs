@@ -39,6 +39,8 @@ struct RestObservation {
     head: RestReference,
     base: RestReference,
     stack: Option<crate::model::pull_request::NativeStack>,
+    #[serde(default, deserialize_with = "crate::model::pull_request::auto_merge")]
+    auto_merge: Option<bool>,
 }
 
 pub(super) fn decode_rest(
@@ -93,6 +95,7 @@ pub(super) fn decode_rest(
         head: crate::model::pull_request::Reference { name: pr.head.name },
         base: crate::model::pull_request::Reference { name: pr.base.name },
         stack: pr.stack,
+        auto_merge: pr.auto_merge,
     })
 }
 
@@ -439,7 +442,7 @@ impl GitHub<'_> {
                     });
                 let _ = write!(
                     fields,
-                    "p{i}:pullRequests(headRefName:$h{i},first:100{after},orderBy:{{field:UPDATED_AT,direction:DESC}}){{nodes{{id number title body state merged headRefName baseRefName headRepository{{nameWithOwner}} labels(first:100){{nodes{{name}} pageInfo{{hasNextPage endCursor}}}} {stack}}} pageInfo{{hasNextPage endCursor}}}} "
+                    "p{i}:pullRequests(headRefName:$h{i},first:100{after},orderBy:{{field:UPDATED_AT,direction:DESC}}){{nodes{{id number title body state merged headRefName baseRefName headRepository{{nameWithOwner}} autoMergeRequest{{enabledAt}} labels(first:100){{nodes{{name}} pageInfo{{hasNextPage endCursor}}}} {stack}}} pageInfo{{hasNextPage endCursor}}}} "
                 );
                 variables[format!("h{i}")] = json!(head.reference);
             }
@@ -673,6 +676,12 @@ fn decode_nodes(
 
 /// Move response values into REST-shaped fields without copying description text.
 pub(super) fn normalise_node(node: &mut Value) {
+    if let Some(request) = node
+        .as_object_mut()
+        .and_then(|fields| fields.remove("autoMergeRequest"))
+    {
+        node["auto_merge"] = request;
+    }
     node["node_id"] = node["id"].take();
     node["head"] =
         Value::Object(std::iter::once(("ref".into(), node["headRefName"].take())).collect());

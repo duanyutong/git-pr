@@ -62,6 +62,8 @@ fn run_with_terminal(args: Vec<String>, terminal: &Arc<dyn Terminal>) -> u8 {
         cwd,
         env: BTreeMap::new(),
         verbose: false,
+        explain: false,
+        outcomes: crate::model::outcome::Outcomes::default(),
         diagnostics: crate::diagnostics::Diagnostics::default(),
     };
     let app = Application {
@@ -80,13 +82,6 @@ fn run_with_terminal(args: Vec<String>, terminal: &Arc<dyn Terminal>) -> u8 {
     };
     match app.execute(&flags, &environment) {
         Ok(()) => 0,
-        Err(error) => {
-            let diagnostic = format!("{error:#}");
-            terminal.err(&format!(
-                "\x1b[31m{}\x1b[0m\n",
-                errors::redact_url_credentials(&diagnostic)
-            ));
-            errors::status(&error)
-        }
+        Err(error) => errors::status(&error),
     }
 }

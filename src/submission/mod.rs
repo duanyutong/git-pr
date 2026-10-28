@@ -37,6 +37,8 @@ pub(crate) struct Application {
 
 impl Application {
     pub(crate) fn execute(mut self, flags: &Flags, env: &BTreeMap<String, String>) -> Result<()> {
+        self.commands.explain = flags.verbosity() > 0;
+        self.commands.outcomes = crate::model::outcome::Outcomes::default();
         // Publication transfers stored objects, so every observation
         // must use those same objects rather than a local replacement view.
         self.commands
@@ -54,9 +56,14 @@ impl Application {
         }
         let diagnostics = self.commands.diagnostics.clone();
         let terminal = Arc::clone(&self.commands.terminal);
+        let mut reporting = self.commands.clone();
+        reporting.verbose = flags.verbosity() > 1;
         let result = self.submit(flags, env);
         terminal.finish(result.is_ok());
         diagnostics.summary(result.is_ok());
+        if let Err(error) = &result {
+            presentation::failure_outcome(&reporting, error);
+        }
         result
     }
 

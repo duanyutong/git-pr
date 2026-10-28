@@ -103,6 +103,9 @@ pub(crate) trait Terminal: Debug + Send + Sync {
         self.stage(label);
     }
     fn finish(&self, _success: bool) {}
+    fn outcome(&self, completed: &str) {
+        self.err(&format!("{completed}\n"));
+    }
     fn detail(&self, text: &str) {
         self.out(text);
     }
@@ -182,6 +185,8 @@ pub(crate) struct Commands {
     pub cwd: PathBuf,
     pub env: BTreeMap<OsString, OsString>,
     pub verbose: bool,
+    pub explain: bool,
+    pub outcomes: crate::model::outcome::Outcomes,
     pub diagnostics: crate::diagnostics::Diagnostics,
 }
 
@@ -288,6 +293,14 @@ impl Commands {
     }
     pub(crate) fn detail(&self, text: &str) {
         self.terminal.detail(text);
+    }
+    pub(crate) fn explain(&self, text: &str) {
+        if self.explain {
+            self.terminal.err(&format!(
+                "{}\n",
+                crate::diagnostics::errors::redact_url_credentials(text)
+            ));
+        }
     }
     pub(crate) fn progress_prs(
         &self,

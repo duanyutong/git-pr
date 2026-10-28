@@ -1,4 +1,5 @@
 mod commit;
+pub(crate) mod outcome;
 pub(crate) mod pull_request;
 mod repository;
 pub(crate) mod trailers;

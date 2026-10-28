@@ -15,6 +15,139 @@ fn publication_effect(event: &serde_json::Value) -> bool {
 }
 
 #[test]
+fn auto_merge_preflight_stops_before_local_persistence_and_remote_mutation() {
+    for args in [
+        vec!["--github-stack"],
+        vec!["--verbose", "--github-stack"],
+        vec!["--debug", "--github-stack"],
+    ] {
+        let world = World::new(2);
+        world.run(&["--no-stack"]).unwrap();
+        let original = {
+            let mut memory = world.0.lock().unwrap();
+            for pr in memory.prs.values_mut() {
+                pr["auto_merge"] = serde_json::json!({"merge_method":"squash"});
+            }
+            memory.trace.clear();
+            memory.stderr.clear();
+            (
+                memory.config.clone(),
+                memory.prs.clone(),
+                memory.remote_refs.clone(),
+            )
+        };
+        let error = world.run(&args).unwrap_err();
+        assert!(format!("{error:#}").contains("#101, #102"));
+        assert!(!world.trace().iter().any(publication_effect));
+        let memory = world.0.lock().unwrap();
+        assert_eq!(memory.config, original.0);
+        assert_eq!(memory.prs, original.1);
+        assert_eq!(memory.remote_refs, original.2);
+        assert!(memory.stderr.contains("Native stack linking blocked"));
+        assert_eq!(
+            memory
+                .stderr
+                .matches("Native stack linking blocked")
+                .count(),
+            if args.contains(&"--debug") { 2 } else { 1 }
+        );
+        if let Some(timing) = memory.stderr.find("Timing summary:") {
+            assert!(memory.stderr.find("Native stack linking blocked").unwrap() > timing);
+        }
+        assert!(
+            memory
+                .stderr
+                .contains("No branches were pushed or PR content changed.")
+        );
+        assert!(memory.stderr.contains("--no-stack"));
+        drop(memory);
+        world.run(&["--no-stack"]).unwrap();
+        assert!(!world.0.lock().unwrap().prs[&101]["auto_merge"].is_null());
+    }
+    let world = World::new(1);
+    world.run(&["--no-stack"]).unwrap();
+    world.0.lock().unwrap().prs.get_mut(&101).unwrap()["auto_merge"] =
+        serde_json::json!({"merge_method":"squash"});
+    world.run(&["--github-stack"]).unwrap();
+}
+
+#[test]
+fn failure_summaries_preserve_confirmed_effects_and_name_unconfirmed_operations() {
+    use crate::model::outcome::Operation;
+    let world = World::new(0);
+    let commands = world.commands();
+    for operation in [
+        Operation::Branch("topic/1".into()),
+        Operation::Creation("topic/2".into()),
+        Operation::Base(101),
+        Operation::Description(101),
+        Operation::Labels(101),
+        Operation::NativeStack,
+    ] {
+        commands.outcomes.confirm(operation.clone());
+        commands.outcomes.start(operation);
+    }
+    super::presentation::failure_outcome(&commands, &anyhow::anyhow!("lost acknowledgement"));
+    let memory = world.0.lock().unwrap();
+    assert!(
+        memory
+            .stderr
+            .contains("branches published: 1; PRs created: 1; PRs updated: 1")
+    );
+    for operation in [
+        "branch publication",
+        "PR creation",
+        "base update",
+        "description update",
+        "label update",
+        "native stack mutation",
+    ] {
+        assert!(memory.stderr.contains(&format!("Unconfirmed: {operation}")));
+    }
+    assert!(!memory.stderr.contains("No branches were pushed"));
+    assert_eq!(memory.stdout, "");
+    drop(memory);
+}
+
+#[test]
+fn late_native_rejection_reports_unchanged_prs_and_keeps_the_server_cause() {
+    let world = World::new(2);
+    world.run(&["--no-stack"]).unwrap();
+    world.0.lock().unwrap().stderr.clear();
+    world.http("POST stacks", vec![crate::tests::unit::support::Response::Output(422,
+        serde_json::json!({"message":"Pull request #101 has auto-merge enabled","status":"422"}).to_string())]);
+    let error = world.run(&["--github-stack"]).unwrap_err();
+    let diagnostic = format!("{error:#}");
+    assert!(
+        diagnostic.contains("HTTP 422")
+            && diagnostic.contains("POST")
+            && diagnostic.contains("/stacks")
+    );
+    let memory = world.0.lock().unwrap();
+    assert!(
+        memory
+            .stderr
+            .contains("Native stack linking blocked: auto-merge enabled on PR(s) #101")
+    );
+    assert!(memory.stderr.contains("HTTP 422") && memory.stderr.contains("GitHub POST"));
+    assert_eq!(
+        memory
+            .stderr
+            .matches("Native stack linking blocked")
+            .count(),
+        1
+    );
+    assert!(
+        memory
+            .stderr
+            .contains("No branches were pushed or PR content changed.")
+    );
+    assert!(!memory.stderr.contains("Unconfirmed:"));
+    assert!(memory.prs.values().all(|pr| !pr["stack"].is_object()));
+    drop(memory);
+}
+
+#[test]
 fn publication_rejects_a_changed_local_selection_after_preparation() {
     for change in ["removed", "skipped", "renamed"] {
         let w = World::new(1);

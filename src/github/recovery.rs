@@ -40,6 +40,8 @@ impl GitHub<'_> {
         let current = self.recovery_pr(expected.number)?;
         policy::same_recovery_head(expected, &current, &expected.base.name)?;
         Self::require_recoverable_membership(&current)?;
+        let effect = crate::model::outcome::Operation::Base(expected.number);
+        self.commands.outcomes.start(effect.clone());
         let mutation = self.request_url_encoded(
             "PATCH",
             &self.repo_url(&format!("pulls/{}", expected.number)),
@@ -59,6 +61,7 @@ impl GitHub<'_> {
             return Err(error).with_context(|| format!("base recovery for PR #{} could not be confirmed; retain any completed PR changes and inspect before retrying{detail}", expected.number));
         }
         guard(&self.session.updated).insert(expected.number);
+        self.commands.outcomes.confirm(effect);
         Ok(())
     }
 }

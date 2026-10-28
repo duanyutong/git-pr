@@ -615,6 +615,8 @@ fn scripted(entries: &[(&str, i32, &str)]) -> Commands {
         cwd: std::env::temp_dir(),
         env: BTreeMap::new(),
         verbose: false,
+        explain: false,
+        outcomes: crate::model::outcome::Outcomes::default(),
         diagnostics: crate::diagnostics::Diagnostics::default(),
     }
 }

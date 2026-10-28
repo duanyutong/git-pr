@@ -9,9 +9,9 @@ publish = false
 cargo-fuzz = true
 
 # cargo-machete does not follow source inclusion outside this independent workspace.
-# chrono is used by snapshot/model; serde derives the included pull-request model.
+# chrono supports snapshot/model; serde and serde_json support the included PR model.
 [package.metadata.cargo-machete]
-ignored = ["chrono", "serde"]
+ignored = ["chrono", "serde", "serde_json"]
 
 # Compile the actual pure source files without widening the application's public API.
 [workspace]
@@ -56,3 +56,4 @@ anyhow = "1.0.104"
 chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 libfuzzer-sys = { version = "=0.4.13", optional = true }
 serde = { version = "1.0.229", features = ["derive", "rc"] }
+serde_json = "1.0.154"

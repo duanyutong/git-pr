@@ -44,6 +44,15 @@ Missing metadata is handled by this same procedure.
 Confirmed absence, an unavailable observation and conflicting evidence have different consequences; a failed lookup does not authorise creating a replacement PR.
 Dependency context outside the selection is read without migrating its configuration.
 
+## Historical stack context
+
+Branch associations establish publication identity; they do not constitute a chronological stack archive.
+Full description rendering collects recognised stack lists from observed PR descriptions, deduplicates their PR numbers and retains entries outside the current local context.
+The current local stack determines the order of surviving PRs, including after merged predecessors have been removed by restacking.
+Historical description entries supply presentation context and do not authorise publication, PR replacement or native stack membership changes.
+Retiring an obsolete branch association does not remove historical entries from PR descriptions.
+Compact navigation omits the complete historical list.
+
 ## Recovery and interrupted effects
 
 Deleting some or all association keys is recoverable when surviving anchors and verifiable remote evidence determine one association.

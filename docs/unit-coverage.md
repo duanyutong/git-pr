@@ -45,6 +45,7 @@ Python versioning tests reside separately in `scripts/test_version.py` and do no
 | Jujutsu operations | `jj/mod.rs`: revision cardinality, change-ID recovery, working-copy assembly and bookmark targets. |
 | Submission workflows | `submission/mod.rs`, `submission/state.rs`, `submission/recovery.rs`, `submission/pull_requests.rs` and `submission/presentation.rs`: phase barriers, publication recovery, author and draft filtering, explicit selections, PR completion, history, labels and partial failures. |
 | GitHub decisions | `github/policy.rs`: draft creation, label overlap reconciliation, PR selection and URLs, and stack failure classification. |
+| Invocation outcomes | `model/outcome.rs`: shared attempted-effect evidence, confirmed changes, rejected attempts and preservation of earlier confirmed effects after a subsequent failure. |
 | Jujutsu value interpretation | `jj/policy.rs`: working-copy status and description interpretation. |
 | Configuration paths and checkpoints | `config/paths.rs` and `config/checkpoint.rs`: home expansion, recognised phase names, absence and invalid checkpoints. |
 | Credential value interpretation | `credentials/keychain.rs`: supported native credential encodings and malformed values. |

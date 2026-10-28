@@ -146,6 +146,8 @@ impl World {
             cwd: "/unit/repo".into(),
             env: BTreeMap::new(),
             verbose: false,
+            explain: false,
+            outcomes: crate::model::outcome::Outcomes::default(),
             diagnostics: crate::diagnostics::Diagnostics::default(),
         }
     }

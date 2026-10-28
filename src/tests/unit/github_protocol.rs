@@ -8,6 +8,365 @@ use serde_json::json;
 use std::sync::{Arc, Mutex};
 
 #[test]
+fn auto_merge_observations_preserve_unknown_disabled_and_enabled_states() {
+    use crate::model::PullRequest;
+    assert_eq!(
+        serde_json::from_value::<PullRequest>(json!({}))
+            .unwrap()
+            .auto_merge,
+        None
+    );
+    assert!(serde_json::from_str::<PullRequest>("{\"auto_merge\":").is_err());
+    for (value, expected) in [
+        (json!(null), false),
+        (json!({"enabledAt":"2026-10-27T00:00:00Z"}), true),
+        (json!({"merge_method":"squash"}), true),
+    ] {
+        assert_eq!(
+            serde_json::from_value::<PullRequest>(json!({"auto_merge":value}))
+                .unwrap()
+                .auto_merge,
+            Some(expected)
+        );
+    }
+    for value in [
+        json!(true),
+        json!({}),
+        json!({"enabledAt":""}),
+        json!({"merge_method":"invalid"}),
+    ] {
+        assert!(serde_json::from_value::<PullRequest>(json!({"auto_merge":value})).is_err());
+    }
+    with_github(|github, world| {
+        world.0.lock().unwrap().prs.get_mut(&101).unwrap()["auto_merge"] =
+            json!({"merge_method":"merge"});
+        github
+            .observe(&["topic/1".into(), "topic/2".into()])
+            .unwrap();
+        assert_eq!(github.get(101).unwrap().auto_merge, Some(true));
+        assert_eq!(github.get(102).unwrap().auto_merge, Some(false));
+        github.expire_pr_observation_for_test(101);
+        assert_eq!(github.get(101).unwrap().auto_merge, Some(true));
+        assert!(world.trace().iter().any(|event| {
+            event["body"]["query"]
+                .as_str()
+                .is_some_and(|query| query.contains("autoMergeRequest{enabledAt}"))
+        }));
+    });
+}
+
+#[test]
+fn native_preflight_and_rebuilding_preserve_failed_observations() {
+    with_github(|github, world| {
+        world.0.lock().unwrap().trace.clear();
+        assert!(
+            github
+                .check_stack_eligibility(&[commit(1), commit(2)], "main", false)
+                .is_err()
+        );
+        world.0.lock().unwrap().prs.get_mut(&101).unwrap()["auto_merge"] =
+            json!({"merge_method":"squash"});
+        world.0.lock().unwrap().prs.get_mut(&101).unwrap()["stack"] = json!({"number":9});
+        github
+            .observe(&["topic/1".into(), "topic/2".into()])
+            .unwrap();
+        super::guard(&github.session.unknown_stacks).insert(101);
+        world.http(
+            "GET pulls/101",
+            vec![Reply::Failure("member inaccessible".into())],
+        );
+        assert!(
+            github
+                .check_stack_eligibility(&[commit(1), commit(2)], "main", false)
+                .is_err()
+        );
+        github.invalidate_heads(&["topic/1".into(), "topic/2".into()]);
+        github
+            .observe(&["topic/1".into(), "topic/2".into()])
+            .unwrap();
+        world.http(
+            "GET stacks/9",
+            vec![Reply::Failure("topology inaccessible".into())],
+        );
+        assert!(
+            github
+                .check_stack_eligibility(&[commit(1), commit(2)], "main", false)
+                .is_err()
+        );
+        assert!(
+            !world
+                .trace()
+                .iter()
+                .any(|event| event["method"] == "POST" && event["path"] != "graphql")
+        );
+    });
+    with_github(|github, world| {
+        for number in [101, 102] {
+            world.0.lock().unwrap().prs.get_mut(&number).unwrap()["stack"] = json!({"number":9});
+            github.get(number).unwrap();
+        }
+        world.http("GET stacks/9", vec![Reply::Output(200, json!({"number":9,"base":{"ref":"stale"},"pull_requests":[{"number":101},{"number":102}]}).to_string())]);
+        world.http("POST graphql", vec![graph_reply(json!({"p0":connection(json!([paged_node(101,"topic/1")]),None),"p1":connection(json!([]),None)}))]);
+        world.http(
+            "GET pulls/102",
+            vec![Reply::Failure(
+                "member disappeared during rebuilding".into(),
+            )],
+        );
+        let mut commits = [commit(1), commit(2)];
+        commits[0].pr_number = 101;
+        commits[1].pr_number = 102;
+        assert!(github.manage_stack(&commits, "main").is_err());
+        assert!(
+            world
+                .trace()
+                .iter()
+                .any(|event| event["path"] == "stacks/9/unstack")
+        );
+        assert!(!world.trace().iter().any(|event| event["path"] == "stacks"));
+    });
+}
+
+#[test]
+fn native_eligibility_checks_only_members_affected_by_the_planned_operation() {
+    with_github(|github, world| {
+        let mut commits = [commit(1), commit(2)];
+        for (commit, number) in commits.iter_mut().zip([101, 102]) {
+            commit.pr_number = number;
+        }
+        {
+            let mut memory = world.0.lock().unwrap();
+            memory.prs.get_mut(&101).unwrap()["auto_merge"] = json!({"merge_method":"squash"});
+        }
+        github
+            .observe(&["topic/1".into(), "topic/2".into()])
+            .unwrap();
+        let error = github
+            .check_stack_eligibility(&commits, "main", false)
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("#101"));
+        assert!(github.manage_stack(&commits, "main").is_err());
+        world.0.lock().unwrap().prs.get_mut(&101).unwrap()["stack"] = json!({"number":9});
+        github.invalidate_heads(&["topic/1".into(), "topic/2".into()]);
+        github
+            .observe(&["topic/1".into(), "topic/2".into()])
+            .unwrap();
+        // Appending the eligible new PR does not change the existing member.
+        github
+            .check_stack_eligibility(&commits, "main", false)
+            .unwrap();
+        github.manage_stack(&commits, "main").unwrap();
+        github.invalidate_heads(&["topic/1".into(), "topic/2".into()]);
+        github
+            .observe(&["topic/1".into(), "topic/2".into()])
+            .unwrap();
+        world.0.lock().unwrap().trace.clear();
+        github
+            .check_stack_eligibility(&commits, "main", false)
+            .unwrap();
+        assert_eq!(
+            github.manage_stack(&commits, "main").unwrap(),
+            super::native::StackOutcome::Unchanged
+        );
+        assert!(
+            github
+                .check_stack_eligibility(&commits, "main", true)
+                .is_err()
+        );
+        assert!(
+            github
+                .check_stack_eligibility(&[commits[1].clone(), commits[0].clone()], "main", false)
+                .is_err()
+        );
+        assert!(
+            !world
+                .trace()
+                .iter()
+                .any(|event| event["method"] == "POST" && event["path"] != "graphql")
+        );
+        commits[1].skip = true;
+        github
+            .check_stack_eligibility(&commits, "main", true)
+            .unwrap();
+    });
+}
+
+#[test]
+fn missing_auto_merge_evidence_cannot_authorise_native_mutation() {
+    with_github(|github, world| {
+        let mut node = paged_node(101, "topic/1");
+        node.as_object_mut().unwrap().remove("autoMergeRequest");
+        world.http(
+            "POST graphql",
+            vec![graph_reply(json!({"p0":connection(json!([node]),None)}))],
+        );
+        github.observe(&["topic/1".into()]).unwrap();
+        let mut commits = [commit(1), commit(2)];
+        commits[0].pr_number = 101;
+        commits[1].pr_number = 102;
+        let error = github.manage_stack(&commits, "main").unwrap_err();
+        assert!(format!("{error:#}").contains("unconfirmed auto-merge state on PR(s) #101"));
+        assert!(!world.trace().iter().any(|event| event["path"] == "stacks"));
+    });
+}
+
+#[test]
+fn native_preflight_refreshes_expired_eligibility_in_one_batched_observation() {
+    with_github(|github, world| {
+        github
+            .observe(&["topic/1".into(), "topic/2".into()])
+            .unwrap();
+        {
+            let mut memory = world.0.lock().unwrap();
+            memory.clock_elapsed += std::time::Duration::from_secs(31);
+            memory.prs.get_mut(&102).unwrap()["auto_merge"] = json!({"merge_method":"squash"});
+            memory.trace.clear();
+        }
+        assert!(
+            github
+                .check_stack_eligibility(&[commit(1), commit(2)], "main", false)
+                .is_err()
+        );
+        let requests: Vec<_> = world
+            .trace()
+            .into_iter()
+            .filter(|event| event["kind"] == "http")
+            .collect();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0]["path"], "graphql");
+    });
+}
+
+#[test]
+fn expired_preflight_observations_cannot_hide_failed_reads_or_closed_members() {
+    for (case, expected) in [
+        ("observation", "expired observation inaccessible"),
+        ("missing-member", "PR disappeared"),
+        ("closed-member", "closed"),
+    ] {
+        with_github(|github, world| {
+            github
+                .observe(&["topic/1".into(), "topic/2".into()])
+                .unwrap();
+            world.0.lock().unwrap().clock_elapsed += std::time::Duration::from_secs(31);
+            world.0.lock().unwrap().trace.clear();
+            match case {
+                "observation" => world.http(
+                    "POST graphql",
+                    vec![Reply::Failure("expired observation inaccessible".into())],
+                ),
+                "missing-member" => {
+                    world.http("POST graphql", vec![graph_reply(json!({"p0":connection(json!([paged_node(101,"topic/1")]),None),"p1":connection(json!([]),None)}))]);
+                    world.http(
+                        "GET pulls/102",
+                        vec![Reply::Failure("PR disappeared".into())],
+                    );
+                }
+                "closed-member" => {
+                    world.0.lock().unwrap().prs.get_mut(&102).unwrap()["state"] = json!("closed");
+                }
+                _ => unreachable!(),
+            }
+            let error = github
+                .check_stack_eligibility(&[commit(1), commit(2)], "main", false)
+                .unwrap_err();
+            assert!(format!("{error:#}").contains(expected));
+            assert!(
+                !world
+                    .trace()
+                    .iter()
+                    .any(|event| event["method"] == "POST" && event["path"] != "graphql")
+            );
+        });
+    }
+}
+
+#[test]
+fn native_rebuilding_rechecks_auto_merge_after_dissolution() {
+    with_github(|github, world| {
+        for number in [101, 102] {
+            world.0.lock().unwrap().prs.get_mut(&number).unwrap()["stack"] = json!({"number":9});
+            github.get(number).unwrap();
+        }
+        world.http("GET stacks/9", vec![Reply::Output(200,json!({"number":9,"base":{"ref":"stale"},"pull_requests":[{"number":101},{"number":102}]}).to_string())]);
+        let mut node = paged_node(101, "topic/1");
+        node["autoMergeRequest"] = json!({"enabledAt":"2026-10-27T00:00:00Z"});
+        world.http("POST graphql", vec![graph_reply(json!({"p0":connection(json!([node]),None),"p1":connection(json!([paged_node(102,"topic/2")]),None)}))]);
+        let mut commits = [commit(1), commit(2)];
+        commits[0].pr_number = 101;
+        commits[1].pr_number = 102;
+        world.0.lock().unwrap().trace.clear();
+        let error = github.manage_stack(&commits, "main").unwrap_err();
+        assert!(error.is::<super::policy::NativeEligibility>());
+        assert!(
+            world
+                .trace()
+                .iter()
+                .any(|event| event["path"] == "stacks/9/unstack")
+        );
+        assert!(!world.trace().iter().any(|event| event["path"] == "stacks"));
+        let native =
+            github.commands.outcomes.snapshot()[&crate::model::outcome::Operation::NativeStack];
+        assert!(native.confirmed && !native.unconfirmed);
+    });
+}
+
+#[test]
+fn native_creation_rejections_retain_server_evidence_and_specific_recovery() {
+    for (status, message, recognised) in [
+        (422, "Pull request #101 has auto-merge enabled", true),
+        (422, "Pull request #invalid has auto-merge enabled", false),
+        (422, "Pull request #101 has another constraint", false),
+        (422, "Validation Failed", false),
+        (403, "Pull request #101 has auto-merge enabled", false),
+        (408, "Request timed out", false),
+        (503, "Service unavailable", false),
+    ] {
+        with_github(|github, world| {
+            world.http(
+                "POST stacks",
+                vec![Reply::Output(
+                    status,
+                    json!({"message":message}).to_string(),
+                )],
+            );
+            let mut commits = [commit(1), commit(2)];
+            commits[0].pr_number = 101;
+            commits[1].pr_number = 102;
+            let error = github.manage_stack(&commits, "main").unwrap_err();
+            let diagnostic = format!("{error:#}");
+            assert!(diagnostic.contains(message) && diagnostic.contains("HTTP"));
+            assert_eq!(error.is::<super::policy::NativeEligibility>(), recognised);
+            if recognised {
+                assert!(diagnostic.contains("--no-stack"));
+            }
+            assert_eq!(
+                world
+                    .trace()
+                    .iter()
+                    .filter(|event| event["path"] == "stacks")
+                    .count(),
+                1
+            );
+        });
+    }
+    for body in [
+        "invalid server document".to_owned(),
+        json!({"message":17}).to_string(),
+    ] {
+        with_github(|github, world| {
+            world.http("POST stacks", vec![Reply::Output(422, body.clone())]);
+            let mut commits = [commit(1), commit(2)];
+            commits[0].pr_number = 101;
+            commits[1].pr_number = 102;
+            let error = github.manage_stack(&commits, "main").unwrap_err();
+            assert!(!error.is::<super::policy::NativeEligibility>());
+            assert!(format!("{error:#}").contains(&body));
+        });
+    }
+}
+
+#[test]
 fn unpublished_commit_associations_accept_missing_commit_statuses_only() {
     for status in [404, 422] {
         with_github(|g, w| {
@@ -541,6 +900,83 @@ fn topology_reconciliation_appends_and_protects_unselected_members() {
                 .contains("unselected")
         );
     });
+}
+
+#[test]
+fn native_extension_preserves_merged_history_and_is_idempotent() {
+    with_github(|g, w| {
+        w.0.lock().unwrap().prs.get_mut(&101).unwrap()["stack"] = json!({"number":9});
+        let mut members: Vec<_> = (90..101)
+            .map(|number| {
+                json!({"number":number,"state":"closed","merged_at":"2026-10-27T14:55:36Z"})
+            })
+            .collect();
+        members.push(json!({"number":101,"state":"open","merged_at":null}));
+        let before = json!({"number":9,"base":{"ref":"main"},"pull_requests":members});
+        members.push(json!({"number":102,"state":"open","merged_at":null}));
+        let after = json!({"number":9,"base":{"ref":"main"},"pull_requests":members});
+        w.http(
+            "GET stacks/9",
+            vec![
+                Reply::Output(200, before.to_string()),
+                Reply::Output(200, after.to_string()),
+            ],
+        );
+        let mut commits = [commit(1), commit(2)];
+        commits[0].pr_number = 101;
+        commits[1].pr_number = 102;
+        w.0.lock().unwrap().trace.clear();
+        assert_eq!(
+            g.manage_stack(&commits, "main").unwrap(),
+            super::native::StackOutcome::Updated
+        );
+        assert_eq!(
+            g.manage_stack(&commits, "main").unwrap(),
+            super::native::StackOutcome::Unchanged
+        );
+        let mutations: Vec<_> = w
+            .trace()
+            .into_iter()
+            .filter(|event| event["kind"] == "http" && event["method"] != "GET")
+            .collect();
+        assert_eq!(mutations.len(), 1);
+        assert_eq!(mutations[0]["path"], "stacks/9/add");
+        assert_eq!(mutations[0]["body"], json!({"pull_requests":[102]}));
+    });
+}
+
+#[test]
+fn native_suffix_extension_refuses_gaps_and_incompatible_bases() {
+    for (members, base, expected) in [
+        (vec![100, 101, 103], "main", "unselected"),
+        (vec![100, 101], "stale", "unsafe publication"),
+    ] {
+        with_github(|g, w| {
+            w.0.lock().unwrap().prs.get_mut(&101).unwrap()["stack"] = json!({"number":9});
+            let members: Vec<_> = members
+                .iter()
+                .map(|number| json!({"number":number}))
+                .collect();
+            w.http(
+                "GET stacks/9",
+                vec![Reply::Output(
+                    200,
+                    json!({"number":9,"base":{"ref":"main"},"pull_requests":members}).to_string(),
+                )],
+            );
+            let mut commits = [commit(1), commit(2)];
+            commits[0].pr_number = 101;
+            commits[1].pr_number = 102;
+            w.0.lock().unwrap().trace.clear();
+            let error = format!("{:#}", g.manage_stack(&commits, base).unwrap_err());
+            assert!(error.contains(expected), "{error}");
+            assert!(
+                !w.trace()
+                    .iter()
+                    .any(|event| { event["kind"] == "http" && event["method"] != "GET" })
+            );
+        });
+    }
 }
 
 #[test]
@@ -1834,7 +2270,7 @@ fn base_batches_preserve_identity_and_stop_instead_of_retargeting_after_publicat
 }
 
 fn paged_node(number: u64, reference: &str) -> serde_json::Value {
-    json!({"number":number,"id":format!("PR_{number}"),"title":"Title","body":"Human text","state":"OPEN","merged":false,"headRefName":reference,"baseRefName":"main","headRepository":{"nameWithOwner":"org/repo"},"labels":{"nodes":[],"pageInfo":{"hasNextPage":false}},"stack":null})
+    json!({"number":number,"id":format!("PR_{number}"),"title":"Title","body":"Human text","state":"OPEN","merged":false,"headRefName":reference,"baseRefName":"main","headRepository":{"nameWithOwner":"org/repo"},"autoMergeRequest":null,"labels":{"nodes":[],"pageInfo":{"hasNextPage":false}},"stack":null})
 }
 
 fn connection(nodes: serde_json::Value, cursor: Option<&str>) -> serde_json::Value {

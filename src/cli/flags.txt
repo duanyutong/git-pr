@@ -39,7 +39,7 @@
     	Set tags for current stack, ignore default (comma separated)
   -timeout int
     	API call timeout in seconds (default 20)
-  -v	Timing and progress output
+  -v, --verbose	Decision explanations and operation timings
   -version
     	Show version information
   -y	Assume "yes" to prompts (shorthand for --yes)
@@ -51,4 +51,4 @@
     	Structured command deadline in seconds (default 120; config git-pr.readTimeout)
   -command-timeout int
     	Backend and publication command deadline in seconds (default 600; config git-pr.commandTimeout)
-  -vv	Timing plus detailed command and HTTP diagnostics (also -v -v)
+  -vv, --debug	Verbose output plus detailed command and HTTP diagnostics (also -v -v)

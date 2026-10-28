@@ -11,6 +11,14 @@ fn verbosity_is_bounded_and_explicit_false_resets_it() {
     for (args, expected) in [
         (vec![], 0),
         (vec!["-v"], 1),
+        (vec!["--verbose"], 1),
+        (vec!["--debug"], 2),
+        (vec!["--verbose", "-v"], 2),
+        (vec!["--debug", "--verbose"], 2),
+        (vec!["--debug", "--verbose=false"], 0),
+        (vec!["-vv", "--debug=false"], 0),
+        (vec!["--debug=false", "--verbose"], 1),
+        (vec!["HEAD", "--debug"], 0),
         (vec!["-vv"], 2),
         (vec!["-v", "-v"], 2),
         (vec!["-v", "-v", "-v"], 2),
@@ -26,7 +34,6 @@ fn verbosity_is_bounded_and_explicit_false_resets_it() {
             expected
         );
     }
-    assert!(Flags::parse(vec!["--debug".into()]).is_err());
     assert!(Flags::parse(vec!["-vv=invalid".into()]).is_err());
 }
 
@@ -52,7 +59,7 @@ fn diagnostics_preserve_submission_effects_in_both_native_modes() {
         let plain = World::new(2);
         plain.run(&[mode]).unwrap();
         let expected = effects(&plain);
-        for verbosity in ["-v", "-vv"] {
+        for verbosity in ["-v", "--verbose", "-vv", "--debug"] {
             let timed = World::new(2);
             timed.run(&[verbosity, mode]).unwrap();
             assert_eq!(effects(&timed), expected);
@@ -68,7 +75,11 @@ fn diagnostics_preserve_submission_effects_in_both_native_modes() {
                     .contains("start phase: PR descriptions and stack sections")
             );
             assert!(measured.stderr.contains("Timing summary: completed"));
-            assert_eq!(measured.stderr.contains("\"query\""), verbosity == "-vv");
+            assert!(measured.stderr.contains("selected base"));
+            assert_eq!(
+                measured.stderr.contains("\"query\""),
+                matches!(verbosity, "-vv" | "--debug")
+            );
             assert!(!measured.stderr.contains("unit-token"));
             measured.trace.clear();
             measured.stderr.clear();
@@ -76,6 +87,21 @@ fn diagnostics_preserve_submission_effects_in_both_native_modes() {
             drop(ordinary);
             timed.run(&[verbosity, mode]).unwrap();
             let measured = timed.0.lock().unwrap();
+            assert!(
+                measured
+                    .stderr
+                    .contains("title and description already current")
+            );
+            assert!(
+                measured
+                    .stderr
+                    .contains("Checked 2 PR descriptions; no changes needed")
+            );
+            assert!(
+                measured
+                    .stderr
+                    .contains("Checked 2 PR labels; no changes needed")
+            );
             assert_eq!(
                 measured.stderr.matches("start command: git push").count(),
                 0

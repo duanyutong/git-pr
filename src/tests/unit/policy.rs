@@ -118,3 +118,26 @@ fn checkpoints_parse_once_and_preserve_their_external_names() {
         "ERROR: invalid --stop-after \"unknown\"; must be one of: validate, get-commits, prepare, rewrite, push, pr-create"
     );
 }
+#[test]
+fn native_actions_distinguish_noops_creation_extension_and_rebuilding() {
+    use crate::github::policy::{NativeAction, native_action};
+    for (desired, current, base, expected) in [
+        (vec![], vec![], true, NativeAction::Unchanged),
+        (vec![1], vec![], true, NativeAction::Unchanged),
+        (vec![1, 2], vec![], true, NativeAction::Create),
+        (vec![1, 2], vec![1, 2], true, NativeAction::Unchanged),
+        (vec![2, 3], vec![1, 2, 3, 4], true, NativeAction::Unchanged),
+        (vec![1, 2, 3], vec![1, 2], true, NativeAction::Append(2)),
+        (vec![2, 3], vec![1, 2], true, NativeAction::Append(1)),
+        (vec![2, 3, 4], vec![1, 2, 3], true, NativeAction::Append(2)),
+        (vec![2, 3], vec![1, 2], false, NativeAction::Rebuild),
+        (vec![2, 4], vec![1, 2, 3], true, NativeAction::Rebuild),
+        (vec![3, 2, 4], vec![1, 2, 3], true, NativeAction::Rebuild),
+        (vec![2, 3, 1], vec![1, 2], true, NativeAction::Rebuild),
+        (vec![3, 4], vec![1, 2], true, NativeAction::Rebuild),
+        (vec![2, 1], vec![1, 2], true, NativeAction::Rebuild),
+        (vec![1, 2], vec![1, 2], false, NativeAction::Rebuild),
+    ] {
+        assert_eq!(native_action(&desired, &current, base), expected);
+    }
+}

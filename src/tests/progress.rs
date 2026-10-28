@@ -23,6 +23,28 @@ impl Terminal for MemoryTerminal {
 }
 
 #[test]
+fn checked_outcomes_replace_generic_completion_counts_in_plain_and_live_output() {
+    for animated in [false, true] {
+        let terminal = Arc::new(MemoryTerminal::default());
+        let progress = ProgressTerminal::with_animation(terminal.clone(), animated);
+        progress.stage_with_completion("Updating descriptions", "Reconciled descriptions");
+        progress.progress("Descriptions", 2, 2);
+        progress.outcome("Checked 2 PR descriptions; no changes needed");
+        progress.finish(true);
+        drop(progress);
+        let stderr = terminal.stderr.lock().unwrap();
+        assert!(stderr.contains("Checked 2 PR descriptions; no changes needed"));
+        assert!(!stderr.contains("Reconciled descriptions"));
+        assert!(!stderr.contains("· 2/2"));
+        if !animated {
+            assert!(!stderr.contains('\x1b') && !stderr.contains('\r'));
+        }
+        drop(stderr);
+        assert_eq!(*terminal.stdout.lock().unwrap(), "");
+    }
+}
+
+#[test]
 fn redirected_progress_reports_waits_without_control_sequences() {
     let terminal = Arc::new(MemoryTerminal::default());
     let progress = ProgressTerminal::with_animation(terminal.clone(), false);

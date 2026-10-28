@@ -8,11 +8,13 @@ use std::collections::{BTreeMap, HashSet};
 pub(crate) const USAGE: &str = include_str!("usage.txt");
 pub(crate) const DEFAULTS: &str = include_str!("flags.txt");
 
-const BOOLEAN: [&str; 18] = [
+const BOOLEAN: [&str; 20] = [
     "compact-stack",
     "version",
     "v",
     "vv",
+    "verbose",
+    "debug",
     "include-other-authors",
     "dry-run",
     "skip-draft",
@@ -107,6 +109,11 @@ impl Flags {
             let (key, inline) = name
                 .split_once('=')
                 .map_or((name, None), |(k, v)| (k, Some(v)));
+            let key = match key {
+                "verbose" => "v",
+                "debug" => "vv",
+                key => key,
+            };
             if matches!(key, "h" | "help") {
                 return Err(ParseError::Help);
             }

@@ -260,6 +260,18 @@ impl Terminal for ProgressTerminal {
         state.progress = None;
     }
 
+    fn outcome(&self, completed: &str) {
+        if self.shared.animated {
+            let mut state = lock(&self.shared.state);
+            state.completed_stage = Some(single_line(completed));
+            state.progress = None;
+        } else {
+            self.shared
+                .terminal
+                .err(&format!("{}\n", clean(completed, self.shared.colour)));
+        }
+    }
+
     fn detail(&self, text: &str) {
         if self.shared.rich {
             lock(&self.shared.state).detail = single_line(text.trim());

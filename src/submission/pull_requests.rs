@@ -117,6 +117,7 @@ impl Publication {
                 super::recovery::Recovery::observe(github, stack, start, &plan.bases)
                     .context("unsafe publication: publication transition could not be verified")?,
             );
+            plan.check_native(github, stack, start)?;
             return Ok(plan);
         }
         // A leased push of the already published object cannot change its dependants.
@@ -139,7 +140,27 @@ impl Publication {
                 Ok(Cell::new(acquired))
             })
             .collect::<Result<_>>()?;
+        plan.check_native(github, stack, start)?;
         Ok(plan)
+    }
+
+    fn check_native(&self, github: &GitHub<'_>, stack: &[Commit], start: usize) -> Result<()> {
+        let restoring = self
+            .recovery
+            .as_ref()
+            .is_some_and(super::recovery::Recovery::restore_native);
+        if github.config.stop_after.is_none() && (github.config.github_stack || restoring) {
+            let base = stack
+                .iter()
+                .enumerate()
+                .skip(start)
+                .find(|(_, commit)| !commit.skip)
+                .map_or(github.config.repo.trunk.as_str(), |(index, _)| {
+                    self.bases[index].as_str()
+                });
+            github.check_stack_eligibility(&stack[start..], base, restoring)?;
+        }
+        Ok(())
     }
 
     fn observe_refs(&mut self, github: &GitHub<'_>, stack: &[Commit]) -> Result<()> {
@@ -365,6 +386,7 @@ impl Application {
         }
         crate::identity::resolve::verify_anchors(&self.commands, state.selected())?;
         publication.verify(github, state, false)?;
+        self.explain_bases(state, &indices, &publication.bases);
         if !changing.is_empty() {
             let commits = changing
                 .iter()
@@ -392,6 +414,12 @@ impl Application {
                     != Some(&commit.hash);
             }
         }
+        super::presentation::checked_outcome(
+            &self.commands,
+            "branches",
+            indices.len(),
+            changing.len(),
+        );
         self.commands
             .terminal
             .stage_with_completion("Reconciling pull requests", "Pull requests reconciled");
@@ -502,6 +530,7 @@ impl Application {
                 .collect();
             github.verify_bases(changes).context(Fatal)?;
         }
+        self.report_pr_checks(state, needs_pr);
         Ok(())
     }
 
@@ -563,6 +592,23 @@ impl Application {
                 )
             })
             .context(Fatal)?;
+        let effects = github.commands.outcomes.snapshot();
+        let changed = targets
+            .iter()
+            .filter(|commit| {
+                effects
+                    .get(&crate::model::outcome::Operation::Description(
+                        commit.pr_number,
+                    ))
+                    .is_some_and(|effect| effect.confirmed)
+            })
+            .count();
+        super::presentation::checked_outcome(
+            github.commands,
+            "PR descriptions",
+            targets.len(),
+            changed,
+        );
         github
             .commands
             .terminal
@@ -575,6 +621,17 @@ impl Application {
                     .collect::<Vec<_>>(),
             )
             .context(Fatal)?;
+
+        let effects = github.commands.outcomes.snapshot();
+        let changed = targets
+            .iter()
+            .filter(|commit| {
+                effects
+                    .get(&crate::model::outcome::Operation::Labels(commit.pr_number))
+                    .is_some_and(|effect| effect.confirmed)
+            })
+            .count();
+        super::presentation::checked_outcome(github.commands, "PR labels", targets.len(), changed);
 
         Ok(())
     }

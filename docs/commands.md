@@ -52,6 +52,12 @@ Native GitHub stack management is optional; its resolved configuration authorise
 This applies equally to `git-pr.githubStack=true`, the enabling environment setting and `--github-stack`, including when standard input is redirected.
 `--no-stack` disables native management, and an explicit `--github-stack=false` overrides the Git setting.
 Dissolving and rebuilding an existing stack retains its separate confirmation; `--yes` accepts that confirmation automatically.
+Native GitHub stacks do not support auto-merge.
+When a native membership change requires an existing PR with auto-merge enabled, submission stops during preparation whenever that condition is observable, before local publication metadata or remote state is changed.
+Disable auto-merge explicitly to use native stacks, or retain it and use `--no-stack` for optional native management.
+Publication recovery may require restoration of existing native membership even with optional native management disabled; that recovery requirement remains authoritative.
+The client preserves auto-merge settings and checks eligibility again before native mutation, including before dissolving a stack for rebuilding.
+Concurrent changes can still cause a later server rejection; completed effects remain retained and unconfirmed mutations require remote verification.
 
 ```sh
 git pr --draft=false                # Drafts only for titles matching draftPattern.
@@ -95,6 +101,10 @@ Interactive submission presents named stages for repository discovery, working-c
 One refreshing status line identifies the current stage and operation, with elapsed time and completed counts where the operation exposes a reliable total.
 Repository checks, the selected stack, submission progress and PR results have distinct headings and spacing.
 Completed stages retain a compact outcome and aligned duration; a failed stage retains a failure marker before the explanatory error.
+Completion messages distinguish resources checked from confirmed changes, including explicit statements when no changes were required.
+Failure summaries identify confirmed branch publications and PR changes, and name mutations whose outcomes remain unconfirmed.
+These summaries use standard error, remain available without verbosity flags and do not constitute the successful PR-result listing.
+Known native eligibility failures present the cause and recovery actions once, after timing summaries; debug output additionally includes the complete contextual error chain.
 The commit-discovery stage completes before its selected-stack preview is displayed.
 Routine push, creation and native-link announcements occupy the live line rather than producing a second permanent list.
 Warnings, dry-run previews, checkpoint messages and recovery instructions remain durable.
@@ -156,7 +166,9 @@ PR creation and topology mutations are not blindly replayed after an uncertain t
 
 ## Submission timing
 
-Use `git pr -v` to record progress and elapsed time for a normal submission.
+Default output explains submission outcomes, failures and recovery actions without diagnostic flags.
+Use `git pr -v` or `git pr --verbose` for application decision explanations and detailed elapsed-time records.
+Decision explanations include selected bases, required updates and unchanged PR content.
 Place verbosity switches before positional revisions, for example `git pr -v base..tip`.
 To retain diagnostics whilst preserving the ordinary PR list on standard output:
 
@@ -179,7 +191,8 @@ Accumulated category durations may overlap because phases contain operations and
 A long command duration directs investigation towards that subprocess, a long HTTP duration towards the service or connection, and a long wait or queue duration towards the named scheduling constraint.
 The instrumentation adds no discovery queries, subprocesses, service requests or scheduled sleeps.
 
-Use `git pr -vv` or `git pr -v -v` when detailed command arguments, command results and HTTP payloads are also required.
+Use `git pr --debug`, `git pr -vv` or `git pr -v -v` when detailed command arguments, command results and HTTP payloads are also required.
+The debug level includes verbose output; aliases share the same level rather than enabling independent logging controls.
 Timing records at level one omit arbitrary command arguments, command results, URL queries and request or response bodies.
 Existing warnings and failure diagnostics remain visible.
 Endpoint paths may identify private repositories or resources; level two additionally includes repository content and should be reviewed before sharing.

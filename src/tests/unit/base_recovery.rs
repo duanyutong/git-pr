@@ -98,6 +98,41 @@ fn with_github<T>(w: &Arc<World>, f: impl FnOnce(&GitHub<'_>) -> T) -> T {
 }
 
 #[test]
+fn required_native_restoration_checks_auto_merge_even_with_optional_linking_disabled() {
+    let world = transition_world(&[2, 1], &[1, 2]);
+    {
+        let mut memory = world.0.lock().unwrap();
+        for pr in memory.prs.values_mut() {
+            pr["stack"] = json!({"number":9});
+        }
+        memory.prs.get_mut(&101).unwrap()["auto_merge"] = json!({"merge_method":"squash"});
+    }
+    let error = world.run(&["--no-stack"]).unwrap_err();
+    assert!(format!("{error:#}").contains("auto-merge enabled on PR(s) #101"));
+    assert!(!world.trace().iter().any(effect));
+    assert!(!world.0.lock().unwrap().config.contains_key(JOURNAL));
+}
+
+#[test]
+fn native_restoration_rechecks_eligibility_before_writing_its_journal_or_dissolving() {
+    let world = transition_world(&[2, 1], &[1, 2]);
+    for pr in world.0.lock().unwrap().prs.values_mut() {
+        pr["stack"] = json!({"number":9});
+    }
+    let state = state(&world);
+    with_github(&world, |github| {
+        let (recovery, bases) = observe(&world, github, &state);
+        world.0.lock().unwrap().prs.get_mut(&101).unwrap()["auto_merge"] =
+            json!({"merge_method":"squash"});
+        world.0.lock().unwrap().trace.clear();
+        let error = recovery.apply(github, &state, &bases).unwrap_err();
+        assert!(format!("{error:#}").contains("auto-merge enabled"));
+        assert!(!world.trace().iter().any(effect));
+        assert!(!world.0.lock().unwrap().config.contains_key(JOURNAL));
+    });
+}
+
+#[test]
 fn merged_downstack_recovery_preserves_identity_and_retargets_before_leased_publication() {
     for count in [1, 2] {
         for deleted in [false, true] {

@@ -432,6 +432,8 @@ impl Fixture {
             cwd: cwd.clone(),
             env,
             verbose: false,
+            explain: false,
+            outcomes: crate::model::outcome::Outcomes::default(),
             diagnostics: crate::diagnostics::Diagnostics::default(),
         };
         commands.git(&["init", "--initial-branch=main"]).unwrap();

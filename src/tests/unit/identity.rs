@@ -1508,6 +1508,60 @@ fn publication_records_output(records: &Records) -> String {
 }
 
 #[test]
+fn restacked_description_history_survives_merged_association_cleanup_and_repeat() {
+    let world = clean_stack(2);
+    world.run(&["--no-stack"]).unwrap();
+    for number in 901..=911 {
+        orphaned_publication(&world, &format!("retired-{number}"), number, true);
+    }
+    {
+        let mut memory = world.0.lock().unwrap();
+        let mut rows = String::new();
+        for number in (901..=911).chain([101, 102]) {
+            use std::fmt::Write as _;
+            writeln!(rows, "* #{number}").unwrap();
+        }
+        for number in [101, 102] {
+            memory.prs.get_mut(&number).unwrap()["body"] = json!(format!(
+                "Human notes\n\n<!-- git-pr-stack-start -->\n{rows}<!-- git-pr-stack-end -->"
+            ));
+        }
+        memory.stderr.clear();
+        memory.stdout.clear();
+    }
+    world.run(&["--no-stack"]).unwrap();
+    let preserved = {
+        let memory = world.0.lock().unwrap();
+        for number in 901..=911 {
+            assert!(
+                memory
+                    .config
+                    .keys()
+                    .all(|key| { !key.starts_with(&format!("branch.retired-{number}.gitPr")) })
+            );
+            for current in [101, 102] {
+                let body = memory.prs[&current]["body"].as_str().unwrap();
+                assert!(body.starts_with("Human notes"));
+                assert_eq!(body.matches(&format!("* #{number}\n")).count(), 1);
+            }
+        }
+        [memory.prs[&101].clone(), memory.prs[&102].clone()]
+    };
+    {
+        let mut memory = world.0.lock().unwrap();
+        memory.stderr.clear();
+        memory.trace.clear();
+        memory.stdout.clear();
+    }
+    world.run(&["--no-stack"]).unwrap();
+    let memory = world.0.lock().unwrap();
+    assert_eq!(memory.prs[&101], preserved[0]);
+    assert_eq!(memory.prs[&102], preserved[1]);
+    drop(memory);
+    assert_eq!(config_writes(&world), 0);
+}
+
+#[test]
 fn merged_orphan_cleanup_is_batched_and_preserves_other_branch_configuration() {
     let world = clean_stack(1);
     world.run(&["--no-stack"]).unwrap();
