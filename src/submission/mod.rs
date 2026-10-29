@@ -1,5 +1,6 @@
 //! Submission workflow sequencing across explicit external boundaries.
 
+mod branch;
 pub(crate) mod policy;
 mod presentation;
 mod pull_requests;
@@ -69,19 +70,7 @@ impl Application {
 
     fn submit(mut self, flags: &Flags, env: &BTreeMap<String, String>) -> Result<()> {
         let diagnostics = self.commands.diagnostics.clone();
-        self.commands.terminal.section("Repository");
-        self.stage("Discovering repository", "Repository discovered");
-        let Loaded::Ready(mut config) =
-            diagnostics.phase("configuration and repository discovery", || {
-                config::load(
-                    flags,
-                    env,
-                    &mut self.commands,
-                    self.credentials.as_ref(),
-                    self.files.as_ref(),
-                )
-            })?
-        else {
+        let Loaded::Ready(mut config) = self.load_configuration(flags, env)? else {
             return Ok(());
         };
         let git = Git {
@@ -93,6 +82,16 @@ impl Application {
         if self.checkpoint(&config, Checkpoint::Validate) {
             return Ok(());
         }
+        if let Some(branch) = branch::candidate(&config, flags, &self.commands)? {
+            return self.publish_branch(&config, &branch);
+        }
+        config.authenticate(
+            flags,
+            env,
+            &self.commands,
+            self.credentials.as_ref(),
+            self.files.as_ref(),
+        )?;
         self.stage("Reading commits", "Commits read");
         let mut state = diagnostics.phase("commit discovery", || {
             State::discover(&mut config, &self.commands)
@@ -165,6 +164,26 @@ impl Application {
         diagnostics.phase("native stack links", || Self::native_stack(&config, &github, &state, &publication.bases))
             .context("native stack reconciliation failed after publication; pushed refs and completed PR changes are retained")?;
         self.finish_submission(&github, &mut state, &publication, &associations, &numbers)
+    }
+
+    fn load_configuration(
+        &mut self,
+        flags: &Flags,
+        env: &BTreeMap<String, String>,
+    ) -> Result<Loaded> {
+        self.commands.terminal.section("Repository");
+        self.stage("Discovering repository", "Repository discovered");
+        let diagnostics = self.commands.diagnostics.clone();
+        diagnostics.phase("configuration and repository discovery", || {
+            config::load(
+                flags,
+                env,
+                &mut self.commands,
+                self.credentials.as_ref(),
+                self.files.as_ref(),
+                true,
+            )
+        })
     }
 
     fn finish_submission(

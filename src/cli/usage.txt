@@ -1,10 +1,14 @@
 Usage: git pr [OPTIONS] [COMMITS]
 
 COMMITS may be:
-  (omitted)        Push origin/<trunk>..HEAD as stacked PRs (default).
+  (omitted)        Push an unmanaged standalone branch and set its upstream;
+                   otherwise submit the current managed stack as PRs.
   BASE..TIP        Push the commits in the BASE..TIP range as stacked PRs.
   COMMIT           Push exactly that one commit as a single PR.
   COMMIT...        Push the named commits (2+) as stacked PRs; commits between
                    them on the stack are skipped. Args may be in any order.
+
+Use an explicit COMMIT or range to create a PR for a standalone branch.
+Explicit PR options retain the managed submission workflow.
 
 A COMMIT may be a git ref/hash, or (in a jj repo) a jj change-id.

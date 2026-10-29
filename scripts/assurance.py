@@ -124,8 +124,8 @@ DEFECTS = (
         (
             Change(
                 "src/cli/progress.rs",
-                'shared.terminal.err(&format!("  {notice}\\n"));',
-                'shared.terminal.err(&format!("⠙ {notice}\\n"));',
+                'shared.terminal.err(&format!("  {line}\\n"));',
+                'shared.terminal.err(&format!("⠙ {line}\\n"));',
             ),
         ),
     ),

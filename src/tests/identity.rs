@@ -6,6 +6,80 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
+#[test]
+fn native_standalone_branch_pushes_original_bot_commits_and_sets_upstream_without_github_authentication()
+ {
+    for count in [1, 3] {
+        let mut fixture = Fixture::new(0, false);
+        for index in 1..=count {
+            fixture.add_commit(index, false, "automation[bot]@example.com");
+        }
+        fixture.git(&[
+            "commit",
+            "--amend",
+            "-m",
+            "Dependency update\n\nSigned-off-by: Automation <automation[bot]@example.com>",
+        ]);
+        for index in 1..count {
+            fixture.git(&["branch", "-D", &format!("topic/{index}")]);
+        }
+        fixture.git(&["config", "git-pr.githubStack", "true"]);
+        fixture.git(&["config", "push.followTags", "true"]);
+        fixture.git(&["tag", "-a", "unselected-tag", "-m", "Unselected tag"]);
+        std::fs::remove_file(fixture.home.join(".config/gh/hosts.yml")).unwrap();
+        let tip = fixture.git(&["rev-parse", "HEAD"]);
+        let objects = fixture.git(&["log", "--format=%H %B", "origin/main..HEAD"]);
+        for _ in 0..2 {
+            fixture.service.trace.lock().unwrap().clear();
+            fixture.run(&[]).unwrap();
+            assert_eq!(fixture.git(&["rev-parse", "HEAD"]), tip);
+            assert_eq!(
+                fixture.git(&["log", "--format=%H %B", "origin/main..HEAD"]),
+                objects
+            );
+            assert_eq!(fixture.git(&["rev-parse", "@{upstream}"]), tip);
+            assert_eq!(
+                fixture.git(&["config", "--get", &format!("branch.topic/{count}.remote")]),
+                "origin"
+            );
+            assert_eq!(
+                fixture.git(&["config", "--get", &format!("branch.topic/{count}.merge")]),
+                format!("refs/heads/topic/{count}")
+            );
+            assert_eq!(
+                fixture.git(&["ls-remote", "origin", "refs/tags/unselected-tag"]),
+                ""
+            );
+            assert!(fixture.service.prs.lock().unwrap().is_empty());
+            assert!(!fixture.trace().iter().any(|event| event["kind"] == "http"));
+            assert!(
+                !fixture
+                    .git(&["config", "--local", "--list"])
+                    .contains(".gitpr")
+            );
+        }
+    }
+}
+
+#[test]
+fn native_standalone_branch_retains_merge_history() {
+    let fixture = Fixture::new(2, false);
+    fixture.git(&["checkout", "-b", "side", "topic/1"]);
+    fixture.write("side.txt", "Side branch\n");
+    fixture.git(&["add", "side.txt"]);
+    fixture.git(&["commit", "-m", "Side change"]);
+    fixture.git(&["checkout", "topic/2"]);
+    fixture.git(&["merge", "--no-ff", "side", "-m", "Merge side"]);
+    fixture.git(&["branch", "-D", "side", "topic/1"]);
+    let tip = fixture.git(&["rev-parse", "HEAD"]);
+    let parents = fixture.git(&["show", "--format=%P", "--no-patch", "HEAD"]);
+    assert_eq!(parents.split_whitespace().count(), 2);
+    fixture.run(&[]).unwrap();
+    assert_eq!(fixture.git(&["rev-parse", "HEAD"]), tip);
+    assert_eq!(fixture.git(&["rev-parse", "origin/topic/2"]), tip);
+    assert!(fixture.service.prs.lock().unwrap().is_empty());
+}
+
 #[derive(Debug)]
 struct UnpublishedDescendant {
     service: Arc<super::support::Service>,

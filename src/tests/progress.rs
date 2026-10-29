@@ -1050,7 +1050,7 @@ fn independent_width_fixture() {
         std::io::stdin().read_line(&mut permission).unwrap();
         assert_eq!(permission, "next\n");
         terminal.quota("GraphQL", 0, 5000, Duration::from_secs(90));
-        terminal.progress("Descriptions #101, #102", step, 3);
+        terminal.progress("Descriptions #101", step, 3);
         let deadline = Instant::now() + Duration::from_secs(3);
         while lock(&terminal.shared.state).painted == 0 && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
@@ -1104,7 +1104,9 @@ try:
                 else: err += data
         assert marker in out, (step, out, err)
         assert b'GraphQL' in err and b'0/5000' in err and b'reset' in err, err
-        if step == 1: assert b'\x1b[1A' in err, err
+        if step == 1:
+            assert b'\x1b[1A' in err, err
+            assert re.search(rb'\r\n    GraphQL 0/5000 \xc2\xb7 reset [^\r\n]+', err), err
         body = out.split(('BEGIN%d' % step).encode(),1)[1].split(b'STEP',1)[0]
         body = re.sub(rb'\x1b\]8;;[^\x1b]*\x1b\\', b'', body).decode()
         lines = body.splitlines()

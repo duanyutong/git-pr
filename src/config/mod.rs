@@ -83,6 +83,7 @@ pub(crate) fn load(
     commands: &mut Commands,
     store: &dyn CredentialStore,
     files: &dyn files::Files,
+    defer_git_authentication: bool,
 ) -> Result<Loaded> {
     let stop_after = Checkpoint::parse(settings::fallback(
         flags.string("stop-after"),
@@ -129,25 +130,22 @@ pub(crate) fn load(
     let output = output_format(flags, env, &strings)?;
     let draft_patterns = DraftPatterns::new(&comma_list(&draft_patterns(flags, &strings)))?;
     let repo = discover(commands, root, files, &strings)?;
-    let home = env.get("HOME").map_or("", String::as_str);
-    let hosts = expand_path(flags.string("gh-hosts"), home);
-    let token = if matches!(
-        stop_after,
-        Some(Checkpoint::Validate | Checkpoint::GetCommits)
-    ) || dry_run
-    {
-        Secret(String::new())
+    let token = if (!defer_git_authentication || repo.jj)
+        && !dry_run
+        && !matches!(
+            stop_after,
+            Some(Checkpoint::Validate | Checkpoint::GetCommits)
+        ) {
+        load_token(flags, env, commands, store, files, &repo)?
     } else {
-        commands.diagnostics.phase("authentication", || {
-            credentials::load(&hosts, &repo.host, store, commands, files)
-        })?
+        Secret::default()
     };
     if repo.jj && !dry_run {
         commands.jj(&["util", "snapshot"])?;
     }
     let selection = resolve_selection(revisions, repo.jj, commands)?;
     commands.verbose = flags.verbosity() > 1;
-    Ok(Loaded::Ready(Box::new(Config {
+    let config = Box::new(Config {
         repo,
         token,
         timeout: flags.timeout(),
@@ -179,7 +177,46 @@ pub(crate) fn load(
         compact_stack: compact_stack(flags, &booleans),
         selection,
         transition_journal: strings.string("git-pr.transitionJournal"),
-    })))
+    });
+    Ok(Loaded::Ready(config))
+}
+
+impl Config {
+    pub(crate) fn authenticate(
+        &mut self,
+        flags: &Flags,
+        env: &BTreeMap<String, String>,
+        commands: &Commands,
+        store: &dyn CredentialStore,
+        files: &dyn files::Files,
+    ) -> Result<()> {
+        if self.dry_run
+            || !self.token.0.is_empty()
+            || matches!(
+                self.stop_after,
+                Some(Checkpoint::Validate | Checkpoint::GetCommits)
+            )
+        {
+            return Ok(());
+        }
+        self.token = load_token(flags, env, commands, store, files, &self.repo)?;
+        Ok(())
+    }
+}
+
+fn load_token(
+    flags: &Flags,
+    env: &BTreeMap<String, String>,
+    commands: &Commands,
+    store: &dyn CredentialStore,
+    files: &dyn files::Files,
+    repo: &Repository,
+) -> Result<Secret> {
+    let home = env.get("HOME").map_or("", String::as_str);
+    let hosts = expand_path(flags.string("gh-hosts"), home);
+    commands.diagnostics.phase("authentication", || {
+        credentials::load(&hosts, &repo.host, store, commands, files)
+    })
 }
 
 fn output_format(

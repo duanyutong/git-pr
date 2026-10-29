@@ -87,6 +87,8 @@ Verified linear ancestry supplies selection depths even when the remote trunk ha
 Descendant discovery uses bounded candidate reduction followed by verification against every input batch; 129 branch tips require four ancestry subprocesses, whilst divergent histories remain explicitly ambiguous.
 
 Workflow coverage includes first, changed and unchanged submissions; range and non-contiguous selection; descendant descriptions; all checkpoints; dry-run effects; author and draft filtering; labels, templates and history; native stack linking, rejection, rebuilding and partial failure.
+Standalone branch regressions require complete publication of automation-authored histories, upstream configuration, ordinary fast-forward rejection, preservation of merge commits and unrelated trailers, and absence of GitHub credential or HTTP operations.
+Explicit selections and existing publication evidence shall retain managed submission semantics.
 Native eligibility regressions distinguish disabled, enabled and unconfirmed auto-merge observations, reject incompatible creation or rebuilding before effects, and retain server evidence for later validation failures.
 Output regressions distinguish checked resources, confirmed changes and unconfirmed mutations, and require equivalent submission effects for verbose and debug aliases.
 Managed-footer regressions require explicit rejection of unmatched, reversed, nested and duplicate delimiters, preservation of observed human text and zero content mutations on repeated failed submissions.
@@ -257,6 +259,7 @@ Compact PR rows remain single-line and truncate only descriptive titles, with in
 Regression cases require retained selected and historical rows, all outcome counts, complete repository context, Unicode grapheme boundaries, safe hyperlinks and complete redirected text.
 Status cases assert complete progress, quota, retry and reset information independently of line-width assertions.
 Long-request regressions require request destinations to yield space to operational fields, retain aligned and coloured live frames at 40, 80 and 124 columns, and clear before durable completion.
+Narrow live frames shall retain the primary progress row separately from the complete quota and reset group; durable fallbacks shall insert word boundaries before the terminal performs automatic wrapping.
 The terminal-screen contract uses the independent `vt100` emulator to assert the visible screen after stage completion, failure, ordinary output, warnings, confirmation and destruction.
 It captures transient detail from application workflows for both native-stack updates and unchanged reconciliation, and checks all captured detail messages at 40, 80 and 124 columns with colour enabled and disabled.
 Generated cases vary detail length, CJK text, combining marks, single-codepoint emoji, viewport width and resizing, whilst requiring earlier durable text and subsequent output to survive clearing.

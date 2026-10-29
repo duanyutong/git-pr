@@ -237,6 +237,7 @@ fn github_owner_query_and_all_draft_creation_cases() {
         &mut f.app.commands.clone(),
         &FakeCredentials,
         &crate::config::files::NativeFiles,
+        false,
     )
     .unwrap() else {
         panic!("configuration must load")
@@ -288,6 +289,7 @@ fn github_lookup_fallback_errors_creation_and_status_diagnostics() {
         &mut f.app.commands.clone(),
         &FakeCredentials,
         &crate::config::files::NativeFiles,
+        false,
     )
     .unwrap() else {
         panic!("configuration must load")
@@ -814,6 +816,7 @@ fn loaded_config(fixture: &Fixture) -> Box<config::Config> {
         &mut fixture.app.commands.clone(),
         &FakeCredentials,
         &crate::config::files::NativeFiles,
+        false,
     )
     .unwrap()
     {
@@ -850,6 +853,7 @@ fn repository_roots_preserve_significant_trailing_path_whitespace() {
             &mut fixture.app.commands.clone(),
             &FakeCredentials,
             &crate::config::files::NativeFiles,
+            false,
         )
         .err()
         .unwrap();
@@ -1109,6 +1113,7 @@ fn config_flags_git_values_environment_and_identity_failures() {
             &mut f.app.commands.clone(),
             &FakeCredentials,
             &crate::config::files::NativeFiles,
+            false,
         )
         .unwrap()
         {
@@ -1706,6 +1711,7 @@ fn native_git_remote_selection_preserves_subsection_case_and_configuration_scope
             &mut commands,
             &FakeCredentials,
             &crate::config::files::NativeFiles,
+            false,
         )
         .unwrap() else {
             panic!("expected configuration");

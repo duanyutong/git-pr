@@ -163,7 +163,7 @@ impl Git<'_> {
         Ok(commits)
     }
 
-    fn read_stack(&self, base: &str, tip: &str) -> Result<(snapshot::Snapshot, String)> {
+    fn read_history(&self, base: &str, tip: &str) -> Result<snapshot::Snapshot> {
         let output = self
             .commands
             .git_data(
@@ -179,7 +179,16 @@ impl Git<'_> {
                 &[],
             )
             .with_context(|| format!("failed to find common ancestor for {base} and {tip}"))?;
-        let mut snapshot = snapshot::parse(&output)?;
+        snapshot::parse(&output)
+    }
+
+    /// Branch publication retains merge commits and their original stored objects.
+    pub(crate) fn branch_history(&self, base: &str, tip: &str) -> Result<Vec<Commit>> {
+        Ok(self.read_history(base, tip)?.commits)
+    }
+
+    fn read_stack(&self, base: &str, tip: &str) -> Result<(snapshot::Snapshot, String)> {
+        let mut snapshot = self.read_history(base, tip)?;
         snapshot.reject_merges()?;
         let base_tree =
             self.commands

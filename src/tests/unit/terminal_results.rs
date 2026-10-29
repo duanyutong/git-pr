@@ -119,6 +119,7 @@ fn preview_limit_defaults_and_invalid_values_are_resolved_before_effects() {
             &mut world.commands(),
             world.as_ref(),
             world.as_ref(),
+            false,
         )
         .err()
         .unwrap();
@@ -158,6 +159,7 @@ fn hyperlink_configuration_resolves_only_the_effective_value_before_effects() {
                 &mut world.commands(),
                 world.as_ref(),
                 world.as_ref(),
+                false,
             )
         };
         world.0.lock().unwrap().trace.clear();
@@ -461,6 +463,7 @@ fn icon_font_boolean_defaults_on_and_cli_overrides_configuration() {
                 &mut world.commands(),
                 world.as_ref(),
                 world.as_ref(),
+                false,
             )
             .unwrap() else {
                 panic!("expected configuration")

@@ -20,7 +20,7 @@ Valid revision expressions continue to resolve after the initial Jujutsu snapsho
 | `--no-stack` | Disables native stack management regardless of other enabling sources. |
 | `--yes`, `-y` | Accept confirmation prompts, including native stack dissolution and rebuilding, automatically; otherwise non-interactive input declines. Routine native linking requires no prompt. |
 | `--dry-run` | Reports proposed association, publication and PR operations without rewriting commits, updating refs, snapshotting Jujutsu or changing configuration. |
-| `--include-other-authors` | Includes commits whose author email differs from `user.email`; disabled by default. |
+| `--include-other-authors` | Includes commits whose author email differs from `user.email` in managed PR submissions; disabled by default, whilst standalone branch pushes retain every commit. |
 | `--skip-draft`, `--include-draft` | Excludes matching titles or overrides that exclusion. Filtering does not alter commit identities. |
 | `--draft-pattern` | Comma-separated, case-insensitive wildcard patterns; CLI precedes `git-pr.draftPattern`. Defaults to `wip:*,draft:*,*[wip]*,*[draft]*`. |
 | `--default-tags` | Saves comma-separated `git-pr.tags` and exits when supplied a non-empty value. |
@@ -206,7 +206,11 @@ Acceptance of a hostname does not establish complete support for its hosting ser
 ## Operational limitations
 
 Publication selects the current branch's `pushRemote`, then `remote.pushDefault`, then the current branch's `remote`; without these settings, it selects `origin` or the sole unambiguous remote.
-Current-branch discovery is omitted when `remote.pushDefault` determines the destination and no branch-specific `pushRemote` can override it.
+Remote selection omits current-branch discovery when `remote.pushDefault` determines the destination and no branch-specific `pushRemote` can override it; automatic standalone-branch detection subsequently observes the checked-out branch.
+Standalone branch publication uses an explicit refspec retaining the branch name, sets the upstream and disables automatic tag following.
+It performs an ordinary fast-forward push without GitHub API authentication or pull-request operations.
+Explicit revision selections, existing publication evidence and explicitly supplied options for draft handling, author filtering, labels, tags, stack management or output templates select the managed workflow instead.
+The `prepare` and `pr-create` checkpoints also select managed submission; `get-commits` retains a branch-history preview without publication.
 Remote aliases and repository names are preserved in full, including hyphens, dots and a leading dot; only a terminal `.git` URL suffix is removed.
 Stack discovery reads the complete selected history; structured command and HTTP observations exceeding 64 MiB fail explicitly.
 Publication uses full object identities and batches at most 128 refspecs within a 64 KiB argument budget.
@@ -214,9 +218,9 @@ Git hooks run normally for each publication batch.
 Pull-request observations and content mutations use at most 25 GraphQL aliases per request, with complete REST pagination where required.
 Native linking uses the GitHub stack API directly and does not invoke the `gh-stack` extension.
 When the selected PRs begin with the existing native stack's suffix, linking appends only the new PRs and preserves all preceding members, including merged history.
-An unchanged submission still verifies publication through Git and obtains fresh PR observations, but performs no metadata mutation or fixed visibility wait.
+An unchanged managed submission still verifies publication through Git and obtains fresh PR observations, but performs no metadata mutation or fixed visibility wait.
 Plain Git submissions require no rewrite backend.
-Each trailer-free change must have a maintained local branch or bookmark; publication identity is stored separately from its message.
+Each trailer-free managed change must have a maintained local branch or bookmark; publication identity is stored separately from its message.
 Unrelated, conflicted and protected checked-out refs are preserved.
 If worktree discovery fails, local ref reconciliation is omitted and a warning reports that the completed push remains effective.
 PR lookup errors stop reconciliation rather than indicating that no PR exists.

@@ -5,31 +5,43 @@ The examples below assume that `git-pr` is installed as described in the [README
 
 ## Authentication
 
-GitHub authentication is configured through the GitHub CLI:
+Managed pull-request submissions use GitHub authentication configured through the GitHub CLI:
 
 ```sh
 gh auth login
 ```
 
+Standalone branch pushes use Git's authentication and do not load GitHub API credentials.
+
 ## Repository initialisation
 
 Plain Git requires no additional initialisation.
-Commits without a `Remote-Ref` message trailer require a maintained local branch or Jujutsu bookmark.
+Managed commits without a `Remote-Ref` message trailer require a maintained local branch or Jujutsu bookmark.
 Submission stores their publication associations in repository-local Git configuration and publishes their original objects with expected-object leases.
 Existing trailers remain compatible and are preserved verbatim.
 Git-branchless may manage the local stack, but is not required for submission.
 
 ## Submission
 
-The selection may comprise the current stack, a range or explicitly named commits:
+An ordinary invocation on an unmanaged standalone Git branch pushes the complete branch to the selected remote under the same name and sets its upstream.
+This applies to branches containing one or several commits, including merge commits and commits authored by automation.
+The branch push uses ordinary fast-forward protection and does not prepare publication associations, create pull requests, reconcile descriptions or link a native stack.
+Repeated invocations retain this behaviour, including when the remote branch is already current.
+
+Automatic branch publication requires a checked-out branch distinct from the configured trunk, with no publication association or `Remote-Ref` trailer and no other local branch anchored within its unpublished history.
+Existing publication evidence, explicit revision selections and explicitly supplied pull-request options retain the managed workflow.
+Configured stack preferences alone do not prevent standalone branch publication.
+Use an explicit range or commit argument to request a managed pull request for an otherwise standalone branch.
+
+Managed selections may comprise the current stack, a range or explicitly named commits:
 
 ```sh
-git pr                             # Current stack.
+git pr                             # Standalone branch push or existing managed stack.
 git pr main..feature                # Range excluding its base.
 git pr feature-a feature-c          # Individual commits in ancestry order.
 ```
 
-Subsequent invocations update the existing PRs for the selected commits.
+Subsequent managed submissions update the existing PRs for the selected commits.
 
 Changes to published base relationships require a verified transition before publication.
 The transition procedure prevents GitHub from recognising an unintended indirect merge whilst branch references and PR relationships disagree.

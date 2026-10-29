@@ -174,6 +174,7 @@ impl World {
             &mut self.commands(),
             self.as_ref(),
             self.as_ref(),
+            false,
         )
         .unwrap() else {
             panic!("expected configuration");

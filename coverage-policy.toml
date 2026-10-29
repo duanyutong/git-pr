@@ -41,6 +41,7 @@ unit = [
   "src/stack/description.rs",
   "src/stack/selection.rs",
   "src/submission/mod.rs",
+  "src/submission/branch.rs",
   "src/submission/policy.rs",
   "src/submission/presentation.rs",
   "src/submission/pull_requests.rs",

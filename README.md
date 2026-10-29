@@ -1,13 +1,15 @@
 # git-pr
 
-`git-pr` submits sequences of commits or branches as stacked GitHub pull requests.
-Each selected commit corresponds to a pull request.
+`git-pr` pushes standalone Git branches and submits managed stacks as GitHub pull requests.
+An ordinary invocation on an unmanaged standalone branch pushes that branch and sets its upstream, without requiring GitHub API authentication.
+Explicit commit selections and existing publication associations retain the managed submission workflow.
+In managed submissions, each selected commit corresponds to a pull request.
 The first PR targets the stack's base branch; each subsequent PR targets the preceding commit's branch.
 Subsequent submissions update PR titles, descriptions and labels, and keep the PRs linked in stack order.
 
 ## Integration Support
 
-Git and GitHub credentials are required.
+Git is required; managed pull-request submissions additionally require GitHub credentials.
 Use [GitHub CLI](https://cli.github.com/) authentication to configure the supported credential source; submission uses Git and the GitHub API directly.
 Native stack linking requires no GitHub CLI extension.
 

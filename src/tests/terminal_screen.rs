@@ -12,6 +12,7 @@ const SCREEN_ROWS: u16 = 24;
 
 struct ScreenTerminal {
     parser: Mutex<vt100::Parser>,
+    output: Mutex<String>,
 }
 
 impl std::fmt::Debug for ScreenTerminal {
@@ -28,6 +29,7 @@ impl ScreenTerminal {
                 NonZeroU16::new(columns).unwrap(),
                 0,
             )),
+            output: Mutex::default(),
         })
     }
 
@@ -52,6 +54,7 @@ impl Terminal for ScreenTerminal {
     }
 
     fn err(&self, text: &str) {
+        lock(&self.output).push_str(text);
         // Match the ONLCR newline processing of the native pseudo-terminal.
         lock(&self.parser).process(text.replace('\n', "\r\n").as_bytes());
     }
@@ -215,6 +218,56 @@ fn oversized_operational_facts_never_leave_a_permanent_spinner() {
     let contents = screen.contents();
     assert_no_transient(&contents);
     assert!(!contents.contains("TRANSIENT"), "{contents}");
+}
+
+#[test]
+fn narrow_live_status_keeps_progress_and_quota_on_deliberate_rows() {
+    for (label, columns) in [
+        ("Descriptions #101", 40),
+        ("Descriptions #101, #102", 40),
+        ("Descriptions #101, #102", 50),
+        ("Descriptions #101, #102", 64),
+    ] {
+        let screen = ScreenTerminal::new(columns);
+        let progress = controlled(&screen, true);
+        progress.out("EARLIER OUTPUT KEPT");
+        progress.stage("Updating descriptions");
+        progress.progress(label, 1, 3);
+        progress.quota("GraphQL", 4990, 5000, Duration::from_secs(90));
+        repaint(&progress, columns);
+        let live = screen.contents();
+        let lines = visible_lines(&live);
+        assert_eq!(lines.len(), 3, "{live}");
+        assert_eq!(lines[1], format!("⠙ 1/3 {label}"), "{live}");
+        assert!(lines[2].starts_with("GraphQL 4990/5000 · reset "), "{live}");
+        assert_eq!(lock(&progress.shared.state).painted, 2);
+        assert!(!lock(&progress.shared.state).fallback_reported);
+        progress.finish(true);
+        progress.out("RESULTS KEPT");
+        let completed = screen.contents();
+        assert_no_transient(&completed);
+        assert!(!completed.contains("GraphQL"), "{completed}");
+        assert!(completed.contains("EARLIER OUTPUT KEPT"), "{completed}");
+        assert!(completed.contains("RESULTS KEPT"), "{completed}");
+    }
+}
+
+#[test]
+fn narrow_fallback_wraps_complete_messages_before_the_terminal_does() {
+    let terminal = ScreenTerminal::new(30);
+    let progress = controlled(&terminal, false);
+    progress.stage("Updating descriptions across the selected pull requests");
+    progress.progress("Descriptions #101, #102", 1, 3);
+    progress.quota("GraphQL", 4990, 5000, Duration::from_secs(90));
+    paint_frame(&progress.shared, &mut lock(&progress.shared.state), 0, 30);
+    let output = lock(&terminal.output).clone();
+    assert!(output.lines().all(|line| line.width() < 30), "{output}");
+    assert!(output.lines().count() > 2, "{output}");
+    let text = output.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(text.contains("1/3 Descriptions #101, #102"), "{text}");
+    assert!(text.contains("GraphQL 4990/5000 · reset"), "{text}");
+    assert!(lock(&progress.shared.state).fallback_reported);
+    assert_no_transient(&output);
 }
 
 proptest! {

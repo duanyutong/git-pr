@@ -394,6 +394,7 @@ fn configuration_assembly_obeys_precedence_and_reports_native_boundary_failures(
         &mut w.commands(),
         w.as_ref(),
         w.as_ref(),
+        false,
     )
     .unwrap() else {
         panic!("configuration");
@@ -461,6 +462,7 @@ fn workspace_and_backing_roots_preserve_path_whitespace_in_configuration() {
             &mut commands,
             w.as_ref(),
             w.as_ref(),
+            false,
         )
         .unwrap() else {
             panic!("expected configuration");

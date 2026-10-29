@@ -164,6 +164,7 @@ fn native_stack_overrides_omit_unused_boolean_configuration() {
             &mut world.commands(),
             world.as_ref(),
             world.as_ref(),
+            false,
         )
         .unwrap() else {
             panic!("expected configuration")

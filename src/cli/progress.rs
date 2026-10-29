@@ -517,7 +517,9 @@ fn paint_frame(shared: &Shared, state: &mut State, frame: usize, columns: usize)
                 state.quota.as_ref(),
                 usize::MAX,
             );
-            shared.terminal.err(&format!("  {notice}\n"));
+            for line in complete_lines(&notice, columns.saturating_sub(3)) {
+                shared.terminal.err(&format!("  {line}\n"));
+            }
         }
         state.fallback_reported = true;
     }
@@ -615,8 +617,8 @@ fn render(
 ) -> String {
     let text = render_text(activity, progress, quota, width);
     let spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'][frame % 10];
-    complete_lines(&text, width.saturating_sub(5))
-        .iter()
+    text.lines()
+        .flat_map(|line| complete_lines(line, width.saturating_sub(5)))
         .enumerate()
         .map(|(index, line)| {
             if index == 0 {
@@ -666,16 +668,20 @@ fn render_text(
             core.push_str(&clip(&activity.detail, budget));
         }
     }
-    core.push_str(&suffix);
-    let mut detailed = core.clone();
+    let combined = format!("{core}{suffix}");
+    let mut detailed = combined.clone();
 
     if activity.wait.is_none() {
         let _ = write!(detailed, " · {} elapsed", duration(elapsed));
     }
     if detailed.width() <= available {
         detailed
+    } else if combined.width() <= available || suffix.is_empty() {
+        combined
     } else {
-        core
+        // Quota and reset belong together; do not let a greedy word wrap strand
+        // the resource name or split the reset deadline across the primary row.
+        format!("{core}\n{}", suffix.trim_start_matches(" · "))
     }
 }
 
