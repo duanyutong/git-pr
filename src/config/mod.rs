@@ -53,7 +53,6 @@ pub(crate) struct Config {
     pub emoji: bool,
     pub compact_stack: bool,
     pub selection: Selection,
-    pub transition_journal: String,
 }
 
 pub(crate) enum Loaded {
@@ -176,7 +175,6 @@ pub(crate) fn load(
         emoji,
         compact_stack: compact_stack(flags, &booleans),
         selection,
-        transition_journal: strings.string("git-pr.transitionJournal"),
     });
     Ok(Loaded::Ready(config))
 }
@@ -566,7 +564,6 @@ fn string_settings(flags: &Flags, commands: &Commands) -> Result<Values> {
         "git-pr.tags",
         "git-pr.output",
         "git-pr.previewLimit",
-        "git-pr.transitionJournal",
         "git-pr.addLabel",
         "git-pr.addTipLabel",
         "user.name",

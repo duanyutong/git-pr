@@ -1312,10 +1312,10 @@ fn native_reconciliation_propagates_not_found_at_every_request_boundary() {
             )],
         );
         let error = super::Application::native_stack(
-            &config,
             &github,
             &s,
             &crate::stack::selection::resolve_bases(&s.stack, s.start, &github.config.repo.trunk),
+            true,
         )
         .unwrap_err();
         assert_eq!(crate::diagnostics::errors::status(&error), 1, "{path}");

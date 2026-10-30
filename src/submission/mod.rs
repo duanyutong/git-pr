@@ -1,12 +1,14 @@
 //! Submission workflow sequencing across explicit external boundaries.
 
 mod branch;
+mod cleanup;
+mod plan;
 pub(crate) mod policy;
 mod presentation;
 mod pull_requests;
-mod recovery;
 mod runtime;
 mod state;
+mod transition;
 
 pub use runtime::run;
 
@@ -161,7 +163,7 @@ impl Application {
         )?;
         let numbers = diagnostics.phase("PR descriptions and stack sections", || Self::update_descriptions(&config, git, &github, &state))
             .context("PR content reconciliation failed after publication; pushed refs and completed PR changes are retained")?;
-        diagnostics.phase("native stack links", || Self::native_stack(&config, &github, &state, &publication.bases))
+        diagnostics.phase("native stack links", || Self::native_stack(&github, &state, &publication.bases, publication.links_native()))
             .context("native stack reconciliation failed after publication; pushed refs and completed PR changes are retained")?;
         self.finish_submission(&github, &mut state, &publication, &associations, &numbers)
     }
@@ -292,12 +294,12 @@ impl Application {
     }
 
     fn native_stack(
-        config: &Config,
         github: &GitHub<'_>,
         state: &State,
         bases: &[String],
+        link_native: bool,
     ) -> Result<()> {
-        if config.github_stack {
+        if link_native {
             github
                 .commands
                 .terminal
@@ -308,7 +310,9 @@ impl Application {
                 .enumerate()
                 .skip(state.start)
                 .find(|(_, c)| !c.skip)
-                .map_or(config.repo.trunk.as_str(), |(i, _)| bases[i].as_str());
+                .map_or(github.config.repo.trunk.as_str(), |(i, _)| {
+                    bases[i].as_str()
+                });
             github.manage_stack(state.selected(), base)?;
         }
         Ok(())

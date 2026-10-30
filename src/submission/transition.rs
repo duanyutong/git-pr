@@ -1,23 +1,28 @@
-//! Verified publication transitions, including interrupted operations.
+//! Observation and guarded execution of publication-base transitions.
 
 use anyhow::{Context, Result, bail};
-use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::{
+    collections::{BTreeMap, BTreeSet, HashMap},
+    sync::Arc,
+};
 
-use super::state::State;
+use super::{
+    plan::{
+        Ancestry, DesiredPublication, ObservedPublication, PublicationPlan, Strategy,
+        temporary_base, temporary_owner,
+    },
+    state::State,
+};
 use crate::{
     git::Git,
     github::{GitHub, policy},
     model::{Commit, pull_request::RecoveryPullRequest},
 };
 
-const JOURNAL: &str = "git-pr.transitionJournal";
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug)]
 struct Entry {
     index: usize,
     reference: String,
-    prepared: String,
     pr: Option<RecoveryPullRequest>,
 }
 
@@ -25,36 +30,32 @@ struct Entry {
 #[path = "../tests/unit/base_recovery.rs"]
 mod unit;
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub(super) struct Recovery {
+#[derive(Clone, Debug)]
+pub(super) struct Transition {
     entries: Vec<Entry>,
     parents: BTreeMap<String, MergedParent>,
-    pub(super) refs: BTreeMap<String, Option<String>>,
+    pub(super) refs: Arc<BTreeMap<String, Option<String>>>,
     destination: String,
-    repository: String,
     bases: Vec<String>,
-    staging: Option<String>,
+    pub(super) plan: Arc<PublicationPlan>,
+    temporary: BTreeMap<String, String>,
     native: Option<u64>,
     anchor: String,
-    link_native: bool,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct MergedParent {
     pr: RecoveryPullRequest,
     merge: String,
 }
 
-impl Recovery {
+impl Transition {
     pub(super) fn observe(
         github: &GitHub<'_>,
         stack: &[Commit],
         start: usize,
         bases: &[String],
     ) -> Result<Self> {
-        if !github.config.transition_journal.is_empty() {
-            return Self::resume(github, stack, start, bases);
-        }
         let git = Git {
             commands: github.commands,
             repo: &github.config.repo,
@@ -62,14 +63,13 @@ impl Recovery {
         let mut recovery = Self {
             entries: Vec::new(),
             parents: BTreeMap::new(),
-            refs: BTreeMap::new(),
+            refs: Arc::default(),
             destination: git.recovery_destination()?,
-            repository: github.config.repo.name.clone(),
             bases: bases.to_vec(),
-            staging: None,
+            plan: Arc::default(),
+            temporary: BTreeMap::new(),
             native: None,
-            anchor: String::new(),
-            link_native: github.config.github_stack,
+            anchor: git.trunk_snapshot()?,
         };
         let selected: BTreeSet<_> = stack
             .iter()
@@ -77,7 +77,8 @@ impl Recovery {
             .filter(|c| !c.skip)
             .map(Commit::remote_ref)
             .collect();
-        let mut references = BTreeSet::from([github.config.repo.trunk.clone()]);
+        let mut references = BTreeSet::new();
+        let mut obsolete = Vec::new();
         for (index, commit) in stack
             .iter()
             .enumerate()
@@ -94,51 +95,98 @@ impl Recovery {
                     && pr.base.name != git.repo.trunk
                     && !selected.contains(pr.base.name.as_str())
                 {
-                    // Removing an unselected predecessor requires proof that it landed.
-                    if bases[index] != git.repo.trunk {
-                        bail!(
-                            "include the complete published stack before changing PR #{}",
-                            pr.number
-                        );
-                    }
-                    recovery.observe_parent(github, pr)?;
+                    obsolete.push((index, pr.clone()));
                 }
             }
             recovery.entries.push(Entry {
                 index,
                 reference: reference.to_owned(),
-                prepared: commit.hash.clone(),
                 pr,
             });
         }
-        recovery.refs = git.recovery_refs(
-            &recovery.destination,
-            &references.into_iter().collect::<Vec<_>>(),
-        )?;
-        recovery.anchor = recovery.check_evidence(git)?;
-        recovery.check_final_graph(git, stack)?;
-        recovery.check_dependants(github, false)?;
-        recovery.native = recovery.observe_native(github)?;
-        if !recovery.direct_is_safe(git, stack)? {
-            let identity = recovery
-                .entries
-                .iter()
-                .filter_map(|e| e.pr.as_ref().map(|p| p.number))
-                .min()
-                .context("publication transition has no existing PR identity")?;
-            let reference = format!("git-pr/transition/{identity}");
-            let observed =
-                git.recovery_refs(&recovery.destination, std::slice::from_ref(&reference))?;
-            if observed[&reference].is_some() {
+        let numbers = recovery.numbers();
+        let reserved = temporary_base(numbers.iter().copied());
+        if let Some(reference) = &reserved {
+            references.insert(reference.clone());
+        }
+        for (index, pr) in obsolete {
+            if temporary_owner(&pr.base.name).is_some_and(|number| numbers.contains(&number)) {
+                continue;
+            }
+            if bases[index] != git.repo.trunk {
                 bail!(
-                    "temporary publication base {reference:?} already exists without a matching journal"
+                    "include the complete published stack before changing PR #{}",
+                    pr.number
                 );
             }
-            recovery.refs.extend(observed);
-            recovery.staging = Some(reference);
-            recovery.check_staging(git, stack)?;
+            recovery.observe_parent(github, &pr)?;
         }
+        // Observe mutable development/helper refs that the transition changes or
+        // depends upon. Trunk is deliberately excluded: PR bases name a branch,
+        // and unrelated merges must not invalidate a submission at any stage.
+        // The separate local anchor supplies all trunk-related graph evidence.
+        recovery.refs = Arc::new(
+            git.recovery_refs(
+                &recovery.destination,
+                &references
+                    .into_iter()
+                    .filter(|reference| reference != &git.repo.trunk)
+                    .collect::<Vec<_>>(),
+            )?,
+        );
+        recovery.check_evidence(git)?;
+        recovery.observe_temporary(git, &numbers, reserved)?;
+        recovery.check_dependants(github, false)?;
+        recovery.native = recovery.observe_native(github)?;
         Ok(recovery)
+    }
+
+    pub(super) fn prepare_staging(&mut self, git: Git<'_>) -> Result<()> {
+        let Strategy::Stage(reference) = &self.plan.strategy else {
+            return Ok(());
+        };
+        let reference = reference.clone();
+        let observed = git.recovery_refs(&self.destination, std::slice::from_ref(&reference))?;
+        if let Some(tip) = observed.get(&reference).and_then(Option::as_ref) {
+            self.adopt_temporary(git, reference.clone(), tip.clone())?;
+        }
+        Arc::make_mut(&mut self.refs).extend(observed);
+        self.temporary.insert(reference, self.anchor.clone());
+        Ok(())
+    }
+
+    fn observe_temporary(
+        &mut self,
+        git: Git<'_>,
+        numbers: &[u64],
+        reserved: Option<String>,
+    ) -> Result<()> {
+        let temporary = self
+            .entries
+            .iter()
+            .filter_map(|entry| entry.pr.as_ref())
+            .map(|pr| pr.base.name.clone())
+            .filter(|reference| {
+                temporary_owner(reference).is_some_and(|number| numbers.contains(&number))
+            })
+            .chain(reserved)
+            .collect::<BTreeSet<_>>();
+        for reference in temporary {
+            if let Some(tip) = self.refs.get(&reference).and_then(Option::as_ref).cloned() {
+                self.adopt_temporary(git, reference, tip)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn adopt_temporary(&mut self, git: Git<'_>, reference: String, tip: String) -> Result<()> {
+        if !git.is_ancestor(&tip, &self.anchor)? {
+            bail!(
+                "reserved temporary publication base {reference:?} is not a verified trunk ancestor; refusing to reuse or remove it"
+            );
+        }
+        self.temporary.insert(reference, tip);
+        Ok(())
     }
 
     fn observe_pr(github: &GitHub<'_>, reference: &str) -> Result<Option<RecoveryPullRequest>> {
@@ -179,8 +227,8 @@ impl Recovery {
             .with_context(|| format!("missing remote recovery base {reference:?}"))
     }
 
-    fn check_evidence(&self, git: Git<'_>) -> Result<String> {
-        let trunk = self.tip(&git.repo.trunk)?;
+    fn check_evidence(&self, git: Git<'_>) -> Result<()> {
+        let trunk = &self.anchor;
         for entry in &self.entries {
             if let Some(pr) = &entry.pr {
                 if self.tip(&entry.reference)? != pr.head.sha {
@@ -212,78 +260,67 @@ impl Recovery {
                 }
             }
         }
-        Ok(trunk.to_owned())
-    }
-
-    fn desired_tip<'a>(&'a self, reference: &str, stack: &'a [Commit]) -> Result<&'a str> {
-        self.entries
-            .iter()
-            .find(|e| e.reference == reference)
-            .map_or_else(|| self.tip(reference), |e| Ok(stack[e.index].hash.as_str()))
-    }
-
-    fn check_final_graph(&self, git: Git<'_>, stack: &[Commit]) -> Result<()> {
-        for entry in &self.entries {
-            let head = &stack[entry.index].hash;
-            let base = self.desired_tip(&self.bases[entry.index], stack)?;
-            if head == base || !git.is_ancestor(base, head)? {
-                bail!(
-                    "prepared head {:?} is not strictly above its verified publication base; synchronise before retrying",
-                    entry.reference
-                );
-            }
-        }
         Ok(())
     }
 
-    fn direct_is_safe(&self, git: Git<'_>, stack: &[Commit]) -> Result<bool> {
-        // Every old/new combination must be safe, including partial push batches.
-        for entry in &self.entries {
-            let base = &self.bases[entry.index];
-            let Some(old_base) = self.refs.get(base).and_then(Option::as_deref) else {
-                return Ok(false);
-            };
-            let new_base = self
+    fn desired<'a>(&'a self, stack: &'a [Commit], link_native: bool) -> DesiredPublication<'a> {
+        DesiredPublication::new(
+            stack,
+            self.entries
+                .first()
+                .map_or(stack.len(), |entry| entry.index),
+            &self.bases,
+            link_native,
+        )
+    }
+
+    pub(super) fn observed<'a>(&'a self, trunk: &'a str) -> ObservedPublication<'a> {
+        ObservedPublication {
+            refs: &self.refs,
+            prs: self
                 .entries
                 .iter()
-                .find(|entry| entry.reference == *base)
-                .map_or(old_base, |entry| stack[entry.index].hash.as_str());
-            for head in [
-                entry.pr.as_ref().map(|p| p.head.sha.as_str()),
-                Some(stack[entry.index].hash.as_str()),
-            ]
-            .into_iter()
-            .flatten()
-            {
-                for base_tip in [old_base, new_base] {
-                    if git.is_ancestor(head, base_tip)? {
-                        return Ok(false);
-                    }
-                }
-            }
+                .filter_map(|entry| {
+                    entry
+                        .pr
+                        .as_ref()
+                        .map(|pr| (entry.index, (pr.number, pr.base.name.clone())))
+                })
+                .collect(),
+            trunk,
+            anchor: &self.anchor,
         }
-        Ok(true)
     }
 
-    fn check_staging(&self, git: Git<'_>, stack: &[Commit]) -> Result<()> {
-        let anchor = &self.anchor;
-        for entry in &self.entries {
-            for head in [
-                entry.pr.as_ref().map(|p| p.head.sha.as_str()),
-                Some(stack[entry.index].hash.as_str()),
-            ]
+    pub(super) fn anchor(&self) -> &str {
+        &self.anchor
+    }
+
+    pub(super) fn ancestry(&self, git: Git<'_>, stack: &[Commit]) -> Result<Ancestry> {
+        let pairs = Ancestry::requirements(
+            &self.desired(stack, self.plan.link_native),
+            &self.observed(&git.repo.trunk),
+        )?;
+        pairs
             .into_iter()
-            .flatten()
-            {
-                if git.is_ancestor(head, anchor)? {
-                    bail!(
-                        "temporary publication base would indirectly merge head {:?}",
-                        entry.reference
-                    );
-                }
-            }
+            .map(|(ancestor, descendant)| {
+                git.is_ancestor(&ancestor, &descendant)
+                    .map(|answer| ((ancestor, descendant), answer))
+            })
+            .collect::<Result<BTreeMap<_, _>>>()
+            .map(Ancestry)
+    }
+
+    fn staging(&self) -> Option<&str> {
+        if let Strategy::Stage(reference) = &self.plan.strategy {
+            Some(reference)
+        } else {
+            None
         }
-        Ok(())
+    }
+
+    pub(super) const fn cleanup_candidates(&self) -> &BTreeMap<String, String> {
+        &self.temporary
     }
 
     fn check_dependants(&self, github: &GitHub<'_>, prepared: bool) -> Result<()> {
@@ -343,11 +380,11 @@ impl Recovery {
     }
 
     pub(super) fn publication_base(&self, index: usize) -> &str {
-        self.staging.as_deref().unwrap_or(&self.bases[index])
+        self.staging().unwrap_or(&self.bases[index])
     }
 
-    pub(super) const fn restore_native(&self) -> bool {
-        self.native.is_some() || self.link_native
+    pub(super) const fn changes_native(&self) -> bool {
+        self.native.is_some()
     }
 
     fn validate_selection(&self, stack: &[Commit], start: usize, bases: &[String]) -> Result<()> {
@@ -366,7 +403,9 @@ impl Recovery {
                     *index != entry.index || commit.remote_ref() != entry.reference
                 })
         {
-            bail!("publication selection changed before base recovery; resume the recorded stack");
+            bail!(
+                "publication selection changed during base recovery; retry from the current local stack"
+            );
         }
         Ok(())
     }
@@ -377,9 +416,14 @@ impl Recovery {
             commands: github.commands,
             repo: &github.config.repo,
         };
-        self.check_final_graph(git, &state.stack)?;
-        let mut current = self.fresh(github, &state.stack, false)?;
-        if self.restore_native() {
+        let ancestry = self.ancestry(git, &state.stack)?;
+        ancestry.verify_strategy(
+            &self.plan.strategy,
+            &self.desired(&state.stack, self.plan.link_native),
+            &self.observed(&git.repo.trunk),
+        )?;
+        let mut current = self.fresh(github, &state.stack)?;
+        if self.changes_native() {
             let base = state
                 .stack
                 .iter()
@@ -391,35 +435,16 @@ impl Recovery {
                 });
             github.check_stack_eligibility(state.selected(), base, true)?;
         }
-        if self.staging.is_none() && !self.direct_is_safe(git, &state.stack)? {
-            bail!(
-                "prepared commits require a different publication transition; retry from fresh state"
-            );
-        }
-        if self.staging.is_some() {
-            self.check_staging(git, &state.stack)?;
-        }
-        let mut journal = self.clone();
-        for entry in &mut journal.entries {
-            entry.prepared.clone_from(&state.stack[entry.index].hash);
-        }
-        github.commands.git(&[
-            "config",
-            "--local",
-            "--replace-all",
-            JOURNAL,
-            &serde_json::json!(journal).to_string(),
-        ])?;
         if let Some(number) = current.native {
             github.unstack_transition(number)?;
-            current = self.fresh(github, &state.stack, false)?;
+            current = self.fresh(github, &state.stack)?;
             if current
                 .entries
                 .iter()
                 .any(|e| e.pr.as_ref().is_some_and(|p| p.stack.is_some()))
             {
                 bail!(
-                    "native stack transition is incomplete; publication stopped and journal retained"
+                    "native stack transition is incomplete; publication stopped; retry from fresh remote observations"
                 );
             }
             github
@@ -427,10 +452,10 @@ impl Recovery {
                 .outcomes
                 .confirm(crate::model::outcome::Operation::NativeStack);
         }
-        if let Some(reference) = &self.staging {
+        if let Some(reference) = self.staging() {
             let anchor = Commit {
                 hash: self.anchor.clone(),
-                attrs: vec![("remote-ref".into(), reference.clone())],
+                attrs: vec![("remote-ref".into(), reference.to_owned())],
                 ..Commit::default()
             };
             git.push_with_leases(&[&anchor], Some(&current.refs))?;
@@ -468,31 +493,40 @@ impl Recovery {
             &self.destination,
             &self.refs.keys().cloned().collect::<Vec<_>>(),
         )?;
-        for (reference, original) in &self.refs {
+        // These expectations guard publication destinations and development
+        // dependencies. Never add trunk here: its SHA is neither a PR target
+        // parameter nor something this operation owns, even after native linking.
+        for (reference, original) in self.refs.iter() {
             let actual = &refs[reference];
             let intended = self
                 .entries
                 .iter()
                 .find(|e| &e.reference == reference)
                 .map(|e| &stack[e.index].hash)
-                .or_else(|| (self.staging.as_ref() == Some(reference)).then_some(&self.anchor));
+                .or_else(|| (self.staging() == Some(reference.as_str())).then_some(&self.anchor));
             if actual != original
                 && !(intended.is_some() && actual.as_ref() == intended)
-                && !(self.staging.as_ref() == Some(reference) && actual.is_none())
+                && !(self.temporary.contains_key(reference) && actual.is_none())
             {
-                bail!("remote ref {reference:?} changed during base recovery; journal retained");
+                bail!(
+                    "remote ref {reference:?} changed during publication; retry from fresh remote observations"
+                );
             }
         }
         Ok(refs)
     }
 
-    fn fresh(&self, github: &GitHub<'_>, stack: &[Commit], resuming: bool) -> Result<Self> {
+    fn fresh(&self, github: &GitHub<'_>, stack: &[Commit]) -> Result<Self> {
         let git = Git {
             commands: github.commands,
             repo: &github.config.repo,
         };
         let refs = self.fresh_refs(git, stack)?;
-        let references: Vec<_> = self.entries.iter().map(|e| e.reference.clone()).collect();
+        let references = self
+            .entries
+            .iter()
+            .map(|entry| entry.reference.clone())
+            .collect::<Vec<_>>();
         github.invalidate_heads(&references);
         github.observe(&references)?;
         for parent in self.parents.values() {
@@ -501,107 +535,27 @@ impl Recovery {
             }
         }
         let mut current = self.clone();
-        current.refs = refs;
+        current.refs = Arc::new(refs);
         for entry in &mut current.entries {
             let observed = github.publication_pr(&entry.reference)?;
-            let Some(expected) = &entry.pr else {
-                if let Some(observed) = observed {
-                    if !resuming {
-                        bail!("PR identity changed before base recovery");
-                    }
-                    let actual = github.recovery_pr(observed.number)?;
-                    if actual.head.sha != entry.prepared
-                        || actual.base.name != self.bases[entry.index]
-                    {
-                        bail!("new PR does not match the recorded publication transition");
-                    }
-                    entry.pr = Some(actual);
-                }
-                continue;
-            };
-            if observed.as_ref().map(|p| (p.number, &p.node_id))
-                != Some((expected.number, &expected.node_id))
+            if observed.as_ref().map(|pr| (pr.number, &pr.node_id))
+                != entry.pr.as_ref().map(|pr| (pr.number, &pr.node_id))
             {
                 bail!("PR identity changed before base recovery");
             }
-            let actual = github.recovery_pr(expected.number)?;
-            let mut allowed = expected.clone();
-            if resuming {
-                allowed.head.sha = current.refs[&entry.reference]
-                    .clone()
-                    .context("missing resumed publication head")?;
-                if actual.base.name == self.bases[entry.index]
-                    || Some(&actual.base.name) == self.staging.as_ref()
-                {
-                    allowed.base.name.clone_from(&actual.base.name);
+            if let Some(expected) = &entry.pr {
+                let actual = github.recovery_pr(expected.number)?;
+                let mut expected = expected.clone();
+                if actual.stack.is_none() {
+                    expected.stack = None;
                 }
+                policy::same_recovery_head(&expected, &actual, &expected.base.name)?;
+                entry.pr = Some(actual);
             }
-            if actual.stack.is_none() {
-                allowed.stack = None;
-            } else if resuming
-                && actual.head.sha == entry.prepared
-                && actual.base.name == self.bases[entry.index]
-            {
-                allowed.stack.clone_from(&actual.stack);
-            }
-            policy::same_recovery_head(&allowed, &actual, &allowed.base.name)?;
-            entry.pr = Some(actual);
         }
         current.check_dependants(github, false)?;
         current.native = current.observe_native(github)?;
         Ok(current)
-    }
-
-    fn resume(
-        github: &GitHub<'_>,
-        stack: &[Commit],
-        start: usize,
-        bases: &[String],
-    ) -> Result<Self> {
-        let saved: Self = serde_json::from_str(&github.config.transition_journal)
-            .context("invalid publication transition journal; retain it for inspection")?;
-        saved.validate_selection(stack, start, bases)?;
-        if !crate::git::policy::valid_oid(&saved.anchor)
-            || saved
-                .refs
-                .get(&github.config.repo.trunk)
-                .and_then(Option::as_deref)
-                != Some(saved.anchor.as_str())
-            || saved.entries.iter().any(|entry| {
-                !saved.refs.contains_key(&entry.reference)
-                    || !saved.refs.contains_key(&saved.bases[entry.index])
-            })
-            || saved.staging.as_ref().is_some_and(|reference| {
-                !saved.refs.contains_key(reference)
-                    || saved
-                        .numbers()
-                        .into_iter()
-                        .min()
-                        .map(|number| format!("git-pr/transition/{number}"))
-                        .as_ref()
-                        != Some(reference)
-            })
-        {
-            bail!("invalid publication transition journal metadata; retain it for inspection");
-        }
-        if saved.repository != github.config.repo.name
-            || saved
-                .entries
-                .iter()
-                .any(|e| e.prepared != stack[e.index].hash)
-        {
-            bail!(
-                "recorded publication transition does not match the repository or prepared commits"
-            );
-        }
-        let git = Git {
-            commands: github.commands,
-            repo: &github.config.repo,
-        };
-        saved.check_final_graph(git, stack)?;
-        let mut resumed = saved.fresh(github, stack, true)?;
-        resumed.native = saved.native;
-        Ok(resumed)
     }
 
     fn verify_heads(&self, github: &GitHub<'_>, state: &State, published: bool) -> Result<()> {
@@ -663,10 +617,6 @@ impl Recovery {
     }
 
     pub(super) fn finish(&self, github: &GitHub<'_>, state: &State) -> Result<()> {
-        let git = Git {
-            commands: github.commands,
-            repo: &github.config.repo,
-        };
         self.require_published_refs(github, state)?;
         for entry in &self.entries {
             if let Some(pr) = &entry.pr {
@@ -677,23 +627,6 @@ impl Recovery {
                 policy::same_recovery_head(&expected, &actual, &self.bases[entry.index])?;
             }
         }
-        if let Some(reference) = &self.staging {
-            github
-                .check_publication_dependants(std::slice::from_ref(reference), &HashMap::new())?;
-            let expected = &self.anchor;
-            github.commands.git(&[
-                "push",
-                "--porcelain",
-                "--no-follow-tags",
-                &format!("--force-with-lease=refs/heads/{reference}:{expected}"),
-                "--",
-                &git.repo.remote,
-                &format!(":refs/heads/{reference}"),
-            ])?;
-        }
-        github
-            .commands
-            .git(&["config", "--local", "--unset-all", JOURNAL])?;
         Ok(())
     }
 }

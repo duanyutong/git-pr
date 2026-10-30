@@ -252,7 +252,9 @@ Summary counts, repository identity, completed-stage outcomes and other operatio
 Live status retains complete progress counters, active targets, quota values, retry reasons and relevant countdowns.
 Request destinations and text supplied through the transient-detail boundary are descriptive context and may be shortened with a Unicode-aware ellipsis to keep the live status on one aligned, coloured row when its operational fields fit.
 This includes native-stack branch lists, publication announcements and PR titles used as intermediate detail.
-Redundant stage wording and ordinary elapsed time yield space before operational facts; viable live frames use at most two rows.
+Redundant stage wording and ordinary elapsed time yield space before operational facts.
+Live frames may occupy additional deliberately wrapped rows, provided the complete frame fits within the terminal height with one row reserved.
+Every painted row remains transient and is erased before the next frame or durable output.
 If a pane cannot accommodate a complete live frame, the renderer emits an ordinary notice containing complete operational facts, without an animation glyph or transient descriptive detail.
 Warnings, failures, unclassified operational text and debug evidence are not silently truncated.
 An identity wider than the entire pane remains intact; such exceptionally narrow panes may require native terminal wrapping.

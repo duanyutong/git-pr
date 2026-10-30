@@ -754,6 +754,7 @@ fn decode_nodes(
 ) -> Result<Vec<Observation>> {
     let mut prs = Vec::new();
     for mut node in nodes {
+        let stack_known = stack_known && node.get("stack").is_some();
         if !repository_matches(node.get("headRepository"), "nameWithOwner", repo)? {
             continue;
         }

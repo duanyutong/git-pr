@@ -319,6 +319,163 @@ fn hydrate_publication_heads(f: &Fixture) {
     }
 }
 
+fn advance_remote_trunk(commands: &crate::commands::Commands, remote: &str) -> Result<String> {
+    let repository = format!("--git-dir={remote}");
+    let old = commands.git(&[&repository, "rev-parse", "refs/heads/main"])?;
+    let tree = commands.git(&[&repository, "rev-parse", &format!("{old}^{{tree}}")])?;
+    // Create the object only in the bare remote. The publishing checkout must
+    // complete without fetching this unrelated integration commit.
+    let new = commands.git(&[
+        &repository,
+        "-c",
+        "user.name=Independent Author",
+        "-c",
+        "user.email=independent@example.com",
+        "commit-tree",
+        &tree,
+        "-p",
+        &old,
+        "-m",
+        "Independent integration change",
+    ])?;
+    commands.git(&[&repository, "update-ref", "refs/heads/main", &new, &old])?;
+    Ok(new)
+}
+
+#[derive(Debug)]
+struct AdvanceTrunkAfterMutation {
+    service: Arc<Service>,
+    commands: crate::commands::Commands,
+    remote: String,
+    phase: &'static str,
+    advanced: AtomicBool,
+}
+
+impl Transport for AdvanceTrunkAfterMutation {
+    fn request(&self, request: Request<'_>) -> Result<Vec<u8>> {
+        let body: serde_json::Value = request
+            .body
+            .map(serde_json::from_slice)
+            .transpose()?
+            .unwrap_or_default();
+        let trigger = match self.phase {
+            "retarget" => request.method == "PATCH" && body.get("base").is_some(),
+            "description" => {
+                request.method == "POST"
+                    && body["query"]
+                        .as_str()
+                        .is_some_and(|query| query.contains("updatePullRequest"))
+            }
+            "linked" => request.method == "POST" && request.url.ends_with("/stacks"),
+            _ => false,
+        };
+        let response = self.service.request(request)?;
+        if trigger && !self.advanced.swap(true, Ordering::SeqCst) {
+            advance_remote_trunk(&self.commands, &self.remote)?;
+        }
+        Ok(response)
+    }
+}
+
+#[test]
+fn independent_trunk_changes_do_not_invalidate_stack_publication_or_cleanup() {
+    for native in [false, true] {
+        for phase in ["before", "cached", "retarget", "description", "linked"] {
+            if phase == "linked" && !native {
+                continue;
+            }
+            let mut f = Fixture::with_service(
+                3,
+                true,
+                Service {
+                    indirect_merges: Some(true),
+                    ..Service::default()
+                },
+            );
+            let flags = [
+                if native {
+                    "--github-stack"
+                } else {
+                    "--no-stack"
+                },
+                "--yes",
+            ];
+            f.run(&flags).unwrap();
+            hydrate_publication_heads(&f);
+            f.git(&["checkout", "--detach", &f.trunk]);
+            for index in [1, 0, 2] {
+                f.git(&["cherry-pick", &f.hashes[index]]);
+            }
+            // Moving local main is also irrelevant: selection uses the cached
+            // remote-tracking base, and publication must leave local main alone.
+            f.git(&["update-ref", "refs/heads/main", &f.hashes[0]]);
+            let remote = f
+                .temp
+                .path()
+                .join("remote.git")
+                .to_str()
+                .unwrap()
+                .to_owned();
+            if matches!(phase, "before" | "cached") {
+                advance_remote_trunk(&f.app.commands, &remote).unwrap();
+            }
+            if phase == "cached" {
+                // Even when the new integration commit is already available,
+                // a bottom PR based on the older trunk needs no forced rebase.
+                f.git(&["fetch", "origin", "main:refs/remotes/origin/main"]);
+            }
+            let movement = Arc::new(AdvanceTrunkAfterMutation {
+                service: f.service.clone(),
+                commands: f.app.commands.clone(),
+                remote,
+                phase,
+                advanced: AtomicBool::new(false),
+            });
+            f.app.transport = movement.clone();
+            f.service.trace.lock().unwrap().clear();
+            f.run(&flags).unwrap();
+            assert_eq!(
+                movement.advanced.load(Ordering::SeqCst),
+                !matches!(phase, "before" | "cached"),
+                "native={native}, phase={phase}"
+            );
+            let remote_trunk = f.git(&["ls-remote", "origin", "refs/heads/main"]);
+            let remote_trunk = remote_trunk.split_whitespace().next().unwrap();
+            assert_ne!(remote_trunk, f.trunk);
+            assert_eq!(f.git(&["rev-parse", "refs/heads/main"]), f.hashes[0]);
+            if phase != "cached" {
+                assert!(
+                    f.app
+                        .commands
+                        .git(&["cat-file", "-e", &format!("{remote_trunk}^{{commit}}")])
+                        .is_err()
+                );
+            }
+            let prs = f.service.prs.lock().unwrap();
+            for (number, base) in [(102, "main"), (101, "topic/2"), (103, "topic/1")] {
+                assert_eq!(prs[&number]["state"], "open");
+                assert_eq!(prs[&number]["merged"], false);
+                assert_eq!(prs[&number]["base"]["ref"], base);
+                assert_eq!(prs[&number]["stack"].is_object(), native);
+            }
+            drop(prs);
+            assert!(
+                !f.git(&["ls-remote", "--heads", "origin"])
+                    .contains("git-pr/transition/")
+            );
+            assert!(
+                !f.terminal
+                    .stderr
+                    .lock()
+                    .unwrap()
+                    .contains("temporary-base cleanup can be retried")
+            );
+            // A retry converges with the same current branch targets.
+            f.run(&flags).unwrap();
+        }
+    }
+}
+
 #[test]
 fn reordered_stack_preserves_open_prs_with_the_hosts_indirect_merge_lifecycle() {
     for native in [false, true] {
@@ -448,6 +605,316 @@ fn insertion_at_every_position_supports_missing_and_published_new_branches() {
             }
             drop(prs);
         }
+    }
+}
+
+#[derive(Debug)]
+struct RestWithoutMembership(Arc<Service>);
+
+impl Transport for RestWithoutMembership {
+    fn request(&self, request: Request<'_>) -> Result<Vec<u8>> {
+        let omit = request.method == "GET" && request.url.contains("/pulls/");
+        let bytes = self.0.request(request)?;
+        if !omit {
+            return Ok(bytes);
+        }
+        let mut value: serde_json::Value = serde_json::from_slice(&bytes)?;
+        value.as_object_mut().unwrap().remove("stack");
+        Ok(serde_json::to_vec(&value)?)
+    }
+}
+
+fn expand_two_prs(f: &Fixture) -> Vec<(String, String)> {
+    f.git(&["checkout", "--detach", &f.trunk]);
+    let mut order = Vec::new();
+    for index in 0..9 {
+        let head = match index {
+            2 | 4 => {
+                let old = usize::from(index == 4);
+                f.git(&["cherry-pick", &f.hashes[old]]);
+                format!("topic/{}", old + 1)
+            }
+            _ => {
+                let file = format!("inserted-{index}.txt");
+                f.write(&file, "New stack layer\n");
+                f.git(&["add", &file]);
+                let head = format!("topic/inserted-{index}");
+                f.git(&[
+                    "commit",
+                    "-m",
+                    &format!("New layer {index}\n\nRemote-Ref: {head}"),
+                ]);
+                head
+            }
+        };
+        order.push((head, f.git(&["rev-parse", "HEAD"])));
+    }
+    order
+}
+
+#[test]
+fn expanding_two_published_prs_to_nine_preserves_identity_and_publishes_all_new_layers() {
+    for (existing_native, native) in [(false, false), (false, true), (true, true), (true, false)] {
+        for delete in [false, true] {
+            let mut f = Fixture::with_service(
+                2,
+                true,
+                Service {
+                    indirect_merges: Some(delete),
+                    ..Service::default()
+                },
+            );
+            let flags = [
+                if native {
+                    "--github-stack"
+                } else {
+                    "--no-stack"
+                },
+                "--draft",
+                "--yes",
+            ];
+            f.run(&[
+                if existing_native {
+                    "--github-stack"
+                } else {
+                    "--no-stack"
+                },
+                "--draft",
+                "--yes",
+            ])
+            .unwrap();
+            hydrate_publication_heads(&f);
+            let original = f.service.prs.lock().unwrap().clone();
+            let order = expand_two_prs(&f);
+            assert_eq!(
+                f.git(&["ls-remote", "--heads", "origin"]).lines().count(),
+                3
+            );
+            f.app.transport = Arc::new(RestWithoutMembership(f.service.clone()));
+            f.service.trace.lock().unwrap().clear();
+            f.run(&flags).unwrap();
+            let prs = f.service.prs.lock().unwrap().clone();
+            assert_eq!(prs.len(), 9);
+            for (index, (head, hash)) in order.iter().enumerate() {
+                let pr = prs.values().find(|pr| pr["head"]["ref"] == *head).unwrap();
+                assert_eq!(pr["state"], "open");
+                assert_eq!(pr["merged"], false);
+                assert_eq!(pr["draft"], true);
+                assert_eq!(
+                    pr["base"]["ref"],
+                    if index == 0 {
+                        "main"
+                    } else {
+                        &order[index - 1].0
+                    }
+                );
+                assert_eq!(pr["stack"].is_object(), native);
+                assert!(
+                    f.git(&["ls-remote", "origin", &format!("refs/heads/{head}")])
+                        .starts_with(hash)
+                );
+            }
+            for number in [101, 102] {
+                assert_eq!(prs[&number]["node_id"], original[&number]["node_id"]);
+                assert!(prs[&number]["body"].as_str().unwrap().contains("Body"));
+            }
+            assert!(
+                !f.git(&["ls-remote", "--heads", "origin"])
+                    .contains("git-pr/transition/")
+            );
+            assert!(
+                !f.git(&["config", "--local", "--list"])
+                    .contains("transitionjournal")
+            );
+            f.service.trace.lock().unwrap().clear();
+            f.run(&flags).unwrap();
+            assert_eq!(f.service.prs.lock().unwrap().len(), 9);
+            assert!(
+                !f.trace()
+                    .iter()
+                    .any(|event| event["method"] == "POST" && event["path"] == "pulls")
+            );
+        }
+    }
+}
+
+#[test]
+fn rebased_expansion_recovers_a_dissolved_native_stack_before_any_branch_was_published() {
+    let mut f = Fixture::with_service(
+        2,
+        true,
+        Service {
+            indirect_merges: Some(true),
+            ..Service::default()
+        },
+    );
+    f.run(&["--github-stack", "--draft", "--yes"]).unwrap();
+    hydrate_publication_heads(&f);
+    let original = f.service.prs.lock().unwrap().clone();
+    let order = expand_two_prs(&f);
+    let old_tip = f.git(&["rev-parse", "HEAD"]);
+    f.app.transport = Arc::new(RestWithoutMembership(f.service.clone()));
+    f.service.command_errors.lock().unwrap().insert(
+        format!("git push --porcelain --no-follow-tags --force-with-lease=refs/heads/git-pr/transition/101: -- origin {}:refs/heads/git-pr/transition/101", f.trunk),
+        (1, "interrupted before staging publication".into()),
+    );
+    let error = f.run(&["--github-stack", "--draft", "--yes"]).unwrap_err();
+    assert!(format!("{error:#}").contains("interrupted before staging publication"));
+    assert!(
+        f.service
+            .prs
+            .lock()
+            .unwrap()
+            .values()
+            .all(|pr| pr["stack"].is_null())
+    );
+    assert_eq!(
+        f.git(&["ls-remote", "--heads", "origin"]).lines().count(),
+        3
+    );
+    f.git(&["checkout", "main"]);
+    f.write("advanced-trunk.txt", "New trunk revision\n");
+    f.git(&["add", "advanced-trunk.txt"]);
+    f.git(&["commit", "-m", "Advance trunk"]);
+    f.git(&["push", "origin", "main"]);
+    f.git(&["checkout", "--detach", &old_tip]);
+    f.git(&["rebase", "--onto", "main", &f.trunk]);
+    assert_ne!(f.git(&["rev-parse", "HEAD"]), old_tip);
+    let rebased = f.git(&["rev-list", "--reverse", "main..HEAD"]);
+    let hashes = rebased.lines().collect::<Vec<_>>();
+    assert_eq!(hashes.len(), 9);
+    f.service.command_errors.lock().unwrap().clear();
+    f.run(&["--no-stack", "--draft", "--yes"]).unwrap();
+    let prs = f.service.prs.lock().unwrap().clone();
+    assert_eq!(prs.len(), 9);
+    for (index, (head, _)) in order.iter().enumerate() {
+        let pr = prs.values().find(|pr| pr["head"]["ref"] == *head).unwrap();
+        assert_eq!(pr["state"], "open");
+        assert_eq!(pr["merged"], false);
+        assert_eq!(pr["draft"], true);
+        assert!(pr["stack"].is_null());
+        assert_eq!(
+            pr["base"]["ref"],
+            if index == 0 {
+                "main"
+            } else {
+                &order[index - 1].0
+            }
+        );
+        assert_eq!(
+            f.git(&["rev-parse", &format!("refs/remotes/origin/{head}")]),
+            hashes[index]
+        );
+    }
+    for number in [101, 102] {
+        assert_eq!(prs[&number]["node_id"], original[&number]["node_id"]);
+    }
+    assert!(
+        !f.git(&["config", "--local", "--list"])
+            .contains("transitionjournal")
+    );
+    assert!(
+        !f.git(&["ls-remote", "--heads", "origin"])
+            .contains("git-pr/transition/")
+    );
+    f.run(&["--no-stack", "--draft", "--yes"]).unwrap();
+    assert_eq!(f.service.prs.lock().unwrap().len(), 9);
+}
+
+#[test]
+fn independent_stacks_retry_from_current_state_without_a_repository_journal() {
+    for reverse in [false, true] {
+        let mut f = Fixture::with_service(
+            3,
+            true,
+            Service {
+                indirect_merges: Some(true),
+                ..Service::default()
+            },
+        );
+        f.git(&[
+            "config",
+            "git-pr.transitionJournal",
+            "obsolete ignored state",
+        ]);
+        f.run(&["--no-stack", "--yes"]).unwrap();
+        hydrate_publication_heads(&f);
+        let first = [2, 1, 3].map(|number| f.git(&["rev-parse", &format!("topic/{number}")]));
+        f.git(&["checkout", "--detach", &f.trunk]);
+        for hash in &first {
+            f.git(&["cherry-pick", hash]);
+        }
+        let first_tip = f.git(&["rev-parse", "HEAD"]);
+        let interrupt = |number| {
+            format!(
+                "git push --porcelain --no-follow-tags --force-with-lease=refs/heads/git-pr/transition/{number}: -- origin {}:refs/heads/git-pr/transition/{number}",
+                f.trunk
+            )
+        };
+        let first_push = interrupt(101);
+        f.service
+            .command_errors
+            .lock()
+            .unwrap()
+            .insert(first_push, (1, "interrupted transition".into()));
+        assert!(f.run(&["--no-stack", "--yes"]).is_err());
+        f.service.command_errors.lock().unwrap().clear();
+        f.git(&["checkout", "main"]);
+        for number in 4..=6 {
+            f.add_commit(number, true, "fixture@example.com");
+        }
+        f.run(&["--no-stack", "--yes"]).unwrap();
+        hydrate_publication_heads(&f);
+        let identities = f.service.prs.lock().unwrap().clone();
+        let second = [5, 4, 6].map(|number| f.git(&["rev-parse", &format!("topic/{number}")]));
+        f.git(&["checkout", "--detach", &f.trunk]);
+        for hash in &second {
+            f.git(&["cherry-pick", hash]);
+        }
+        let second_tip = f.git(&["rev-parse", "HEAD"]);
+        let second_push = format!(
+            "git push --porcelain --no-follow-tags --force-with-lease=refs/heads/git-pr/transition/104: -- origin {}:refs/heads/git-pr/transition/104",
+            f.trunk
+        );
+        f.service
+            .command_errors
+            .lock()
+            .unwrap()
+            .insert(second_push, (1, "interrupted transition".into()));
+        assert!(f.run(&["--no-stack", "--yes"]).is_err());
+        f.service.command_errors.lock().unwrap().clear();
+        let tips = if reverse {
+            [&second_tip, &first_tip]
+        } else {
+            [&first_tip, &second_tip]
+        };
+        for tip in tips {
+            f.git(&["checkout", "--detach", tip]);
+            f.run(&["--no-stack", "--yes"]).unwrap();
+        }
+        let prs = f.service.prs.lock().unwrap();
+        for (number, base) in [
+            (102, "main"),
+            (101, "topic/2"),
+            (103, "topic/1"),
+            (105, "main"),
+            (104, "topic/5"),
+            (106, "topic/4"),
+        ] {
+            assert_eq!(prs[&number]["state"], "open");
+            assert_eq!(prs[&number]["merged"], false);
+            assert_eq!(prs[&number]["node_id"], identities[&number]["node_id"]);
+            assert_eq!(prs[&number]["base"]["ref"], base);
+        }
+        drop(prs);
+        assert!(
+            !f.git(&["ls-remote", "--heads", "origin"])
+                .contains("git-pr/transition/")
+        );
+        assert_eq!(
+            f.git(&["config", "--get", "git-pr.transitionJournal"]),
+            "obsolete ignored state"
+        );
     }
 }
 

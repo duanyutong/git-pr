@@ -486,21 +486,22 @@ fn animate(shared: &Shared) {
             );
             continue;
         }
-        paint_frame(shared, &mut state, frame, width());
+        let (columns, rows) = dimensions();
+        paint_frame(shared, &mut state, frame, columns, rows);
         drop(state);
         frame = (frame + 1) % 10;
         next_frame = Instant::now() + Duration::from_millis(100);
     }
 }
 
-fn paint_frame(shared: &Shared, state: &mut State, frame: usize, columns: usize) {
+fn paint_frame(shared: &Shared, state: &mut State, frame: usize, columns: usize, rows: usize) {
     let text = render_state(state, frame, columns);
     clear_rows(shared.terminal.as_ref(), state);
     if state.painted_width != columns {
         state.fallback_reported = false;
     }
     let lines: Vec<_> = text.lines().collect();
-    if lines.len() <= 2 && lines.iter().all(|line| line.width() < columns) {
+    if lines.len() < rows && lines.iter().all(|line| line.width() < columns) {
         shared.terminal.err(&format!(
             "\r\x1b[2K{}",
             paint(&lines.join("\r\n"), "36", shared.colour)
@@ -686,10 +687,26 @@ fn render_text(
 }
 
 fn width() -> usize {
+    dimensions().0
+}
+
+fn dimensions() -> (usize, usize) {
     rustix::termios::tcgetwinsize(std::io::stderr())
         .ok()
-        .filter(|size| size.ws_col != 0)
-        .map_or(80, |size| usize::from(size.ws_col))
+        .map_or((80, 24), |size| {
+            (
+                if size.ws_col == 0 {
+                    80
+                } else {
+                    usize::from(size.ws_col)
+                },
+                if size.ws_row == 0 {
+                    24
+                } else {
+                    usize::from(size.ws_row)
+                },
+            )
+        })
 }
 
 fn output_width() -> usize {

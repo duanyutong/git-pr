@@ -108,7 +108,8 @@ These bounds concern represented inputs; they do not imply exhaustive enumeratio
 The renderer shall distinguish durable output and operational facts from descriptive detail which is eligible for interactive ellipsis.
 Descriptions supplied through the generic detail boundary shall receive the same display budget as request destinations, independently of message wording or the producing workflow.
 No animation glyph or transient description shall remain on the visible screen after its live region is cleared for completion, failure, durable output, warnings, confirmation or destruction.
-Ordinary fallback notices may preserve oversized operational facts, but shall not retain loading glyphs or descriptive detail.
+Frames which fit within the viewport shall remain transient regardless of whether they exceed two rows.
+Ordinary fallback notices may preserve operational facts which exceed the available width or height, but shall not retain loading glyphs or descriptive detail.
 Clearing shall preserve preceding durable output and shall not consume subsequent output.
 
 The terminal-screen suite uses an independent `vt100` screen model rather than treating emitted erase sequences as evidence that erasure succeeded.

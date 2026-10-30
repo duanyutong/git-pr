@@ -5,6 +5,7 @@ Keep business policy independent of command, HTTP, terminal and timing boundarie
 Production code shall not contain unsafe code, unchecked panics or unfinished paths.
 
 Use `just check`, `just coverage` and `just backends` for acceptance.
+Use documented project commands in the system default Cargo environment; do not borrow tool-owned paths (e.g. Prek environments) for unrelated commands.
 See [development](docs/development.md) and [testing](docs/testing.md).
 Tests shall use disposable repositories and isolated credentials.
 Do not execute submission against a developer's working stack.

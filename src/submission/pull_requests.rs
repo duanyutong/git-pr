@@ -3,6 +3,7 @@
 use std::{
     cell::Cell,
     collections::{HashMap, HashSet},
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -21,7 +22,13 @@ use crate::{
     },
 };
 
-use super::{Application, State};
+use super::{
+    Application, State,
+    plan::{
+        Ancestry, DesiredPublication, ObservedPublication, PublicationPlan, temporary_base,
+        temporary_owner,
+    },
+};
 
 /// Identities and relationships authorised before any local rewrite or publication.
 #[derive(Debug, Default)]
@@ -30,14 +37,18 @@ pub(super) struct Publication {
     entries: Vec<(usize, String, Option<Identity>)>,
     dependant_refs: Vec<String>,
     dependant_times: Vec<Cell<Instant>>,
-    recovery: Option<super::recovery::Recovery>,
-    leases: std::collections::BTreeMap<String, Option<String>>,
+    transition: Option<super::transition::Transition>,
+    actions: Arc<PublicationPlan>,
+    leases: Arc<std::collections::BTreeMap<String, Option<String>>>,
+    cleanup: std::collections::BTreeMap<String, String>,
+    destination: String,
 }
 
 #[derive(Debug)]
 struct Identity {
     number: u64,
     node_id: String,
+    base: String,
 }
 
 impl Publication {
@@ -46,7 +57,20 @@ impl Publication {
             || github.config.stop_after == Some(crate::config::checkpoint::Checkpoint::Rewrite)
             || !stack[start..].iter().any(|c| !c.skip)
         {
-            return Ok(Self::default());
+            return Ok(Self {
+                actions: Arc::new(PublicationPlan {
+                    changing: stack
+                        .iter()
+                        .enumerate()
+                        .skip(start)
+                        .filter(|(_, head)| !head.skip)
+                        .map(|(index, _)| index)
+                        .collect(),
+                    link_native: github.config.github_stack,
+                    ..PublicationPlan::default()
+                }),
+                ..Self::default()
+            });
         }
         let bases = selection::resolve_bases(stack, start, &github.config.repo.trunk);
         let mut plan = Self {
@@ -54,10 +78,72 @@ impl Publication {
             entries: Vec::new(),
             dependant_refs: Vec::new(),
             dependant_times: Vec::new(),
-            recovery: None,
-            leases: std::collections::BTreeMap::new(),
+            transition: None,
+            actions: Arc::default(),
+            leases: Arc::default(),
+            cleanup: std::collections::BTreeMap::new(),
+            destination: String::new(),
         };
-        let mut recover = !github.config.transition_journal.is_empty();
+        plan.observe_identities(github, stack, start)?;
+        plan.observe_refs(github, stack)?;
+        let desired =
+            DesiredPublication::new(stack, start, &plan.bases, github.config.github_stack);
+        if desired.changes_bases(&plan.observed(&github.config.repo.trunk)) {
+            let transition =
+                super::transition::Transition::observe(github, stack, start, &plan.bases)
+                    .context("unsafe publication: publication transition could not be verified")?;
+            plan.leases = Arc::clone(&transition.refs);
+            plan.transition = Some(transition);
+        }
+        let git = Git {
+            commands: github.commands,
+            repo: &github.config.repo,
+        };
+        let ancestry = plan.transition.as_ref().map_or_else(
+            || Ok(Ancestry::default()),
+            |transition| transition.ancestry(git, stack),
+        )?;
+        plan.actions = Arc::new(PublicationPlan::derive(
+            &desired,
+            &plan.observed(&github.config.repo.trunk),
+            &ancestry,
+        )?);
+        if let Some(transition) = &mut plan.transition {
+            transition.plan = Arc::clone(&plan.actions);
+            transition.prepare_staging(git)?;
+            plan.leases = Arc::clone(&transition.refs);
+            plan.cleanup.extend(transition.cleanup_candidates().clone());
+        }
+        if plan.transition.is_none() {
+            // A leased push of the already published object cannot change its dependants.
+            // Use the actual push destination rather than cached tracking refs or PR heads.
+            plan.dependant_refs = plan
+                .entries
+                .iter()
+                .filter(|(index, _, _)| plan.actions.changing.contains(index))
+                .map(|(_, reference, _)| reference.clone())
+                .collect();
+            let selected = plan.selected_prs();
+            plan.dependant_times = plan
+                .dependant_refs
+                .chunks(25)
+                .map(|chunk| {
+                    let acquired = github.now();
+                    github.check_publication_dependants(chunk, &selected)?;
+                    Ok(Cell::new(acquired))
+                })
+                .collect::<Result<_>>()?;
+        }
+        plan.check_native(github, stack, start)?;
+        Ok(plan)
+    }
+
+    fn observe_identities(
+        &mut self,
+        github: &GitHub<'_>,
+        stack: &[Commit],
+        start: usize,
+    ) -> Result<()> {
         for (group, chunk) in stack.chunks(25).enumerate() {
             let references: Vec<_> = chunk
                 .iter()
@@ -88,18 +174,16 @@ impl Publication {
                         "adopted PR #{number} differs from current head history; refusing a replacement"
                     );
                 }
-                if let Some(pr) = &pr {
-                    if pr.base.name != plan.bases[index]
-                        && github.config.transition_journal.is_empty()
-                        && plan.bases[index] != github.config.repo.trunk
-                        && pr.base.name != github.config.repo.trunk
-                        && !stack[start..]
-                            .iter()
-                            .any(|commit| !commit.skip && commit.remote_ref() == pr.base.name)
-                    {
-                        crate::github::policy::require_publication_base(pr, &plan.bases[index])?;
-                    }
-                    recover |= pr.base.name != plan.bases[index];
+                if let Some(pr) = &pr
+                    && pr.base.name != self.bases[index]
+                    && temporary_owner(&pr.base.name).is_none()
+                    && self.bases[index] != github.config.repo.trunk
+                    && pr.base.name != github.config.repo.trunk
+                    && !stack[start..]
+                        .iter()
+                        .any(|commit| !commit.skip && commit.remote_ref() == pr.base.name)
+                {
+                    crate::github::policy::require_publication_base(pr, &self.bases[index])?;
                 }
                 if pr.is_none() {
                     crate::stack::description::initial_body(&commit.message, github.template)?;
@@ -107,49 +191,38 @@ impl Publication {
                 let identity = pr.map(|pr| Identity {
                     number: pr.number,
                     node_id: pr.node_id.clone(),
+                    base: pr.base.name.clone(),
                 });
-                plan.entries.push((index, reference.to_owned(), identity));
+                self.entries.push((index, reference.to_owned(), identity));
             }
         }
-        plan.observe_refs(github, stack)?;
-        if recover {
-            plan.recovery = Some(
-                super::recovery::Recovery::observe(github, stack, start, &plan.bases)
-                    .context("unsafe publication: publication transition could not be verified")?,
-            );
-            plan.check_native(github, stack, start)?;
-            return Ok(plan);
+        Ok(())
+    }
+
+    fn observed<'a>(&'a self, trunk: &'a str) -> ObservedPublication<'a> {
+        ObservedPublication {
+            refs: &self.leases,
+            prs: self
+                .entries
+                .iter()
+                .filter_map(|(index, _, pr)| {
+                    pr.as_ref().map(|pr| (*index, (pr.number, pr.base.clone())))
+                })
+                .collect(),
+            trunk,
+            anchor: self
+                .transition
+                .as_ref()
+                .map_or("", |transition| transition.anchor()),
         }
-        // A leased push of the already published object cannot change its dependants.
-        // Use the actual push destination rather than cached tracking refs or PR heads.
-        plan.dependant_refs = plan
-            .entries
-            .iter()
-            .filter(|(index, reference, _)| {
-                plan.leases.get(reference).and_then(Option::as_ref) != Some(&stack[*index].hash)
-            })
-            .map(|(_, reference, _)| reference.clone())
-            .collect();
-        let selected = plan.selected_prs();
-        plan.dependant_times = plan
-            .dependant_refs
-            .chunks(25)
-            .map(|chunk| {
-                let acquired = github.now();
-                github.check_publication_dependants(chunk, &selected)?;
-                Ok(Cell::new(acquired))
-            })
-            .collect::<Result<_>>()?;
-        plan.check_native(github, stack, start)?;
-        Ok(plan)
     }
 
     fn check_native(&self, github: &GitHub<'_>, stack: &[Commit], start: usize) -> Result<()> {
         let restoring = self
-            .recovery
+            .transition
             .as_ref()
-            .is_some_and(super::recovery::Recovery::restore_native);
-        if github.config.stop_after.is_none() && (github.config.github_stack || restoring) {
+            .is_some_and(super::transition::Transition::changes_native);
+        if github.config.stop_after.is_none() && (self.actions.link_native || restoring) {
             let base = stack
                 .iter()
                 .enumerate()
@@ -169,14 +242,26 @@ impl Publication {
             repo: &github.config.repo,
         };
         let destination = git.recovery_destination()?;
-        self.leases = git.recovery_refs(
-            &destination,
-            &self
-                .entries
+        let mut references = self
+            .entries
+            .iter()
+            .map(|(_, reference, _)| reference.clone())
+            .collect::<Vec<_>>();
+        if let Some(reference) = temporary_base(
+            self.entries
                 .iter()
-                .map(|(_, reference, _)| reference.clone())
-                .collect::<Vec<_>>(),
-        )?;
+                .filter_map(|(_, _, pr)| pr.as_ref().map(|pr| pr.number)),
+        ) {
+            references.push(reference);
+        }
+        self.leases = Arc::new(git.recovery_refs(&destination, &references)?);
+        self.destination = destination;
+        self.cleanup = self
+            .leases
+            .iter()
+            .filter(|(reference, _)| temporary_owner(reference).is_some())
+            .filter_map(|(reference, tip)| tip.as_ref().map(|tip| (reference.clone(), tip.clone())))
+            .collect();
         for (index, reference, pr) in &self.entries {
             if pr.is_none()
                 && let Some(Some(oid)) = self.leases.get(reference)
@@ -209,22 +294,24 @@ impl Publication {
     }
 
     pub(super) fn finish(&self, github: &GitHub<'_>, state: &State) -> Result<()> {
-        if let Some(recovery) = &self.recovery {
-            if recovery.restore_native() && !github.config.github_stack {
-                let base = state
-                    .stack
-                    .iter()
-                    .enumerate()
-                    .skip(state.start)
-                    .find(|(_, commit)| !commit.skip)
-                    .map_or(github.config.repo.trunk.as_str(), |(index, _)| {
-                        self.bases[index].as_str()
-                    });
-                github.manage_stack(state.selected(), base)?;
-            }
-            recovery.finish(github, state)?;
+        if let Some(transition) = &self.transition {
+            transition.finish(github, state)?;
+        }
+        if let Err(error) = super::cleanup::remove_temporary(
+            github,
+            &self.destination,
+            &self.cleanup,
+            self.transition
+                .as_ref()
+                .map(super::transition::Transition::anchor),
+        ) {
+            github.commands.warn(&format!("publication completed; temporary-base cleanup can be retried independently: {error:#}"));
         }
         Ok(())
+    }
+
+    pub(super) fn links_native(&self) -> bool {
+        self.actions.link_native
     }
 
     pub(super) fn verify(
@@ -289,7 +376,7 @@ impl Publication {
                     let base = if published {
                         &self.bases[*index]
                     } else {
-                        self.recovery
+                        self.transition
                             .as_ref()
                             .map_or(self.bases[*index].as_str(), |plan| {
                                 plan.publication_base(*index)
@@ -310,7 +397,7 @@ impl Publication {
                 observed.set(acquired);
             }
         }
-        if published && let Some(recovery) = &self.recovery {
+        if published && let Some(recovery) = &self.transition {
             recovery.verify_published(github, state)?;
         }
         Ok(())
@@ -340,20 +427,9 @@ impl Application {
         let indices: Vec<_> = (state.start..state.stack.len())
             .filter(|&i| !state.stack[i].skip)
             .collect();
-        let changing: Vec<_> = indices
-            .iter()
-            .copied()
-            .filter(|&index| {
-                publication.recovery.is_some()
-                    || publication
-                        .leases
-                        .get(state.stack[index].remote_ref())
-                        .and_then(Option::as_ref)
-                        != Some(&state.stack[index].hash)
-            })
-            .collect();
+        let changing = &publication.actions.changing;
         state.validate_refs(&config.repo.trunk)?;
-        for &i in &changing {
+        for &i in changing {
             let commit = &state.stack[i];
             let announcement = format!(
                 "{}push {} {} {}:refs/heads/{}",
@@ -374,12 +450,12 @@ impl Application {
         }
         crate::identity::resolve::verify_bindings(&self.commands, &config.repo, state.selected())?;
         git.recovery_destination()?;
-        if let Some(recovery) = &publication.recovery {
+        if let Some(transition) = &publication.transition {
             self.commands.terminal.stage_with_completion(
                 "Preparing publication transition",
                 "Publication transition prepared",
             );
-            recovery.apply(github, state, &publication.bases)?;
+            transition.apply(github, state, &publication.bases)?;
             self.commands
                 .terminal
                 .stage_with_completion("Publishing branches", "Publication reconciled");
@@ -392,20 +468,9 @@ impl Application {
                 .iter()
                 .map(|&i| &state.stack[i])
                 .collect::<Vec<_>>();
-            if let Some(recovery) = &publication.recovery {
-                git.push_with_leases(&commits, Some(&recovery.refs))?;
-            } else {
-                git.push_with_leases(&commits, Some(&publication.leases))?;
-            }
+            git.push_with_leases(&commits, Some(&publication.leases))?;
             git.sync_refs(state.selected());
-            if let Some(recovery) = &publication.recovery {
-                recovery.complete(github, state)?;
-            }
-            // A real push can change the lifecycle of any selected PR. An
-            // unchanged destination needs no publication-triggered observation.
-            publication.verify(github, state, true)
-                .context("PR state changed or could not be verified after publication; pushed refs are retained, and PR creation and updates have been stopped")?;
-            for &index in &changing {
+            for &index in changing {
                 let commit = &mut state.stack[index];
                 commit.metadata_updated = publication
                     .leases
@@ -413,6 +478,13 @@ impl Application {
                     .and_then(Option::as_ref)
                     != Some(&commit.hash);
             }
+        }
+        if let Some(transition) = &publication.transition {
+            transition.complete(github, state)?;
+        }
+        if !changing.is_empty() || publication.transition.is_some() {
+            publication.verify(github, state, true)
+                .context("PR state changed or could not be verified after publication; pushed refs are retained, and PR creation and updates have been stopped")?;
         }
         super::presentation::checked_outcome(
             &self.commands,

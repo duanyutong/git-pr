@@ -193,7 +193,22 @@ An unchanged five-commit prefix of a larger published stack shall remain submitt
 Destination-object regressions shall distinguish unchanged, missing and changed remote refs independently of PR-head observations, retain dependency-observation expiry for changing destinations, and reject concurrent updates through explicit expected-object leases.
 A disposable Git repository supplies actual ancestry to a host-lifecycle fixture which recognises indirect merges, optionally deletes merged heads and retargets dependent PRs.
 The regression verifies that planned reordering preserves open PRs; an explicit unsafe push in an independent disposable fixture verifies that the oracle detects the original failure mechanism.
+Trunk-movement regressions advance the remote integration branch before preflight, during retargeting and description updates, and immediately after native linking.
+They require successful publication and temporary-reference cleanup without fetching the independent remote object, whilst retaining a separately moved local trunk ref.
+A locally cached integration advance shall likewise permit publication of an older bottom head without imposing a rebase requirement.
 Synthetic insertion cases exercise every stack position with the inserted branch both present and absent on the remote.
+An expansion regression replaces a two-PR publication with nine local layers, including seven unpublished branches, whilst preserving the existing PR identities and publishing each new layer as a draft.
+It exercises native and ordinary PR stacks with omitted REST membership fields, verifies the final predecessor relationships and remote heads, and requires successful repetition without duplicate PR creation.
+Omitted REST membership requires fresh, explicit GraphQL evidence; unavailable membership, inconsistent identities and stale cached observations shall not authorise a publication transition.
+An interrupted expansion regression dissolves a native stack, fails before staging publication, advances trunk and rebases all nine local layers before requiring successful recovery with the original PR identities and membership determined by the current options.
+Retries shall reconstruct publication from the current local stack and live observations, including partially published branches and temporary bases.
+Independent stack submissions shall remain isolated from unfinished publication of another stack.
+Legacy operation-journal settings shall neither constrain the selected stack nor authorise remote mutations.
+Deterministic policy tests shall distinguish desired state, observed state and planned actions without invoking command, HTTP, clock or terminal adapters.
+Generated correct-publication cases shall require no ref mutations and shall remain unaffected by unrelated refs or leftover temporary bases.
+Independent publication plans and interrupted disposable-repository submissions shall converge in either submission order whilst retaining unselected refs.
+Cleanup failure and subsequent retries shall preserve PR identities, content and native membership whilst performing only the required leased deletion.
+Required native dissolution shall not imply reconstruction when current options disable linking.
 In-memory permutation cases cover Git, git-branchless and Jujutsu, complete native membership and ordinary PRs.
 Interruption cases stop execution after each completed mutation and require a subsequent invocation to finish from fresh observations without replacing existing PR identities.
 This fixture is not a claim of complete equivalence with GitHub's asynchronous processing.
@@ -259,12 +274,15 @@ Compact PR rows remain single-line and truncate only descriptive titles, with in
 Regression cases require retained selected and historical rows, all outcome counts, complete repository context, Unicode grapheme boundaries, safe hyperlinks and complete redirected text.
 Status cases assert complete progress, quota, retry and reset information independently of line-width assertions.
 Long-request regressions require request destinations to yield space to operational fields, retain aligned and coloured live frames at 40, 80 and 124 columns, and clear before durable completion.
-Narrow live frames shall retain the primary progress row separately from the complete quota and reset group; durable fallbacks shall insert word boundaries before the terminal performs automatic wrapping.
+Narrow live frames shall retain the primary progress rows separately from the complete quota and reset group; frames exceeding two rows remain transient whenever the viewport can accommodate them.
+Frames which cannot fit within the available width or height use ordinary notices with deliberate word boundaries.
 The terminal-screen contract uses the independent `vt100` emulator to assert the visible screen after stage completion, failure, ordinary output, warnings, confirmation and destruction.
 It captures transient detail from application workflows for both native-stack updates and unchanged reconciliation, and checks all captured detail messages at 40, 80 and 124 columns with colour enabled and disabled.
 Generated cases vary detail length, CJK text, combining marks, single-codepoint emoji, viewport width and resizing, whilst requiring earlier durable text and subsequent output to survive clearing.
 Complex joined emoji are additionally checked against grapheme-width layout properties because the emulator models codepoint cells rather than graphical font shaping.
 Native pseudo-terminal captures replay actual renderer bytes through the same screen oracle, including terminal newline processing and asynchronous animation.
+Creation-wait regressions require a wrapped wait frame to disappear when the next request begins, with all transient rows cleared on completion.
+The native fixture uses input acknowledgements to inspect both the replacement frame and completed output without timing-dependent sleeps.
 Known-defect sensitivity requires restoration of unbounded detail handling and permanent-spinner fallback to fail their corresponding screen assertions.
 Hyperlink regressions require eligible interactive output to emit OSC 8 links independently of terminal identity, SSH and multiplexer metadata, whilst preserving explicit URL fallback and control-free redirected output.
 Native pseudo-terminal tests exercise independently sized standard-output and standard-error streams, resizing between one-row and two-row frames, and complete clearing before durable output.

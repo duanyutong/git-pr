@@ -125,25 +125,40 @@ Branch publication explicitly disables automatic annotation following, so `push.
 These observations constrain intermediate publication states; they do not constitute an atomic transaction or a proof covering arbitrary concurrent remote operations.
 Insertions at any position and permutations of a complete published stack use the same transition plan.
 A direct transition requires every intended base to exist and every old and new head/base combination to exclude an indirect merge.
-Otherwise, existing selected PRs temporarily target a tool-owned branch pinned to the observed trunk snapshot.
+Otherwise, existing selected PRs temporarily target a tool-owned branch pinned to a locally available remote-tracking trunk snapshot.
 Both original and prepared heads must remain outside that snapshot's ancestry.
-All selected refs are published with explicit expected-object leases before final bases are restored.
+The snapshot supplies immutable ancestry evidence and a temporary staging object; it is not an expected value of either the local or remote trunk ref.
+The bottom PR targets the trunk branch by name, and each subsequent PR targets its selected predecessor branch by name.
+Independent trunk advancement before, during or after publication shall not require a rebase, a fetch or a restart.
+Freshness checks and expected-object leases protect the development and temporary refs involved in publication; they shall not freeze the read-only trunk branch.
+Only destinations whose live objects differ from the selected local objects are published, using explicit expected-object leases.
+All final selected refs are verified before final bases are restored.
 Unselected incoming dependants prevent the transition.
-Native stack transitions require complete observed membership; dissolution is freshly verified before retargeting, and membership is reconstructed after final bases are established.
+Native stack transitions require complete observed membership, and required dissolution is freshly verified before retargeting.
+Native creation follows the current linking option after final bases are established.
+Disabled linking preserves compatible existing membership but does not reconstruct membership removed by a necessary topology transition.
 A partial dissolution stops publication.
 
-The repository-local Git configuration key `git-pr.transitionJournal` retains the operation journal before the first remote mutation.
-The journal records reference expectations, prepared object identities and pinned PR identities without copying PR descriptions.
-Retries require the same selection and prepared commits, reacquire live observations and accept only recorded original or intended reference values and recognised intermediate bases.
-Unknown concurrent changes stop recovery whilst retaining the journal.
-Temporary branches are removed with an explicit lease only after fresh observation confirms that no open PR depends upon them.
-The journal is cleared after successful reconciliation and cleanup.
-Dry runs and preparation checkpoints do not create a journal or mutate remote relationships.
+Each invocation derives the desired publication from the current selected local stack and current options.
+Per-branch publication associations retain PR identity; no repository-wide operation journal is read or written.
+A retry reacquires live refs, PR identities, bases, incoming dependants and native membership before constructing a new transition.
+Local rebases, additional branches and partially published transitions therefore require fresh verification rather than resumption of a previous selection.
+An unfinished transition for an independent stack does not constrain the selected stack.
+Identity checks and explicit expected-object leases continue to prevent replacement of an unrelated PR or overwriting an update made after observation.
+The reserved namespace `git-pr/transition/<PR number>` identifies temporary publication bases belonging to selected PRs.
+An existing temporary base is reusable only when its live tip is a verified ancestor of the locally captured trunk snapshot; that snapshot supplies the replacement anchor.
+Temporary bases are removed with explicit leases only after fresh observation confirms that no open PR depends upon them.
+Temporary-reference cleanup is independent of topology reconciliation and shall not trigger native dissolution, PR retargeting or publication of unchanged refs.
+A cleanup failure retains the completed publication, reports the remaining cleanup and permits an independent retry.
+A single deterministic publication plan selects changing destinations and either direct retargeting or temporary staging from the selected local intent and verified remote facts.
+Observation and execution adapters acquire ancestry and service evidence, recheck mutation preconditions and apply the plan without persisting operation intent.
+Dry runs and preparation checkpoints do not mutate remote relationships.
 
-An obsolete base may be repaired before publication when its unique merged PR has a verified merge result in the live configured trunk, its original head is present in the surviving published history, and any remaining obsolete ref still identifies that generation.
+An obsolete base may be repaired before publication when its unique merged PR has a verified merge result in the locally captured trunk snapshot, its original head is present in the surviving published history, and any remaining obsolete ref still identifies that generation.
 Recovery obtains strict individual PR observations, complete historical identity observations and live refs from a single resolved push destination matching the observed hosting repository.
 Required Git objects shall be available locally; failed ancestry reads stop recovery and require synchronisation rather than an inferred negative result.
-The original published heads and the prepared heads must remain outside their intended bases' ancestry throughout every old/new ref combination, and prepared heads must contain their intended bases.
+The original published heads and the prepared heads must remain outside their intended bases' ancestry throughout every old/new ref combination, and prepared heads must contain their selected development bases.
+The bottom head need not contain the trunk snapshot.
 Deleted obsolete refs are permitted, whilst reused branches, ambiguous historical identities and unselected dependants are refused.
 A surviving native member whose obsolete predecessor lies outside the selection remains ineligible for automatic merged-downstack repair; an ordinary PR above a merged native stack is eligible.
 

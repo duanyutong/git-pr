@@ -8,8 +8,39 @@ use crate::model::pull_request::RecoveryPullRequest;
 
 impl GitHub<'_> {
     pub(crate) fn recovery_pr(&self, number: u64) -> Result<RecoveryPullRequest> {
-        let pr = serde_json::from_slice(&self.request("GET", &format!("pulls/{number}"), None)?)
-            .context("incomplete base recovery observation")?;
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&self.request("GET", &format!("pulls/{number}"), None)?)
+                .context("incomplete base recovery observation")?;
+        if value.get("stack").is_none() {
+            // REST may omit membership; obtain explicit, fresh GraphQL evidence.
+            let reference = value["head"]["ref"]
+                .as_str()
+                .context("missing recovery head reference")?
+                .to_owned();
+            let references = [reference];
+            self.invalidate_heads(&references);
+            self.observe(&references)?;
+            let observed = self
+                .session
+                .heads()
+                .get(&references[0])
+                .filter(|numbers| numbers.contains(&number))
+                .and_then(|_| self.session.prs().get(&number).cloned())
+                .context("missing recovery membership observation")?;
+            if guard(&self.session.unknown_stacks).contains(&number)
+                || value["node_id"] != observed.node_id
+                || value["head"]["ref"] != observed.head.name
+                || value["base"]["ref"] != observed.base.name
+                || value["state"] != observed.state
+                || value["merged"] != observed.merged
+            {
+                bail!(
+                    "incomplete or inconsistent recovery membership observation for PR #{number}"
+                );
+            }
+            value["stack"] = json!(observed.stack);
+        }
+        let pr = serde_json::from_value(value).context("incomplete base recovery observation")?;
         policy::validate_recovery_observation(&pr, number, &self.config.repo.name)?;
         Ok(pr)
     }

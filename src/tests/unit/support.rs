@@ -808,6 +808,11 @@ fn resolve_mock_revision(commits: &[Commit], name: &str) -> String {
             .position(|c| c.hash == parent)
             .and_then(|i| i.checked_sub(1))
             .map_or_else(|| format!("{:040x}", 0), |i| commits[i].hash.clone())
+    } else if let Some(resolved) = commits
+        .iter()
+        .find(|candidate| candidate.remote_ref() == name)
+    {
+        resolved.hash.clone()
     } else if let Some(index) = name.strip_prefix("topic/") {
         commits[index.parse::<usize>().unwrap() - 1].hash.clone()
     } else {

@@ -27,6 +27,25 @@ pub(super) fn lease_args(
 }
 
 impl Git<'_> {
+    /// Capture a locally available base object without freezing either trunk ref.
+    pub(crate) fn trunk_snapshot(&self) -> Result<String> {
+        // GitHub PRs target branch names, not this object. A transition only needs
+        // a known object for ancestry evidence and a temporary staging base.
+        // Read the cached remote-tracking ref so unrelated remote merges require
+        // neither fetching objects nor rebasing the user's selected stack.
+        // Keep the object ID for that proof; never compare a later trunk tip with
+        // it or lease/push trunk. Both local and remote trunk may move freely.
+        let reference = format!(
+            "refs/remotes/{}/{}^{{commit}}",
+            self.repo.remote, self.repo.trunk
+        );
+        let oid = self.commands.git(&["rev-parse", "--verify", &reference])?;
+        if !policy::valid_oid(&oid) {
+            bail!("invalid local trunk snapshot");
+        }
+        Ok(oid)
+    }
+
     pub(crate) fn recovery_destination(&self) -> Result<String> {
         let destinations = self.commands.git(&[
             "remote",

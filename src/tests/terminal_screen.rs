@@ -23,9 +23,13 @@ impl std::fmt::Debug for ScreenTerminal {
 
 impl ScreenTerminal {
     fn new(columns: u16) -> Arc<Self> {
+        Self::with_size(columns, SCREEN_ROWS)
+    }
+
+    fn with_size(columns: u16, rows: u16) -> Arc<Self> {
         Arc::new(Self {
             parser: Mutex::new(vt100::Parser::new(
-                NonZeroU16::new(SCREEN_ROWS).unwrap(),
+                NonZeroU16::new(rows).unwrap(),
                 NonZeroU16::new(columns).unwrap(),
                 0,
             )),
@@ -85,6 +89,7 @@ fn repaint(progress: &ProgressTerminal, columns: u16) {
         &mut lock(&progress.shared.state),
         1,
         usize::from(columns),
+        usize::from(SCREEN_ROWS),
     );
 }
 
@@ -207,10 +212,181 @@ fn workflow_details_leave_only_durable_output_on_the_terminal_screen() {
 }
 
 #[test]
+fn wrapped_creation_wait_is_replaced_by_the_current_request_and_cleared_on_completion() {
+    for columns in [40, 80, 124] {
+        for colour in [false, true] {
+            let screen = ScreenTerminal::new(columns);
+            let progress = controlled(&screen, colour);
+            progress.out("EARLIER OUTPUT KEPT");
+            progress.stage_with_completion("Reconciling pull requests", "Pull requests reconciled");
+            progress.progress(
+                "Creating feat(example): extract reusable validation utilities",
+                1,
+                4,
+            );
+            progress.quota("REST", 4700, 5000, Duration::from_secs(90));
+            let wait =
+                progress.start_activity("GitHub mutation spacing", Some(Duration::from_secs(1)));
+            repaint(&progress, columns);
+            assert!(
+                !lock(&progress.shared.state).fallback_reported,
+                "{}",
+                screen.contents()
+            );
+            assert!(screen.contents().contains("mutation spacing"));
+            progress.end_activity(wait);
+            progress.progress("Creating feat(example): finish", 3, 4);
+            let request = progress.start_activity("GitHub POST", None);
+            repaint(&progress, columns);
+            let current = screen.contents();
+            assert!(
+                !current.contains("1/4") && !current.contains("mutation spacing"),
+                "{current}"
+            );
+            assert!(
+                current.contains("3/4") && current.contains("GitHub POST"),
+                "{current}"
+            );
+            progress.end_activity(request);
+            progress.progress("Creating PR", 4, 4);
+            progress.finish(true);
+            progress.out("RESULTS KEPT");
+            let completed = screen.contents();
+            assert_no_transient(&completed);
+            assert!(
+                !completed.contains("Creating") && !completed.contains("REST"),
+                "{completed}"
+            );
+            assert!(
+                completed.contains("EARLIER OUTPUT KEPT") && completed.contains("RESULTS KEPT"),
+                "{completed}"
+            );
+            assert!(
+                completed.contains("Pull requests reconciled"),
+                "{completed}"
+            );
+        }
+    }
+}
+
+#[test]
+fn creation_wait_terminal_fixture() {
+    if std::env::var_os("GIT_PR_TEST_CREATION_WAIT").is_none() {
+        return;
+    }
+    let terminal = ProgressTerminal::new(Arc::new(crate::commands::Console::default()));
+    terminal.out("EARLIER OUTPUT KEPT");
+    terminal.stage_with_completion("Reconciling pull requests", "Pull requests reconciled");
+    terminal.progress(
+        "Creating feat(example): extract reusable validation utilities",
+        1,
+        4,
+    );
+    terminal.quota("REST", 4700, 5000, Duration::from_secs(90));
+    let wait = terminal.start_activity("GitHub mutation spacing", Some(Duration::from_secs(1)));
+    let mut permission = String::new();
+    std::io::stdin().read_line(&mut permission).unwrap();
+    assert_eq!(permission, "next\n");
+    terminal.end_activity(wait);
+    terminal.progress("Creating feat(example): finish", 3, 4);
+    let request = terminal.start_activity("GitHub POST", None);
+    permission.clear();
+    std::io::stdin().read_line(&mut permission).unwrap();
+    assert_eq!(permission, "done\n");
+    terminal.end_activity(request);
+    terminal.progress("Creating PR", 4, 4);
+    terminal.finish(true);
+    terminal.out("RESULTS KEPT");
+}
+
+#[test]
+fn native_creation_wait_frames_leave_no_stale_status() {
+    #[derive(serde::Deserialize)]
+    struct Capture {
+        columns: u16,
+        current: Vec<u8>,
+        completed: Vec<u8>,
+    }
+    let script = r"
+import fcntl, json, os, pty, re, select, struct, subprocess, sys, termios, time
+captures = []
+for columns in [40, 80, 124]:
+    master, slave = pty.openpty()
+    fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 24, columns, 0, 0))
+    env = dict(os.environ, TERM='xterm', GIT_PR_TEST_CREATION_WAIT='1')
+    env.pop('CI', None)
+    env.pop('NO_COLOR', None)
+    process = subprocess.Popen([sys.argv[1], '--exact', 'cli::progress::screen_tests::creation_wait_terminal_fixture', '--nocapture'], stdin=subprocess.PIPE, stdout=slave, stderr=slave, env=env)
+    os.close(slave)
+    output = b''
+    def receive(predicate):
+        global output
+        deadline = time.monotonic() + 8
+        while not predicate(output) and time.monotonic() < deadline:
+            if select.select([master], [], [], .1)[0]:
+                try: data = os.read(master, 65536)
+                except OSError: break
+                if not data: break
+                output += data
+        assert predicate(output), output[-3000:]
+    def has_frame(counter):
+        return lambda data: any(counter in frame and b'4700/5000' in frame for frame in re.findall(rb'\x1b\[36m(.*?)\x1b\[0m', data, re.S))
+    try:
+        receive(has_frame(b'1/4'))
+        process.stdin.write(b'next\n'); process.stdin.flush()
+        receive(has_frame(b'3/4'))
+        current = list(output)
+        process.stdin.write(b'done\n'); process.stdin.flush()
+        receive(lambda data: b'RESULTS KEPT' in data)
+        process.communicate(timeout=5)
+        assert process.returncode == 0
+        captures.append({'columns': columns, 'current': current, 'completed': list(output)})
+    finally:
+        if process.poll() is None: process.kill(); process.wait()
+        os.close(master)
+print(json.dumps(captures))
+";
+    let output = std::process::Command::new("python3")
+        .args(["-c", script])
+        .arg(std::env::current_exe().unwrap())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let captures: Vec<Capture> = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(captures.len(), 3);
+    for capture in captures {
+        let screen = ScreenTerminal::new(capture.columns);
+        lock(&screen.parser).process(&capture.current);
+        let current = screen.contents();
+        assert!(
+            !current.contains("1/4") && !current.contains("mutation spacing"),
+            "{current}"
+        );
+        assert!(current.contains("3/4"), "{current}");
+        let screen = ScreenTerminal::new(capture.columns);
+        lock(&screen.parser).process(&capture.completed);
+        let completed = screen.contents();
+        assert_no_transient(&completed);
+        assert!(
+            !completed.contains("Creating") && !completed.contains("4700/5000"),
+            "{completed}"
+        );
+        assert!(
+            completed.contains("EARLIER OUTPUT KEPT") && completed.contains("RESULTS KEPT"),
+            "{completed}"
+        );
+    }
+}
+
+#[test]
 fn oversized_operational_facts_never_leave_a_permanent_spinner() {
     let screen = ScreenTerminal::new(20);
     let progress = controlled(&screen, false);
-    progress.stage("Checking publication with an exceptionally long indivisible identity");
+    progress.stage("Checking publication UNBREAKABLE_IDENTITY_WIDER_THAN_THE_PANE");
     progress.detail("TRANSIENT DETAIL MUST DISAPPEAR");
     repaint(&progress, 20);
     assert!(lock(&progress.shared.state).fallback_reported);
@@ -253,21 +429,62 @@ fn narrow_live_status_keeps_progress_and_quota_on_deliberate_rows() {
 }
 
 #[test]
-fn narrow_fallback_wraps_complete_messages_before_the_terminal_does() {
+fn multiline_live_status_wraps_complete_messages_before_the_terminal_does() {
     let terminal = ScreenTerminal::new(30);
     let progress = controlled(&terminal, false);
     progress.stage("Updating descriptions across the selected pull requests");
     progress.progress("Descriptions #101, #102", 1, 3);
     progress.quota("GraphQL", 4990, 5000, Duration::from_secs(90));
-    paint_frame(&progress.shared, &mut lock(&progress.shared.state), 0, 30);
+    paint_frame(
+        &progress.shared,
+        &mut lock(&progress.shared.state),
+        0,
+        30,
+        usize::from(SCREEN_ROWS),
+    );
     let output = lock(&terminal.output).clone();
-    assert!(output.lines().all(|line| line.width() < 30), "{output}");
-    assert!(output.lines().count() > 2, "{output}");
-    let text = output.split_whitespace().collect::<Vec<_>>().join(" ");
+    let frame = output.strip_prefix("\r\x1b[2K").unwrap();
+    assert!(frame.lines().all(|line| line.width() < 30), "{output}");
+    assert!(frame.lines().count() > 2, "{output}");
+    let text = frame.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(text.contains("1/3 Descriptions #101, #102"), "{text}");
     assert!(text.contains("GraphQL 4990/5000 · reset"), "{text}");
-    assert!(lock(&progress.shared.state).fallback_reported);
-    assert_no_transient(&output);
+    assert!(!lock(&progress.shared.state).fallback_reported);
+    assert!(lock(&progress.shared.state).painted > 2);
+    progress.finish(true);
+    assert_no_transient(&terminal.contents());
+    assert!(
+        !terminal.contents().contains("GraphQL"),
+        "{}",
+        terminal.contents()
+    );
+}
+
+#[test]
+fn transient_frames_respect_the_available_terminal_height() {
+    for rows in [3, 4, 12] {
+        let screen = ScreenTerminal::with_size(30, rows);
+        let progress = controlled(&screen, false);
+        progress.stage("Working");
+        progress.progress("Processing selected pull requests", 1, 4);
+        progress.quota("REST", 4700, 5000, Duration::from_secs(90));
+        let required = render_state(&lock(&progress.shared.state), 0, 30)
+            .lines()
+            .count();
+        paint_frame(
+            &progress.shared,
+            &mut lock(&progress.shared.state),
+            0,
+            30,
+            usize::from(rows),
+        );
+        let state = lock(&progress.shared.state);
+        assert_eq!(state.fallback_reported, required >= usize::from(rows));
+        assert!(state.painted < usize::from(rows));
+        drop(state);
+        progress.finish(true);
+        assert_no_transient(&screen.contents());
+    }
 }
 
 proptest! {
