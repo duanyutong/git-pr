@@ -185,37 +185,17 @@ fn adopted_review_cannot_be_replaced_by_a_new_review_on_the_same_head() {
 }
 
 #[test]
-fn unknown_discovery_and_remote_collision_never_authorise_publication() {
-    for unavailable in [true, false] {
-        let world = clean_stack(1);
-        if unavailable {
-            world.http(
-                &format!("GET commits/{}/pulls", commit(1).hash),
-                vec![crate::tests::unit::support::Response::Failure(
-                    "offline".into(),
-                )],
-            );
-        } else {
-            world
-                .0
-                .lock()
-                .unwrap()
-                .remote_refs
-                .insert("refs/heads/topic/1".into(), "f".repeat(40));
-            world.reply(
-                &format!(
-                    "git merge-base --is-ancestor {} {}",
-                    "f".repeat(40),
-                    commit(1).hash
-                ),
-                1,
-                "",
-            );
-        }
-        assert!(world.run(&["--no-stack"]).is_err());
-        assert_eq!(config_writes(&world), 0);
-        assert!(!world.trace().iter().any(|e| e["args"][0] == "push"));
-    }
+fn unavailable_review_discovery_does_not_authorise_publication() {
+    let world = clean_stack(1);
+    world.http(
+        &format!("GET commits/{}/pulls", commit(1).hash),
+        vec![crate::tests::unit::support::Response::Failure(
+            "offline".into(),
+        )],
+    );
+    assert!(world.run(&["--no-stack"]).is_err());
+    assert_eq!(config_writes(&world), 0);
+    assert!(!world.trace().iter().any(|e| e["args"][0] == "push"));
 }
 
 #[test]

@@ -452,6 +452,7 @@ impl Transition {
     #[cfg(test)]
     pub(super) fn apply(&self, github: &GitHub<'_>, state: &State, bases: &[String]) -> Result<()> {
         self.apply_with_ancestry(github, state, bases, None)
+            .map(|_| ())
     }
 
     fn check_strategy(
@@ -475,27 +476,30 @@ impl Transition {
         ancestry.verify_strategy(&self.plan.strategy, &desired, &observed)
     }
 
+    /// Return the start of the final dependant observation for publication dispatch.
     pub(super) fn apply_with_ancestry(
         &self,
         github: &GitHub<'_>,
         state: &State,
         bases: &[String],
         ancestry: Option<&Ancestry>,
-    ) -> Result<()> {
+    ) -> Result<Instant> {
         self.validate_selection(&state.stack, state.start, bases)?;
         let git = Git {
             commands: github.commands,
             repo: &github.config.repo,
         };
         self.check_strategy(git, &state.stack, ancestry)?;
-        let current = self.prepare_native(github, state, bases)?;
+        let (current, dependants_acquired) = self.prepare_native(github, state, bases)?;
         if let Some(reference) = self.staging() {
             let anchor = Commit {
                 hash: self.anchor.clone(),
                 attrs: vec![("remote-ref".into(), reference.to_owned())],
                 ..Commit::default()
             };
-            git.push_with_leases(&[&anchor], Some(&current.refs))?;
+            git.push_with_leases(&[&anchor], Some(&current.refs), &|| {
+                super::policy::require_fresh_publication(github.now(), [dependants_acquired])
+            })?;
         }
         let changes: Vec<_> = current
             .entries
@@ -512,11 +516,13 @@ impl Transition {
             .phase("PR base transitions", || {
                 github.retarget_recoveries(&changes)
             })?;
-        crate::commands::parallel_pair(
+        let (_, dependants_acquired) = crate::commands::parallel_pair(
             || self.fresh_refs(git, &state.stack),
             || {
                 self.verify_heads(github, state, false)?;
-                self.check_dependants(github, true, None)
+                let acquired = github.now();
+                self.check_dependants(github, true, None)?;
+                Ok(acquired)
             },
         )?;
         github.invalidate_heads(
@@ -526,14 +532,19 @@ impl Transition {
                 .map(|e| e.reference.clone())
                 .collect::<Vec<_>>(),
         );
-        Ok(())
+        Ok(dependants_acquired)
     }
 
-    fn prepare_native(&self, github: &GitHub<'_>, state: &State, bases: &[String]) -> Result<Self> {
+    fn prepare_native(
+        &self,
+        github: &GitHub<'_>,
+        state: &State,
+        bases: &[String],
+    ) -> Result<(Self, Instant)> {
         let started = github.now();
         let mut attempt = 0;
         loop {
-            let current = self.fresh(github, &state.stack, started)?;
+            let (current, dependants_acquired) = self.fresh(github, &state.stack, started)?;
             if self.changes_native() {
                 let base = state
                     .stack
@@ -552,11 +563,12 @@ impl Transition {
                 )?;
             }
             let Some((number, acquired)) = current.native else {
-                return Ok(current);
+                return Ok((current, dependants_acquired));
             };
             match github.unstack_transition(number, acquired, started) {
                 Ok(()) => {
-                    let current = self.fresh(github, &state.stack, started)?;
+                    let (current, dependants_acquired) =
+                        self.fresh(github, &state.stack, started)?;
                     if current
                         .entries
                         .iter()
@@ -570,7 +582,7 @@ impl Transition {
                         .commands
                         .outcomes
                         .confirm(crate::model::outcome::Operation::NativeStack);
-                    return Ok(current);
+                    return Ok((current, dependants_acquired));
                 }
                 Err(error) => {
                     let Some((delay, reason)) = crate::github::limits::deferral(&error, attempt)
@@ -624,7 +636,12 @@ impl Transition {
         Ok(refs)
     }
 
-    fn fresh(&self, github: &GitHub<'_>, stack: &[Commit], started: Instant) -> Result<Self> {
+    fn fresh(
+        &self,
+        github: &GitHub<'_>,
+        stack: &[Commit],
+        started: Instant,
+    ) -> Result<(Self, Instant)> {
         let git = Git {
             commands: github.commands,
             repo: &github.config.repo,
@@ -666,6 +683,7 @@ impl Transition {
             policy::same_recovery_head(&before, &actual, &before.base.name)?;
             *expected = actual;
         }
+        let dependants_acquired = github.now();
         current.check_dependants(github, false, Some(started))?;
         current.native = current
             .observe_native(github, Some(started))?
@@ -677,7 +695,7 @@ impl Transition {
             None,
             Some(started),
         )?;
-        Ok(current)
+        Ok((current, dependants_acquired))
     }
 
     fn verify_heads(&self, github: &GitHub<'_>, state: &State, published: bool) -> Result<()> {

@@ -389,10 +389,12 @@ impl Git<'_> {
         Ok(())
     }
 
+    /// Run caller preflight before each push and before recording attempted effects.
     pub(crate) fn push_with_leases(
         &self,
         commits: &[&Commit],
         leases: Option<&std::collections::BTreeMap<String, Option<String>>>,
+        before_push: &dyn Fn() -> Result<()>,
     ) -> Result<()> {
         for commit in commits {
             policy::protect_trunk(commit.remote_ref(), &self.repo.trunk)?;
@@ -434,6 +436,7 @@ impl Git<'_> {
             }
             args.extend(["--", &self.repo.remote]);
             args.extend(specs.iter().map(String::as_str));
+            before_push()?;
             self.record_publication(chunk, false);
             if let Err(error) = self.commands.git(&args) {
                 let refs: Vec<_> = chunk

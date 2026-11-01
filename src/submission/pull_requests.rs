@@ -104,7 +104,6 @@ impl Publication {
             commands: github.commands,
             repo: &github.config.repo,
         };
-        plan.check_unreviewed_heads(git, stack)?;
         let ancestry = plan.transition.as_ref().map_or_else(
             || Ok(Ancestry::default()),
             |transition| transition.ancestry(git, stack),
@@ -275,28 +274,6 @@ impl Publication {
         Ok(())
     }
 
-    fn check_unreviewed_heads(&self, git: Git<'_>, stack: &[Commit]) -> Result<()> {
-        for (index, reference, pr) in &self.entries {
-            if pr.is_none()
-                && let Some(Some(oid)) = self.leases.get(reference)
-            {
-                let commit = &stack[*index];
-                if commit
-                    .publication
-                    .as_ref()
-                    .is_some_and(|binding| !binding.adopted)
-                    && oid != &commit.hash
-                    && !git.is_ancestor(oid, &commit.hash)?
-                {
-                    bail!(
-                        "remote head {reference:?} exists without a verified review or revision association; explicitly bind it before publication"
-                    );
-                }
-            }
-        }
-        Ok(())
-    }
-
     fn selected_prs(&self) -> HashMap<u64, (&str, &str)> {
         self.entries
             .iter()
@@ -326,6 +303,13 @@ impl Publication {
 
     pub(super) fn links_native(&self) -> bool {
         self.actions.link_native
+    }
+
+    fn require_fresh(&self, now: Instant, transition: Option<Instant>) -> Result<()> {
+        super::policy::require_fresh_publication(
+            now,
+            self.dependant_times.iter().map(Cell::get).chain(transition),
+        )
     }
 
     pub(super) fn verify(
@@ -476,12 +460,12 @@ impl Application {
         }
         crate::identity::resolve::verify_bindings(&self.commands, &config.repo, state.selected())?;
         git.recovery_destination()?;
-        if let Some(transition) = &publication.transition {
+        let transition_observed = if let Some(transition) = &publication.transition {
             self.commands.terminal.stage_with_completion(
                 "Preparing publication transition",
                 "Publication transition prepared",
             );
-            transition.apply_with_ancestry(
+            let acquired = transition.apply_with_ancestry(
                 github,
                 state,
                 &publication.bases,
@@ -490,7 +474,10 @@ impl Application {
             self.commands
                 .terminal
                 .stage_with_completion("Publishing branches", "Publication reconciled");
-        }
+            Some(acquired)
+        } else {
+            None
+        };
         crate::identity::resolve::verify_anchors(&self.commands, state.selected())?;
         publication.verify(github, state, false)?;
         self.explain_bases(state, &indices, &publication.bases);
@@ -499,7 +486,9 @@ impl Application {
                 .iter()
                 .map(|&i| &state.stack[i])
                 .collect::<Vec<_>>();
-            git.push_with_leases(&commits, Some(&publication.leases))?;
+            git.push_with_leases(&commits, Some(&publication.leases), &|| {
+                publication.require_fresh(github.now(), transition_observed)
+            })?;
             git.sync_refs(state.selected());
             for &index in changing {
                 let commit = &mut state.stack[index];
@@ -671,8 +660,6 @@ impl Application {
         let style = Style {
             stack_up: config.stack_up,
             emoji: config.emoji,
-            host: &config.repo.host,
-            repo: &config.repo.name,
         };
         let renderer = if config.compact_stack {
             description::Renderer::Compact(description::CompactRenderer::new(

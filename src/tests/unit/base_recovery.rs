@@ -542,6 +542,7 @@ fn recovery_destination_and_ref_observations_reject_ambiguity_and_malformed_valu
             git.push_with_leases(
                 &[&crate::tests::unit::support::commit(1)],
                 Some(&BTreeMap::new()),
+                &|| Ok(()),
             )
             .is_err()
         );
@@ -551,6 +552,214 @@ fn recovery_destination_and_ref_observations_reject_ambiguity_and_malformed_valu
 
 fn state(w: &Arc<World>) -> State {
     State::discover(&mut w.config(), &w.commands()).unwrap()
+}
+
+#[derive(Debug)]
+struct DelayedTransitionVerification {
+    world: Arc<World>,
+    armed: std::sync::atomic::AtomicBool,
+    delay: std::time::Duration,
+    mode: &'static str,
+}
+
+impl DelayedTransitionVerification {
+    fn add_outside(&self) {
+        if self.delay <= std::time::Duration::from_secs(30) {
+            return;
+        }
+        let mut memory = self.world.0.lock().unwrap();
+        let mut outside = memory.prs[&102].clone();
+        outside["number"] = json!(201);
+        outside["node_id"] = json!("PR_201");
+        outside["head"]["ref"] = json!("outside");
+        outside["base"]["ref"] = json!("topic/1");
+        memory.prs.insert(201, outside);
+        drop(memory);
+    }
+}
+
+impl crate::github::http::Transport for DelayedTransitionVerification {
+    fn request(&self, request: crate::github::http::Request<'_>) -> Result<Vec<u8>> {
+        use crate::commands::Clock;
+        use std::sync::atomic::Ordering;
+
+        let payload: Value = request
+            .body
+            .map(serde_json::from_slice)
+            .transpose()?
+            .unwrap_or_default();
+        let url = request.url.to_owned();
+        let response = self.world.request(request)?;
+        if payload["variables"]["input"].get("baseRefName").is_some() {
+            self.armed.store(true, Ordering::Relaxed);
+        }
+        let query = payload["query"].as_str().unwrap_or_default();
+        if self.mode == "helper" {
+            if query.contains("baseRefName:") && self.armed.swap(false, Ordering::Relaxed) {
+                self.add_outside();
+                self.world.sleep(self.delay);
+            }
+        } else if self.mode == "pagination" {
+            if query.contains("baseRefName:") {
+                if payload["variables"]["c0"] == "late" {
+                    self.add_outside();
+                    self.world.sleep(self.delay);
+                } else if self.armed.swap(false, Ordering::Relaxed) {
+                    let mut response: Value = serde_json::from_slice(&response)?;
+                    response["data"]["repository"]["p0"]["pageInfo"] =
+                        json!({"hasNextPage":true,"endCursor":"late"});
+                    return Ok(serde_json::to_vec(&response)?);
+                }
+            }
+        } else if query.starts_with("query(")
+            && query.contains("headRefName:")
+            && self.armed.swap(false, Ordering::Relaxed)
+        {
+            self.add_outside();
+            if self.mode == "quota" && !self.delay.is_zero() {
+                return Err(crate::github::http::HttpStatusError {
+                    url,
+                    status: reqwest::StatusCode::TOO_MANY_REQUESTS,
+                    body: "secondary rate limit".into(),
+                    quota: crate::github::limits::Quota {
+                        retry_after: Some(self.delay),
+                        ..Default::default()
+                    },
+                }
+                .into());
+            }
+            self.world.sleep(self.delay);
+        }
+        Ok(response)
+    }
+}
+
+#[test]
+fn transition_dependant_evidence_is_required_at_the_selected_push() {
+    use crate::model::outcome::Operation;
+    use std::sync::atomic::AtomicBool;
+
+    for staged in [false, true] {
+        for mode in ["read", "quota", "pagination"] {
+            for seconds in [0, 30, 31] {
+                let world = if staged {
+                    transition_world(&[2, 1], &[1, 2])
+                } else {
+                    world(2)
+                };
+                let config = world.config();
+                let app = world.app();
+                let transport = DelayedTransitionVerification {
+                    world: world.clone(),
+                    armed: AtomicBool::new(false),
+                    delay: std::time::Duration::from_secs(seconds),
+                    mode,
+                };
+                let github = GitHub {
+                    session: crate::github::Session::default(),
+                    config: &config,
+                    commands: &app.commands,
+                    clock: Some(world.as_ref()),
+                    transport: &transport,
+                    template: "",
+                };
+                let mut selected = state(&world);
+                let publication = crate::submission::pull_requests::Publication::observe(
+                    &github,
+                    &selected.stack,
+                    0,
+                )
+                .unwrap();
+                world.0.lock().unwrap().trace.clear();
+                let result = app.push(
+                    &config,
+                    Git {
+                        commands: &app.commands,
+                        repo: &config.repo,
+                    },
+                    &github,
+                    &mut selected,
+                    &publication,
+                );
+                let pushes = world
+                    .trace()
+                    .iter()
+                    .filter(|event| {
+                        event["args"][0] == "push"
+                            && event["args"].as_array().unwrap().iter().any(|arg| {
+                                arg.as_str()
+                                    .is_some_and(|arg| arg.contains(":refs/heads/topic/"))
+                            })
+                    })
+                    .count();
+                if seconds > 30 {
+                    assert!(
+                        result
+                            .unwrap_err()
+                            .to_string()
+                            .contains("publication evidence expired")
+                    );
+                    assert_eq!(pushes, 0, "staged={staged}, mode={mode}");
+                } else {
+                    result.unwrap();
+                    assert_eq!(pushes, 1);
+                }
+                let effects = app.commands.outcomes.snapshot();
+                assert!(effects[&Operation::Base(101)].confirmed);
+                if staged {
+                    assert!(effects[&Operation::Branch("git-pr/transition/101".into())].confirmed);
+                }
+                if seconds > 30 {
+                    assert!(!effects.contains_key(&Operation::Branch("topic/1".into())));
+                    assert!(!effects.contains_key(&Operation::Branch("topic/2".into())));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn temporary_base_push_requires_fresh_dependants() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let world = transition_world(&[2, 1], &[1, 2]);
+    let config = world.config();
+    let app = world.app();
+    let transport = DelayedTransitionVerification {
+        world: world.clone(),
+        armed: AtomicBool::new(false),
+        delay: std::time::Duration::from_secs(31),
+        mode: "helper",
+    };
+    let github = GitHub {
+        session: crate::github::Session::default(),
+        config: &config,
+        commands: &app.commands,
+        clock: Some(world.as_ref()),
+        transport: &transport,
+        template: "",
+    };
+    let mut selected = state(&world);
+    let publication =
+        crate::submission::pull_requests::Publication::observe(&github, &selected.stack, 0)
+            .unwrap();
+    world.0.lock().unwrap().trace.clear();
+    transport.armed.store(true, Ordering::Relaxed);
+    let error = app
+        .push(
+            &config,
+            Git {
+                commands: &app.commands,
+                repo: &config.repo,
+            },
+            &github,
+            &mut selected,
+            &publication,
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("publication evidence expired"));
+    assert!(!world.trace().iter().any(effect));
+    assert!(app.commands.outcomes.snapshot().is_empty());
 }
 
 fn planned_transition(
@@ -1733,7 +1942,7 @@ fn transition_barriers_reject_unavailable_or_changed_evidence() {
                     commands: github.commands,
                     repo: &github.config.repo,
                 }
-                .push_with_leases(&[&state.stack[0]], Some(&plan.refs))
+                .push_with_leases(&[&state.stack[0]], Some(&plan.refs), &|| Ok(()))
                 .unwrap();
                 plan.complete(github, &state).unwrap();
                 w.0.lock().unwrap().prs.get_mut(&101).unwrap()["node_id"] = json!("CHANGED");
@@ -1815,7 +2024,11 @@ fn temporary_base_cleanup_is_idempotent_after_publication() {
             commands: github.commands,
             repo: &github.config.repo,
         }
-        .push_with_leases(&state.stack.iter().collect::<Vec<_>>(), Some(&plan.refs))
+        .push_with_leases(
+            &state.stack.iter().collect::<Vec<_>>(),
+            Some(&plan.refs),
+            &|| Ok(()),
+        )
         .unwrap();
         plan.complete(github, &state).unwrap();
         w.0.lock()
@@ -3186,7 +3399,7 @@ fn shallow_merged_parent_and_temporary_guards_use_available_local_proofs() {
 }
 
 #[test]
-fn shallow_unreviewed_heads_preserve_related_local_history_without_adoption() {
+fn shallow_unreviewed_heads_do_not_require_historical_objects_or_adoption() {
     for available in [false, true] {
         let world = World::new(1);
         let old = oid(10);
@@ -3214,7 +3427,7 @@ fn shallow_unreviewed_heads_preserve_related_local_history_without_adoption() {
                 previous_anchor: None,
             });
             let result = super::super::pull_requests::Publication::observe(github, &stack, 0);
-            assert_eq!(result.is_ok(), available, "{result:?}");
+            assert!(result.is_ok(), "{result:?}");
             assert!(!world.trace().iter().any(effect));
         });
     }

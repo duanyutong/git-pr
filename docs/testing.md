@@ -98,7 +98,9 @@ Mixed-separator cases include nested scheme text and multiple `@` delimiters; di
 Explicit Jujutsu ranges and lists require one batched identity observation and no scalar tip-identity lookup, with and without existing trailers.
 An empty tip excluded from presentation does not require a publication association.
 Safe repair and repeated successful submission are exercised with native management disabled and enabled, in both full-stack and compact presentation.
-Full-stack regressions retain multiple unnumbered commits without additional PR creation or branch publication; compact navigation continues to contain numbered PRs only.
+Full-stack and compact footers contain numbered PRs only; local commits without a PR shall not affect their positions, totals or publication scope.
+Parameterised regressions vary submitted prefixes and unpublished descendant counts without adding footer rows, changing commit objects or publishing those descendants, with native stack management both enabled and disabled.
+Existing managed footers containing unnumbered entries shall reconcile once to the numbered PR list, preserving human text and avoiding a further update on repetition.
 Synthetic credential regressions reject raw query and fragment separators whilst retaining diagnostic confidentiality and accepting their percent-encoded representation.
 `just backends` requires actual git-branchless and Jujutsu executables at the declared versions.
 Colocated and separate Jujutsu workspaces, described working copies, stable change-ID recovery and guarded ref reconciliation are exercised.
@@ -188,7 +190,7 @@ HTTP failure diagnostics are emitted through the error chain rather than duplica
 ## Published-stack safety regressions
 
 Complete, verifiable reordered submissions shall preserve open PR identities through a safe publication transition, with native stack management both enabled and disabled.
-Unverifiable transitions shall stop before remote mutation, including inferred branch names without sufficient evidence, ambiguous open identities, exclusively closed or merged branch history, and open dependants outside the verified selection of a topology transition or a changing publication destination.
+Unverifiable transitions shall stop before remote mutation, including conflicting publication identities, ambiguous open identities, exclusively closed or merged branch history, and open dependants outside the verified selection of a topology transition or a changing publication destination.
 An unchanged five-commit prefix of a larger published stack shall remain submittable with legacy trailers and local publication associations, with native stack management both enabled and disabled, whilst preserving unselected dependent PRs, remote refs and stored commit objects.
 Destination-object regressions shall distinguish unchanged, missing and changed remote refs independently of PR-head observations, retain dependency-observation expiry for changing destinations, and reject concurrent updates through explicit expected-object leases.
 A disposable Git repository supplies actual ancestry to a host-lifecycle fixture which recognises indirect merges, optionally deletes merged heads and retargets dependent PRs.
@@ -199,6 +201,8 @@ A locally cached integration advance shall likewise permit publication of an old
 Synthetic insertion cases exercise every stack position with the inserted branch both present and absent on the remote.
 An expansion regression replaces a two-PR publication with nine local layers, including seven unpublished branches, whilst preserving the existing PR identities and publishing each new layer as a draft.
 It exercises native and ordinary PR stacks with omitted REST membership fields, verifies the final predecessor relationships and remote heads, and requires successful repetition without duplicate PR creation.
+New-layer regressions also cover an earlier remote push followed by local amendment without a PR or stored association, preserving commit objects, exact push leases and the selected predecessor relationship.
+Shallow and complete repositories shall publish selected layers without requiring the previous remote tip's history.
 Omitted REST membership requires fresh, explicit GraphQL evidence; unavailable membership, inconsistent identities and stale cached observations shall not authorise a publication transition.
 An interrupted expansion regression dissolves a native stack, fails before staging publication, advances trunk and rebases all nine local layers before requiring successful recovery with the original PR identities and membership determined by the current options.
 Retries shall reconstruct publication from the current local stack and live observations, including partially published branches and temporary bases.
@@ -253,6 +257,10 @@ Title reversions and unrelated human title edits following acknowledgement shall
 Unrelated observation errors shall fail without disabling subsequent stack-schema checks.
 A separate wait-boundary regression edits human text whilst the clock advances and verifies that content is freshly rendered before the delayed write.
 These tests shall perform no repeated Git publication or PR creation.
+Publication freshness cases cover direct and staged transitions, delayed head reads, pagination and quota waits, permitting evidence aged exactly 30 seconds and refusing older evidence before the selected refs are pushed.
+Count- and byte-limited Git push batches retain confirmed earlier effects, refuse an expired later batch without recording an attempted write and require no additional freshness requests.
+Temporary-base publication independently refuses expired dependant evidence before any transition effect.
+Cleanup retains an unused helper when its dependant evidence expires before deletion.
 Shallow-history regressions use stored commit parents and genuine shallow metadata to require equivalent publication identities and safe staging without a full clone, automatic fetching or shallow-file changes.
 Stack-discovery regressions retain changed layers across single and successive shallow markers, omit genuinely empty commits, reject concealed merges and fail explicitly when required local history is unavailable.
 They also cover advanced trunks, markers on excluded ancestors, integrated merges and unavailable older history outside the selected range.

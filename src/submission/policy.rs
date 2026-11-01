@@ -1,8 +1,26 @@
 //! Submission eligibility and reference invariants without external effects.
 
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    time::{Duration, Instant},
+};
+
+use anyhow::{Result, bail};
 
 use crate::model::Commit;
+
+pub(super) fn require_fresh_publication(
+    now: Instant,
+    observations: impl IntoIterator<Item = Instant>,
+) -> Result<()> {
+    if observations
+        .into_iter()
+        .any(|observed| now.saturating_duration_since(observed) > Duration::from_secs(30))
+    {
+        bail!("publication evidence expired before the next push; retry from fresh observations");
+    }
+    Ok(())
+}
 
 pub(crate) fn mark_other_authors(
     commits: &mut [Commit],

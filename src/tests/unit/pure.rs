@@ -425,12 +425,7 @@ fn stack_history_rendering_order_markers_and_duplicates() {
     ];
     for stack_up in [false, true] {
         for emoji in [false, true] {
-            let style = Style {
-                stack_up,
-                emoji,
-                host: "github.com",
-                repo: "org/repo",
-            };
+            let style = Style { stack_up, emoji };
             let info = description::StackRenderer::new(
                 stack.iter(),
                 &history,
@@ -486,28 +481,14 @@ fn stack_history_rendering_order_markers_and_duplicates() {
     let style = Style {
         stack_up: false,
         emoji: true,
-        host: "github.com",
-        repo: "org/repo",
     };
     let without_pr = Commit {
         pr_number: 0,
         ..commit(9)
     };
-    assert!(
-        description::render_commit(&without_pr, &stack[0], false, style)
-            .contains("test&#x200B;@example.com")
-    );
-    assert!(
-        description::render_commit(&without_pr, &stack[0], false, style)
-            .contains("[Feature 9](https://github.com/org/repo/commit/")
-    );
-    let without_email = Commit {
-        author_email: "unknown".into(),
-        ..without_pr.clone()
-    };
-    assert!(
-        description::render_commit(&without_email, &without_email, false, style)
-            .contains("unknown&#x200B;")
+    assert_eq!(
+        description::render_commit(&without_pr, &stack[0], false, style),
+        ""
     );
     assert!(
         !description::StackRenderer::new([without_pr].iter(), &[], &HashSet::new(), style)
@@ -591,12 +572,7 @@ fn description_preserves_sentinels_bots_crlf_and_legacy_sections() {
 fn numbered_footers_omit_hashes_and_migrate_old_annotations_once() {
     for stack_up in [false, true] {
         for emoji in [false, true] {
-            let style = Style {
-                stack_up,
-                emoji,
-                host: "github.com",
-                repo: "org/repo",
-            };
+            let style = Style { stack_up, emoji };
             let stack: Vec<_> = (1..=3).map(commit).collect();
             let merged = HashSet::new();
             let renderer = description::StackRenderer::new(stack.iter(), &[], &merged, style);
@@ -782,8 +758,6 @@ fn indexed_branch_policy_and_repeated_identity_rendering_are_deterministic() {
             Style {
                 stack_up,
                 emoji: false,
-                host: "github.com",
-                repo: "org/repo",
             },
         );
         assert!(renderer.render(&stack[0]).contains("PR **1 of 3**"));
@@ -998,65 +972,83 @@ fn initial_description_sources_cannot_introduce_reserved_footer_delimiters() {
 }
 
 #[test]
-fn full_stack_retains_multiple_unnumbered_commits_and_escapes_context_text() {
-    let stack = [
-        commit(101),
-        Commit {
-            pr_number: 0,
-            title: format!(
-                "[Pending] \\ `feature` * _ & < > {}\r\n",
-                description::START
-            ),
-            ..commit(102)
-        },
-        Commit {
-            pr_number: 0,
-            title: "Other pending feature".into(),
-            author_email: "unknown".into(),
-            ..commit(103)
-        },
-        commit(101),
-    ];
-    for stack_up in [false, true] {
-        for emoji in [false, true] {
-            let text = description::StackRenderer::new(
-                stack.iter(),
-                &[HistoryEntry {
-                    number: 99,
-                    merged: true,
-                }],
-                &HashSet::new(),
-                Style {
-                    stack_up,
-                    emoji,
-                    host: "github.com",
-                    repo: "org/repo",
-                },
-            )
-            .render(&stack[0]);
-            assert!(text.contains("This PR is entry **2 of 4**"));
-            assert_eq!(
-                text.lines().filter(|line| line.starts_with("* ")).count(),
-                4
-            );
-            assert_eq!(text.matches("#101").count(), 1);
-            assert!(!text.contains("#0"));
-            assert!(text.contains("\\[Pending\\] \\\\ \\`feature\\` \\* \\_ &amp; &lt; &gt;"));
-            assert!(text.contains("Other pending feature"));
-            assert!(text.contains(&format!("/commit/{}", stack[1].hash)));
-            assert!(text.contains(&format!("/commit/{}", stack[2].hash)));
-            assert_eq!(
-                text.find("Other pending feature").unwrap() < text.find("Pending").unwrap(),
-                stack_up
-            );
-            let body = description::generate_body("", "Summary", &text, "");
-            assert_eq!(body.matches(description::START).count(), 1);
-            assert_eq!(description::Body::parse(&body).unwrap().history().len(), 2);
+fn full_stack_counts_only_prs_and_repairs_unnumbered_context_once() {
+    for count in [3, 5] {
+        let numbers: Vec<_> = (1..).take(count).map(|index| 1000 + index * 13).collect();
+        let published: Vec<_> = numbers.iter().copied().map(commit).collect();
+        let context = [
+            Commit {
+                pr_number: 0,
+                ..commit(2001)
+            },
+            Commit {
+                pr_number: 0,
+                ..commit(2002)
+            },
+            Commit {
+                pr_number: 0,
+                ..published[0].clone()
+            },
+        ];
+        for context_len in [1, 3] {
+            let stack: Vec<_> = published
+                .iter()
+                .chain(context.iter().take(context_len))
+                .cloned()
+                .collect();
+            for stack_up in [false, true] {
+                for emoji in [false, true] {
+                    let renderer = description::StackRenderer::new(
+                        stack.iter(),
+                        &[HistoryEntry {
+                            number: numbers[0],
+                            merged: false,
+                        }],
+                        &HashSet::new(),
+                        Style { stack_up, emoji },
+                    );
+                    for (index, current) in published.iter().enumerate() {
+                        let position = index + 1;
+                        let text = renderer.render(current);
+                        assert!(text.contains(&format!("This is PR **{position} of {count}**")));
+                        assert_eq!(
+                            text.lines().filter(|line| line.starts_with("* ")).count(),
+                            count
+                        );
+                        for number in &numbers {
+                            assert_eq!(text.matches(&format!("#{number}")).count(), 1);
+                        }
+                        assert!(text.contains(&format!("#{} 👈 This PR", current.pr_number)));
+                        assert!(!text.contains("#0"));
+                        assert!(!text.contains("/commit/"));
+                        assert!(!text.contains("example.invalid"));
+                        assert!(!text.contains("entry"));
+                        assert_eq!(
+                            text.find(&format!("#{}", numbers[count - 1])).unwrap()
+                                < text.find(&format!("#{}", numbers[0])).unwrap(),
+                            stack_up
+                        );
+                        let old = format!(
+                            "Human before\n\n---\n{}\nThis PR is entry **{position} of {}** in a stack (newest at the top)\n\n* [Unpublished change](https://github.com/org/repo/commit/{}) — fixture@example.invalid\n* #{} 👈 This PR\n{}\n\nHuman after",
+                            description::START,
+                            stack.len(),
+                            context[0].hash,
+                            current.pr_number,
+                            description::END
+                        );
+                        let repaired = description::generate_body("", &old, &text, "");
+                        assert!(repaired.starts_with("Human before\n"));
+                        assert!(repaired.ends_with("Human after"));
+                        let body = description::Body::parse(&repaired).unwrap();
+                        assert_eq!(body.history().len(), count);
+                        assert_eq!(body.render_update("", &text, "").unwrap(), None);
+                    }
+                }
+            }
+            let compact = description::CompactRenderer::new(&stack).render(&published[0]);
+            assert!(compact.contains(&format!("PR 1 of {count}")));
         }
     }
-    let compact = description::CompactRenderer::new(&stack).render(&stack[0]);
-    assert!(compact.contains("PR 1 of 1"));
-    assert!(!compact.contains("Pending"));
 }
 
 #[test]

@@ -329,12 +329,12 @@ for columns in [40, 80, 124]:
                 if not data: break
                 output += data
         assert predicate(output), output[-3000:]
-    def has_frame(counter):
-        return lambda data: any(counter in frame and b'4700/5000' in frame for frame in re.findall(rb'\x1b\[36m(.*?)\x1b\[0m', data, re.S))
+    def has_frame(counter, activity):
+        return lambda data: any(counter in frame and activity in frame and b'4700/5000' in frame for frame in re.findall(rb'\x1b\[36m(.*?)\x1b\[0m', data, re.S))
     try:
-        receive(has_frame(b'1/4'))
+        receive(has_frame(b'1/4', b'remaining'))
         process.stdin.write(b'next\n'); process.stdin.flush()
-        receive(has_frame(b'3/4'))
+        receive(has_frame(b'3/4', b'POST'))
         current = list(output)
         process.stdin.write(b'done\n'); process.stdin.flush()
         receive(lambda data: b'RESULTS KEPT' in data)
@@ -366,7 +366,10 @@ print(json.dumps(captures))
             !current.contains("1/4") && !current.contains("mutation spacing"),
             "{current}"
         );
-        assert!(current.contains("3/4"), "{current}");
+        assert!(
+            current.contains("3/4") && current.contains("GitHub POST"),
+            "{current}"
+        );
         let screen = ScreenTerminal::new(capture.columns);
         lock(&screen.parser).process(&capture.completed);
         let completed = screen.contents();
@@ -567,8 +570,8 @@ fn workflow_detail_terminal_fixture() {
     let terminal = ProgressTerminal::new(Arc::new(crate::commands::Console::default()));
     terminal.out("EARLIER OUTPUT KEPT");
     terminal.stage_with_completion("Linking native stack", COMPLETION);
-    terminal.quota("REST", 4835, 5000, Duration::from_secs(1128));
     terminal.detail(&detail);
+    terminal.quota("REST", 4835, 5000, Duration::from_secs(1128));
     let mut permission = String::new();
     std::io::stdin().read_line(&mut permission).unwrap();
     assert_eq!(permission, "done\n");
@@ -588,7 +591,7 @@ fn native_terminal_capture_has_no_transient_screen_residue() {
         .find(|text| text.starts_with("GitHub Stack unchanged:"))
         .unwrap();
     let script = r"
-import fcntl, json, os, pty, select, struct, subprocess, sys, termios, time
+import fcntl, json, os, pty, re, select, struct, subprocess, sys, termios, time
 captures = []
 for columns in [40, 80, 124]:
     master, slave = pty.openpty()
@@ -601,11 +604,13 @@ for columns in [40, 80, 124]:
     output = b''
     try:
         deadline = time.monotonic() + 8
-        while b'4835/5000' not in output and time.monotonic() < deadline:
+        frames = []
+        while not frames and time.monotonic() < deadline:
             if select.select([master], [], [], .1)[0]:
                 output += os.read(master, 65536)
-        assert b'REST' in output and b'4835/5000' in output, output[-2000:]
-        assert b'\x1b[36m' in output, output
+            frames = [frame for frame in re.findall(rb'\x1b\[36m(.*?)\x1b\[0m', output, re.S) if b'4835/5000' in frame]
+        assert frames, output[-2000:]
+        if columns >= 80: assert all(b'GitHub Stack' in frame for frame in frames), frames
         p.stdin.write(b'done\n')
         p.stdin.flush()
         deadline = time.monotonic() + 5

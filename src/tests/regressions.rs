@@ -137,7 +137,10 @@ fn recovery_publication_lease_rejects_a_concurrent_remote_update() {
         ..Commit::default()
     };
     let leases = std::collections::BTreeMap::from([("topic/1".into(), Some(f.trunk.clone()))]);
-    assert!(git.push_with_leases(&[&commit], Some(&leases)).is_err());
+    assert!(
+        git.push_with_leases(&[&commit], Some(&leases), &|| Ok(()))
+            .is_err()
+    );
     assert!(
         f.git(&["ls-remote", "origin", "refs/heads/topic/1"])
             .starts_with(&f.hashes[1])

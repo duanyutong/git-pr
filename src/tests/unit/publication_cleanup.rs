@@ -177,3 +177,114 @@ fn cleanup_failure_and_retry_preserve_completed_publication_and_native_membershi
             || (event["method"] == "POST" && event["path"] != "graphql")));
     }
 }
+
+#[test]
+fn shallow_orphan_cleanup_requires_a_conclusive_local_ancestor() {
+    for available in [false, true] {
+        let world = fixture();
+        world.reply("git rev-parse --is-shallow-repository", 0, "true");
+        world
+            .0
+            .lock()
+            .unwrap()
+            .remote_refs
+            .insert(format!("refs/heads/{TEMPORARY}"), oid(20));
+        world.reply(
+            &format!("git merge-base --is-ancestor {} {}", oid(20), oid(0)),
+            1,
+            "",
+        );
+        if available {
+            world
+                .0
+                .lock()
+                .unwrap()
+                .parents
+                .insert(oid(0), vec![oid(20)]);
+        }
+        let result = cleanup(&world, &BTreeMap::from([(TEMPORARY.into(), oid(20))]));
+        assert_eq!(result.is_ok(), available, "{result:?}");
+        assert_eq!(
+            world.trace().iter().any(|event| event["args"][0] == "push"),
+            available
+        );
+    }
+}
+
+#[test]
+fn cleanup_requires_fresh_dependant_observation_before_deletion() {
+    use crate::{
+        commands::Clock,
+        github::http::{Request, Transport},
+    };
+    #[derive(Debug)]
+    struct SlowCleanup {
+        world: std::sync::Arc<World>,
+        delay: std::time::Duration,
+    }
+    impl Transport for SlowCleanup {
+        fn request(&self, request: Request<'_>) -> Result<Vec<u8>> {
+            let response = self.world.request(request)?;
+            if self.delay > std::time::Duration::from_secs(30) {
+                self.world.0.lock().unwrap().prs.insert(201,serde_json::json!({"number":201,"state":"open","head":{"ref":"outside"},"base":{"ref":TEMPORARY}}));
+            }
+            self.world.sleep(self.delay);
+            Ok(response)
+        }
+    }
+    for seconds in [0, 30, 31] {
+        let world = fixture();
+        let config = world.config();
+        let commands = world.commands();
+        let transport = SlowCleanup {
+            world: world.clone(),
+            delay: std::time::Duration::from_secs(seconds),
+        };
+        let github = GitHub {
+            session: crate::github::Session::default(),
+            config: &config,
+            commands: &commands,
+            clock: Some(world.as_ref()),
+            transport: &transport,
+            template: "",
+        };
+        let result = remove_temporary(
+            &github,
+            DESTINATION,
+            &BTreeMap::from([(TEMPORARY.into(), oid(0))]),
+            None,
+        );
+        let pushed = world.trace().iter().any(|event| event["args"][0] == "push");
+        assert_eq!(
+            world
+                .trace()
+                .iter()
+                .filter(|event| event["kind"] == "http")
+                .count(),
+            1
+        );
+        if seconds > 30 {
+            assert!(
+                !pushed,
+                "cleanup sent a deletion with expired dependant evidence: {result:?}"
+            );
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("publication evidence expired")
+            );
+            assert!(
+                world
+                    .0
+                    .lock()
+                    .unwrap()
+                    .remote_refs
+                    .contains_key(&format!("refs/heads/{TEMPORARY}"))
+            );
+        } else {
+            result.unwrap();
+            assert!(pushed);
+        }
+    }
+}

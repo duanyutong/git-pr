@@ -912,6 +912,287 @@ fn slow_dependant_acquisition_preserves_the_age_of_each_groups_first_page() {
     }
 }
 
+#[derive(Debug)]
+struct DelayedDependantRefresh {
+    world: std::sync::Arc<World>,
+    armed: std::sync::atomic::AtomicBool,
+    mode: &'static str,
+}
+
+impl crate::github::http::Transport for DelayedDependantRefresh {
+    fn request(&self, request: crate::github::http::Request<'_>) -> anyhow::Result<Vec<u8>> {
+        use crate::{commands::Clock, github::http::HttpStatusError};
+        use std::sync::atomic::Ordering;
+        let payload: serde_json::Value = request
+            .body
+            .map(serde_json::from_slice)
+            .transpose()?
+            .unwrap_or_default();
+        let url = request.url.to_owned();
+        let response = self.world.request(request)?;
+        if !payload["query"]
+            .as_str()
+            .is_some_and(|query| query.contains("baseRefName:"))
+        {
+            return Ok(response);
+        }
+        if self.armed.load(Ordering::Relaxed) && payload["variables"]["b0"] == "topic/1" {
+            self.world.sleep(std::time::Duration::from_secs(16));
+        }
+        if self.mode == "pagination" && payload["variables"]["c0"] == "next" {
+            self.world.sleep(std::time::Duration::from_secs(16));
+        }
+        if payload["variables"]["b0"] == "topic/26" && self.armed.swap(false, Ordering::Relaxed) {
+            let mut memory = self.world.0.lock().unwrap();
+            let mut outside = memory.prs[&102].clone();
+            outside["number"] = serde_json::json!(201);
+            outside["node_id"] = serde_json::json!("PR_201");
+            outside["head"]["ref"] = serde_json::json!("outside");
+            outside["base"]["ref"] = serde_json::json!("topic/1");
+            memory.prs.insert(201, outside);
+            drop(memory);
+            if self.mode == "pagination" {
+                let mut response: serde_json::Value = serde_json::from_slice(&response)?;
+                response["data"]["repository"]["p0"]["pageInfo"] =
+                    serde_json::json!({"hasNextPage":true,"endCursor":"next"});
+                return Ok(serde_json::to_vec(&response)?);
+            }
+            if self.mode == "quota" {
+                return Err(HttpStatusError {
+                    url,
+                    status: reqwest::StatusCode::TOO_MANY_REQUESTS,
+                    body: "secondary rate limit".into(),
+                    quota: crate::github::limits::Quota {
+                        retry_after: Some(std::time::Duration::from_secs(16)),
+                        ..Default::default()
+                    },
+                }
+                .into());
+            }
+            self.world.sleep(std::time::Duration::from_secs(16));
+        }
+        Ok(response)
+    }
+}
+
+#[test]
+fn later_dependant_refresh_cannot_expire_an_earlier_group_before_push() {
+    use crate::commands::Clock;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    for mode in ["read", "pagination", "quota"] {
+        let world = World::new(26);
+        world.run(&["--no-stack"]).unwrap();
+        world.0.lock().unwrap().remote_refs.clear();
+        let config = world.config();
+        let app = world.app();
+        let transport = DelayedDependantRefresh {
+            world: world.clone(),
+            armed: AtomicBool::new(false),
+            mode,
+        };
+        let github = GitHub {
+            session: crate::github::Session::default(),
+            clock: Some(world.as_ref()),
+            config: &config,
+            commands: &app.commands,
+            transport: &transport,
+            template: "",
+        };
+        let mut selected = state((1..=26).map(commit).collect());
+        let plan = super::pull_requests::Publication::observe(&github, &selected.stack, 0).unwrap();
+        world.sleep(std::time::Duration::from_secs(31));
+        world.0.lock().unwrap().trace.clear();
+        transport.armed.store(true, Ordering::Relaxed);
+        let error = app
+            .push(
+                &config,
+                Git {
+                    commands: &app.commands,
+                    repo: &config.repo,
+                },
+                &github,
+                &mut selected,
+                &plan,
+            )
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("publication evidence expired"),
+            "{mode}: {error:#}"
+        );
+        let trace = world.trace();
+        assert!(!trace.iter().any(publication_effect), "{mode}: {trace:?}");
+        let reads = trace.iter().filter(|event| {
+            event["body"]["query"]
+                .as_str()
+                .is_some_and(|query| query.contains("baseRefName:"))
+        });
+        assert_eq!(reads.count(), if mode == "read" { 2 } else { 3 });
+    }
+}
+
+#[derive(Debug)]
+struct SlowFirstPush {
+    world: std::sync::Arc<World>,
+    armed: std::sync::atomic::AtomicBool,
+    delay: std::time::Duration,
+    outside_base: String,
+}
+
+impl crate::commands::CommandRunner for SlowFirstPush {
+    fn execute(
+        &self,
+        program: &str,
+        args: &[String],
+        cwd: &std::path::Path,
+        env: &std::collections::BTreeMap<std::ffi::OsString, std::ffi::OsString>,
+    ) -> anyhow::Result<crate::commands::CommandOutput> {
+        use crate::commands::Clock;
+        use std::sync::atomic::Ordering;
+
+        let output = self.world.execute(program, args, cwd, env)?;
+        if program == "git"
+            && args.first().is_some_and(|arg| arg == "push")
+            && self.armed.swap(false, Ordering::Relaxed)
+        {
+            if self.delay > std::time::Duration::from_secs(30) {
+                let mut memory = self.world.0.lock().unwrap();
+                let mut outside = memory.prs[&102].clone();
+                outside["number"] = serde_json::json!(10000);
+                outside["node_id"] = serde_json::json!("PR_10000");
+                outside["head"]["ref"] = serde_json::json!("outside");
+                outside["base"]["ref"] = serde_json::json!(self.outside_base);
+                memory.prs.insert(10000, outside);
+                drop(memory);
+            }
+            self.world.sleep(self.delay);
+        }
+        Ok(output)
+    }
+
+    fn execute_data(
+        &self,
+        program: &str,
+        args: &[String],
+        cwd: &std::path::Path,
+        env: &std::collections::BTreeMap<std::ffi::OsString, std::ffi::OsString>,
+        input: &[u8],
+    ) -> anyhow::Result<crate::commands::StructuredOutput> {
+        self.world.execute_data(program, args, cwd, env, input)
+    }
+
+    fn edit_messages(
+        &self,
+        program: &str,
+        args: &[String],
+        cwd: &std::path::Path,
+        env: &std::collections::BTreeMap<std::ffi::OsString, std::ffi::OsString>,
+        messages: &[(String, String)],
+    ) -> anyhow::Result<crate::commands::CommandOutput> {
+        self.world.edit_messages(program, args, cwd, env, messages)
+    }
+}
+
+#[test]
+fn each_git_push_batch_requires_fresh_dependants() {
+    for bytes in [false, true] {
+        for seconds in [0, 30, 31] {
+            check_push_batch_freshness(bytes, seconds);
+        }
+    }
+}
+
+fn check_push_batch_freshness(bytes: bool, seconds: u64) {
+    use crate::model::outcome::Operation;
+    use std::sync::{Arc, atomic::AtomicBool};
+
+    let size = if bytes { 128 } else { 129 };
+    let world = World::new(size);
+    if bytes {
+        for (index, commit) in world.0.lock().unwrap().commits.iter_mut().enumerate() {
+            commit.attrs[0].1 = format!("topic/{index}/{}", "x".repeat(230));
+        }
+    }
+    world.run(&["--no-stack"]).unwrap();
+    world.0.lock().unwrap().remote_refs.clear();
+    let mut selected = state(world.0.lock().unwrap().commits.clone());
+    let last = selected.stack.last().unwrap().remote_ref().to_owned();
+    let config = world.config();
+    let mut app = world.app();
+    app.commands.runner = Arc::new(SlowFirstPush {
+        world: world.clone(),
+        armed: AtomicBool::new(true),
+        delay: std::time::Duration::from_secs(seconds),
+        outside_base: last.clone(),
+    });
+    let github = GitHub {
+        session: crate::github::Session::default(),
+        config: &config,
+        commands: &app.commands,
+        clock: Some(world.as_ref()),
+        transport: world.as_ref(),
+        template: "",
+    };
+    let plan = super::pull_requests::Publication::observe(&github, &selected.stack, 0).unwrap();
+    world.0.lock().unwrap().trace.clear();
+    let result = app.push(
+        &config,
+        Git {
+            commands: &app.commands,
+            repo: &config.repo,
+        },
+        &github,
+        &mut selected,
+        &plan,
+    );
+    let trace = world.trace();
+    let pushes = trace
+        .iter()
+        .filter(|event| event["args"][0] == "push")
+        .collect::<Vec<_>>();
+    let first = pushes[0]["args"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|arg| {
+            arg.as_str()?
+                .split_once(":refs/heads/")
+                .map(|(_, reference)| reference.to_owned())
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(first.len() < 128, bytes);
+    let effects = app.commands.outcomes.snapshot();
+    for reference in first {
+        let effect = effects[&Operation::Branch(reference)];
+        assert!(effect.confirmed && !effect.unconfirmed);
+    }
+    let requests = trace.iter().filter(|event| event["kind"] == "http").count();
+    if seconds > 30 {
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("publication evidence expired")
+        );
+        assert_eq!(pushes.len(), 1);
+        assert!(!effects.contains_key(&Operation::Branch(last.clone())));
+        assert!(
+            !world
+                .0
+                .lock()
+                .unwrap()
+                .remote_refs
+                .contains_key(&format!("refs/heads/{last}"))
+        );
+        assert_eq!(requests, 0);
+    } else {
+        result.unwrap();
+        assert_eq!(pushes.len(), 2);
+        assert!(effects[&Operation::Branch(last)].confirmed);
+        assert_eq!(requests, usize::try_from(size).unwrap().div_ceil(25));
+    }
+}
+
 fn state(commits: Vec<Commit>) -> State {
     State {
         stack: commits,
@@ -1186,7 +1467,7 @@ fn reserved_initial_description_inputs_fail_before_writes_and_allow_safe_repair(
 }
 
 #[test]
-fn full_stack_preserves_other_author_and_draft_context_without_extra_publication() {
+fn pr_footers_omit_unpublished_author_and_draft_context_without_extra_publication() {
     for native in [false, true] {
         for compact in [false, true] {
             let w = World::new(4);
@@ -1217,16 +1498,10 @@ fn full_stack_preserves_other_author_and_draft_context_without_extra_publication
                 assert!(memory.stdout.contains("Pull requests · 2 created"));
                 for pr in memory.prs.values() {
                     let body = pr["body"].as_str().unwrap();
-                    assert_eq!(body.contains("Feature 2"), !compact);
-                    assert_eq!(body.contains("WIP: pending draft"), !compact);
-                    assert_eq!(
-                        body.contains(&format!("/commit/{}", commit(2).hash)),
-                        !compact
-                    );
-                    assert_eq!(
-                        body.contains(&format!("/commit/{}", commit(3).hash)),
-                        !compact
-                    );
+                    assert!(!body.contains("Feature 2"));
+                    assert!(!body.contains("WIP: pending draft"));
+                    assert!(!body.contains("/commit/"));
+                    assert!(body.contains("of 2"));
                     assert!(!body.contains("#0"));
                 }
                 let push = memory
@@ -2611,24 +2886,71 @@ fn creation_requires_an_attempt_identifier_and_valid_head_even_without_an_anchor
 }
 
 #[test]
-fn an_unavailable_remote_ancestry_check_does_not_authorise_a_head_collision() {
-    let w = World::new(1);
-    w.0.lock().unwrap().commits[0].attrs.clear();
-    w.0.lock()
-        .unwrap()
-        .remote_refs
-        .insert("refs/heads/topic/1".into(), commit(2).hash);
-    w.fail(&format!(
-        "git merge-base --is-ancestor {} {}",
-        commit(2).hash,
-        commit(1).hash
-    ));
-    assert!(w.run(&["--no-stack"]).is_err());
-    assert!(!w.trace().iter().any(publication_effect));
+fn local_layers_publish_without_remote_ancestry_or_prior_associations() {
+    for shallow in [false, true] {
+        for present in [false, true] {
+            let w = World::new(2);
+            {
+                let mut memory = w.0.lock().unwrap();
+                for commit in &mut memory.commits {
+                    commit.attrs.clear();
+                }
+                memory.parents = std::collections::BTreeMap::from([
+                    ("0".repeat(40), Vec::new()),
+                    (commit(1).hash, vec!["0".repeat(40)]),
+                    (commit(2).hash, vec![commit(1).hash]),
+                ]);
+                if present {
+                    memory
+                        .remote_refs
+                        .insert("refs/heads/topic/2".into(), commit(3).hash);
+                }
+            }
+            w.reply(
+                "git rev-parse --is-shallow-repository",
+                0,
+                if shallow { "true" } else { "false" },
+            );
+            w.reply(
+                &stack_probe("refs/remotes/origin/main", "HEAD"),
+                0,
+                &format!("{shallow}\n{}\ntree0\n{}", "0".repeat(40), commit(2).hash),
+            );
+            w.fail(&format!(
+                "git merge-base --is-ancestor {} {}",
+                commit(3).hash,
+                commit(2).hash
+            ));
+            w.run(&["--no-stack"]).unwrap();
+            let trace = w.trace();
+            assert!(!trace.iter().any(|event| event["args"][0] == "merge-base"));
+            let push = trace
+                .iter()
+                .find(|event| event["args"][0] == "push")
+                .unwrap();
+            assert!(
+                push["args"]
+                    .as_array()
+                    .unwrap()
+                    .contains(&serde_json::json!(format!(
+                        "--force-with-lease=refs/heads/topic/2:{}",
+                        if present {
+                            commit(3).hash
+                        } else {
+                            String::new()
+                        }
+                    )))
+            );
+            let memory = w.0.lock().unwrap();
+            assert_eq!(memory.remote_refs["refs/heads/topic/2"], commit(2).hash);
+            assert_eq!(memory.prs.len(), 2);
+            assert_eq!(memory.prs[&102]["base"]["ref"], "topic/1");
+        }
+    }
 }
 
 #[test]
-fn unpublished_unanchored_descendants_remain_description_context() {
+fn unpublished_unanchored_descendants_do_not_enter_pr_footers() {
     let w = World::new(2);
     w.run(&["--no-stack", "topic/1"]).unwrap();
     {
@@ -2668,11 +2990,11 @@ fn unpublished_unanchored_descendants_remain_description_context() {
     crate::submission::Application::update_descriptions(&config, git, &github, &s).unwrap();
     let memory = w.0.lock().unwrap();
     assert_eq!(memory.prs.len(), 1);
-    assert!(
-        memory.prs[&101]["body"]
-            .as_str()
-            .unwrap()
-            .contains(&commit(2).hash)
+    let body = memory.prs[&101]["body"].as_str().unwrap();
+    assert!(!body.contains(&commit(2).hash));
+    assert_eq!(
+        body.lines().filter(|line| line.starts_with("* ")).count(),
+        1
     );
     drop(memory);
 }

@@ -252,6 +252,8 @@ fn rendering_is_bounded_for_narrow_terminals_and_expired_timers() {
 
 #[test]
 fn terminal_fixture() {
+    use std::io::IsTerminal as _;
+
     if std::env::var_os("GIT_PR_TEST_PROGRESS").is_none() {
         return;
     }
@@ -284,7 +286,12 @@ fn terminal_fixture() {
         "GitHub secondary backoff; retry 1/3",
         Some(Duration::from_secs(2)),
     );
-    std::thread::sleep(Duration::from_millis(if interrupt { 30_000 } else { 250 }));
+    if std::io::stdin().is_terminal() {
+        // The parent observes the wait before permitting confirmation or interruption.
+        let mut permission = String::new();
+        std::io::stdin().read_line(&mut permission).unwrap();
+        assert_eq!(permission, "next\n");
+    }
     terminal.end_activity(wait);
     let confirmed = terminal.confirm("Continue?");
     terminal.out(if confirmed { "accepted" } else { "declined" });
@@ -329,6 +336,7 @@ def capture(interrupt=False, settings=None, pipe_stdout=False):
     os.close(slave)
     output = b''
     answered = False
+    released = False
     deadline = time.monotonic() + 10
     try:
         while time.monotonic() < deadline:
@@ -343,9 +351,13 @@ def capture(interrupt=False, settings=None, pipe_stdout=False):
                 if interrupt and b'remaining' in output and not answered:
                     process.send_signal(signal.SIGINT)
                     answered = True
-                elif not interrupt and b'Continue?' in output and not answered:
-                    os.write(master, b'y\n')
-                    answered = True
+                elif not interrupt:
+                    if not released and (b'remaining' in output or b'waiting 2s' in output):
+                        os.write(master, b'next\n')
+                        released = True
+                    elif b'Continue?' in output and not answered:
+                        os.write(master, b'y\n')
+                        answered = True
             elif process.poll() is not None:
                 break
         assert process.wait(timeout=1) == (130 if interrupt else 0), output
@@ -487,7 +499,8 @@ for columns in [40, 80, 124]:
         while time.monotonic() < deadline:
             if select.select([master], [], [], .1)[0]:
                 output += os.read(master, 65536)
-            frames = [frame.decode() for frame in re.findall(rb'\x1b\[36m(.*?)\x1b\[0m', output, re.S) if b'REST 14093/15000' in frame]
+            # The quota can be painted before the request activity starts.
+            frames = [frame.decode() for frame in re.findall(rb'\x1b\[36m(.*?)\x1b\[0m', output, re.S) if b'GitHub GET' in frame and b'REST 14093/15000' in frame]
             if frames: break
         assert frames, output
         for frame in frames:
@@ -1051,12 +1064,10 @@ fn independent_width_fixture() {
         assert_eq!(permission, "next\n");
         terminal.quota("GraphQL", 0, 5000, Duration::from_secs(90));
         terminal.progress("Descriptions #101", step, 3);
-        let deadline = Instant::now() + Duration::from_secs(3);
-        while lock(&terminal.shared.state).painted == 0 && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        // Let the next paced frame reflect the updated progress and actual window size.
-        std::thread::sleep(Duration::from_millis(150));
+        // The parent observes the current frame on stderr before requesting stdout.
+        permission.clear();
+        std::io::stdin().read_line(&mut permission).unwrap();
+        assert_eq!(permission, "observed\n");
         let rows = lock(&terminal.shared.state).painted;
         terminal.out(&format!("BEGIN{step}"));
         let commit = Commit { pr_number: 42, title: "A long title with enough words to require ellipsis in all of these terminal panes and no inserted title continuation".into(), ..Commit::default() };
@@ -1097,11 +1108,19 @@ try:
         out, err = b'', b''
         deadline = time.monotonic() + 8
         marker = ('STEP%d rows=%d' % (step, expected_rows)).encode()
+        progress = ('%d/3 Descriptions #101' % step).encode()
+        observed = False
         while marker not in out and time.monotonic() < deadline:
             for fd in select.select([out_master, err_master], [], [], .1)[0]:
-                data = os.read(fd, 65536)
+                try: data = os.read(fd, 65536)
+                except OSError: continue
                 if fd == out_master: out += data
                 else: err += data
+            frame = err.rsplit(b'\r\x1b[2K', 1)[-1]
+            if not observed and progress in frame and b'GraphQL 0/5000' in frame and re.search(rb'reset [0-9]+(?:m[0-9]+)?s', frame):
+                p.stdin.write(b'observed\n')
+                p.stdin.flush()
+                observed = True
         assert marker in out, (step, out, err)
         assert b'GraphQL' in err and b'0/5000' in err and b'reset' in err, err
         if step == 1:

@@ -89,15 +89,17 @@ fn descendant_observation_reads_only_beyond_the_frozen_tip() {
             .collect::<Vec<_>>();
         assert_eq!(logs.len(), 2);
         assert_eq!(logs[1]["args"].as_array().unwrap().last().unwrap(), &range);
-        assert!(
-            w.0.lock().unwrap().prs[&101]["body"]
-                .as_str()
-                .unwrap()
-                .contains("Feature 4")
+        let memory = w.0.lock().unwrap();
+        let body = memory.prs[&101]["body"].as_str().unwrap();
+        assert!(!body.contains("Feature 4"));
+        assert_eq!(
+            body.lines().filter(|line| line.starts_with("* ")).count(),
+            if empty_tip { 2 } else { 3 }
         );
         if empty_tip {
-            assert!(!w.0.lock().unwrap().prs.contains_key(&103));
+            assert!(!memory.prs.contains_key(&103));
         }
+        drop(memory);
     }
 }
 
@@ -337,14 +339,12 @@ fn descendant_description_reads_require_no_jujutsu_recovery_queries() {
                 .count(),
             1
         );
-        if !compact {
-            assert!(
-                w.0.lock().unwrap().prs[&101]["body"]
-                    .as_str()
-                    .unwrap()
-                    .contains("Feature 4")
-            );
-        }
+        assert!(
+            !w.0.lock().unwrap().prs[&101]["body"]
+                .as_str()
+                .unwrap()
+                .contains("Feature 4")
+        );
     }
 }
 
@@ -621,8 +621,6 @@ fn unchanged_large_stack_footers_borrow_rows_and_write_no_description_bytes() {
             Style {
                 stack_up,
                 emoji: true,
-                host: "github.com",
-                repo: "org/repo",
             },
         );
         for current in &stack {
@@ -855,8 +853,6 @@ fn renderers_accept_borrowed_commit_context_across_separate_owned_stacks() {
         Style {
             stack_up: false,
             emoji: false,
-            host: "github.com",
-            repo: "org/repo",
         },
     );
     assert!(

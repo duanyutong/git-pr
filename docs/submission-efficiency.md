@@ -118,6 +118,9 @@ The actual push destination establishes object equality, and explicit expected-o
 The publication plan retains the changing destinations and a separate acquisition timestamp for each group of at most 25 such destinations, using the invocation's monotonic clock.
 Each timestamp precedes acquisition of its group's first page, so request delays and pagination contribute to the observation age.
 Before publication, dependant observations older than 30 seconds are reacquired; fresh groups require no additional request.
+Immediately before each Git push command, an in-memory timestamp check refuses publication if dependant evidence expired during later reads, pagination, quota waits or an earlier push batch, without issuing another observation request.
+Base transitions retain the acquisition start of their final dependant check through the subsequent head verification, and temporary-base publication and cleanup use the same freshness rule.
+Refusal of a later batch preserves the confirmed results of earlier batches and records no attempted write for the unsent batch.
 Slow acquisition of a later group does not renew the earlier groups, and failed reacquisition prevents publication without renewing the affected observation.
 These queries use GitHub's documented [`baseRefName` filter](https://docs.github.com/en/graphql/reference/repos#repository).
 After publication, affected head and PR observations are invalidated regardless of their age; the same pinned identities and bases must be confirmed before any creation or update.
@@ -183,7 +186,7 @@ A native page may acquire additional older objects before the next proof check; 
 Dense shallow markers can require additional bounded resumptions.
 Unavailable history before such a boundary does not prevent a conclusive answer; a genuinely indeterminate relationship stops the transition before mutation.
 The finite reader retains the command adapter's cancellation, deadlines and output bounds, disables lazy fetching and leaves shallow metadata unchanged.
-Positive ancestry guards, including merged-parent recovery, temporary-ref reuse and cleanup, unreviewed refs and local synchronisation, accept an immediate native proof and otherwise use conclusive stored-parent evidence in a shallow repository.
+Positive ancestry guards, including merged-parent recovery, temporary-ref reuse and cleanup, and local synchronisation, accept an immediate native proof and otherwise use conclusive stored-parent evidence in a shallow repository.
 A complete repository retains its native result or error without additional object acquisition.
 Complete repositories retain Git's native ancestry traversal, and matching complete-graph observations retain their existing reuse path.
 Even a small transition checks graph completeness for safety; ordinary complete-history submissions without a base transition require no separate graph-completeness command.
@@ -385,10 +388,10 @@ The 129-tip regression requires four ancestry commands, compared with 256 in the
 Full-stack footers necessarily emit O(U(N + H)) entries.
 Numbered PR rows and context labels omit displayed commit hashes, so a changed PR head object does not by itself amend its description.
 Existing generated hash annotations are removed during one reconciliation; subsequent unchanged navigation remains stable.
-Unnumbered commits remain visible as escaped commit links with their author identity, including commits excluded from publication by author or draft policy.
-Their links use full commit identities, and their inclusion does not create PRs or publish additional branch destinations.
-PR-number deduplication applies only to numbered entries; distinct unnumbered commits shall not collapse into a shared zero identity.
-Where unnumbered context is present, the header reports an entry position rather than implying that every entry is a PR.
+Full-stack footers contain numbered PRs only, retaining published descendants and recognised historical PR identities without including local commits which have no PR.
+Local commits without a PR, including unpublished descendants and changes excluded by author or draft policy, neither contribute rows nor affect PR positions or totals.
+PR numbers are deduplicated before counting and rendering; local context discovery does not create additional PRs or publish additional branch destinations.
+An existing managed footer containing unnumbered commit links is replaced during ordinary reconciliation whilst human description text remains preserved.
 Changing every PR in a large stack therefore remains quadratic in body bytes under the existing representation.
 The implementation removes repeated context construction without changing that representation or silently truncating history.
 Optional compact footers build an O(N) navigation index and emit at most three PR links per description, giving O(N + U) navigation work and entries.

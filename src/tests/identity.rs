@@ -106,48 +106,126 @@ impl Transport for UnpublishedDescendant {
 }
 
 #[test]
-fn native_partial_stack_submission_preserves_an_unpublished_descendant() {
-    for flag in ["--no-stack", "--github-stack"] {
-        let mut f = Fixture::new(3, false);
-        let objects: Vec<_> = f
-            .hashes
-            .iter()
-            .map(|oid| f.git(&["cat-file", "commit", oid]))
-            .collect();
-        f.git(&["checkout", "topic/2"]);
-        let transport = Arc::new(UnpublishedDescendant {
-            service: f.service.clone(),
-            hash: f.hashes[2].clone(),
-            requests: AtomicUsize::new(0),
-        });
-        f.app.transport = transport.clone();
-        for attempt in 1..=2 {
-            f.run(&[flag]).unwrap();
-            assert_eq!(transport.requests.load(Ordering::SeqCst), attempt);
-            assert_eq!(f.git(&["rev-parse", "HEAD"]), f.hashes[1]);
-            assert_eq!(f.git(&["ls-remote", "origin", "refs/heads/topic/3"]), "");
-            assert!(
-                !f.git(&["config", "--local", "--list"])
-                    .contains("branch.topic/3.gitpr")
-            );
-            for (index, oid) in f.hashes.iter().enumerate() {
-                assert_eq!(f.git(&["rev-parse", &format!("topic/{}", index + 1)]), *oid);
-                assert_eq!(f.git(&["cat-file", "commit", oid]), objects[index]);
-            }
-            let prs = f.service.prs.lock().unwrap();
-            assert_eq!(prs.len(), 2);
-            for pr in prs.values() {
-                assert_eq!(pr["state"], "open");
-                assert!(pr["body"].as_str().unwrap().contains("Feature 3"));
-            }
-        }
-        assert_eq!(
-            f.trace()
+fn native_local_stack_publishes_an_amended_head_without_prior_review_or_binding() {
+    let mut f = Fixture::new(2, false);
+    f.run(&["--no-stack", "topic/1"]).unwrap();
+    f.git(&["push", "origin", "topic/2"]);
+    let previous = f.hashes[1].clone();
+    f.write("file-2.txt", "Amended local content\n");
+    f.git(&["add", "file-2.txt"]);
+    f.git(&["commit", "--amend", "--no-edit"]);
+    let amended = f.git(&["rev-parse", "HEAD"]);
+    let object = f.git(&["cat-file", "commit", &amended]);
+    assert_ne!(amended, previous);
+    assert!(
+        f.app
+            .commands
+            .git(&["merge-base", "--is-ancestor", &previous, &amended])
+            .is_err()
+    );
+    assert!(
+        !f.git(&["config", "--local", "--list"])
+            .contains("branch.topic/2.gitpr")
+    );
+    let transport = Arc::new(UnpublishedDescendant {
+        service: f.service.clone(),
+        hash: amended.clone(),
+        requests: AtomicUsize::new(0),
+    });
+    f.app.transport = transport;
+    f.service.trace.lock().unwrap().clear();
+
+    f.run(&["--no-stack"]).unwrap();
+    assert_eq!(f.git(&["rev-parse", "origin/topic/2"]), amended);
+    assert_eq!(f.git(&["cat-file", "commit", &amended]), object);
+    let prs = f.service.prs.lock().unwrap();
+    assert_eq!(prs.len(), 2);
+    let pr = prs
+        .values()
+        .find(|pr| pr["head"]["ref"] == "topic/2")
+        .unwrap();
+    assert_eq!(pr["base"]["ref"], "topic/1");
+    drop(prs);
+    let trace = f.trace();
+    let pushes: Vec<_> = trace
+        .iter()
+        .filter(|event| event["args"][0] == "push")
+        .collect();
+    assert_eq!(pushes.len(), 1);
+    assert!(
+        pushes[0]["args"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!(format!(
+                "--force-with-lease=refs/heads/topic/2:{previous}"
+            )))
+    );
+    f.service.trace.lock().unwrap().clear();
+    f.run(&["--no-stack"]).unwrap();
+    assert!(!f.trace().iter().any(|event| event["args"][0] == "push"
+        || (event["method"] == "POST" && event["path"] == "pulls")));
+}
+
+#[test]
+fn native_partial_stack_submission_omits_unpublished_descendants() {
+    for (submitted, unpublished) in [(2, 1), (4, 3)] {
+        for flag in ["--no-stack", "--github-stack"] {
+            let mut f = Fixture::new(submitted + unpublished, false);
+            let objects: Vec<_> = f
+                .hashes
                 .iter()
-                .filter(|event| event["method"] == "POST" && event["path"] == "pulls")
-                .count(),
-            2
-        );
+                .map(|oid| f.git(&["cat-file", "commit", oid]))
+                .collect();
+            f.git(&["checkout", &format!("topic/{submitted}")]);
+            let transport = Arc::new(UnpublishedDescendant {
+                service: f.service.clone(),
+                hash: f.hashes[submitted].clone(),
+                requests: AtomicUsize::new(0),
+            });
+            f.app.transport = transport.clone();
+            for attempt in 1..=2 {
+                f.run(&[flag]).unwrap();
+                assert_eq!(transport.requests.load(Ordering::SeqCst), attempt);
+                assert_eq!(f.git(&["rev-parse", "HEAD"]), f.hashes[submitted - 1]);
+                for index in submitted + 1..=submitted + unpublished {
+                    let descendant = format!("topic/{index}");
+                    assert_eq!(
+                        f.git(&["ls-remote", "origin", &format!("refs/heads/{descendant}")]),
+                        ""
+                    );
+                    assert!(
+                        !f.git(&["config", "--local", "--list"])
+                            .contains(&format!("branch.{descendant}.gitpr"))
+                    );
+                }
+                for (index, oid) in f.hashes.iter().enumerate() {
+                    assert_eq!(f.git(&["rev-parse", &format!("topic/{}", index + 1)]), *oid);
+                    assert_eq!(f.git(&["cat-file", "commit", oid]), objects[index]);
+                }
+                let prs = f.service.prs.lock().unwrap();
+                assert_eq!(prs.len(), submitted);
+                for pr in prs.values() {
+                    assert_eq!(pr["state"], "open");
+                    let body = pr["body"].as_str().unwrap();
+                    assert_eq!(
+                        body.lines().filter(|line| line.starts_with("* ")).count(),
+                        submitted
+                    );
+                    assert!(body.contains(&format!("of {submitted}")));
+                    assert!(!body.contains("/commit/"));
+                    for index in submitted + 1..=submitted + unpublished {
+                        assert!(!body.contains(&format!("Feature {index}")));
+                    }
+                }
+            }
+            assert_eq!(
+                f.trace()
+                    .iter()
+                    .filter(|event| event["method"] == "POST" && event["path"] == "pulls")
+                    .count(),
+                submitted
+            );
+        }
     }
 }
 

@@ -30,6 +30,10 @@ Policy preferences retain ordinary Git scope precedence.
 ## Authority and reconciliation
 
 The current local stack determines the intended publication; repository-local associations preserve its identities, and remote observations constrain safe execution.
+Selected local commits and their order determine the desired remote content and predecessor relationships, including newly added layers without prior publication metadata.
+An existing review, remote ancestor relationship or stored association is not required to publish a selected layer.
+Once its publication head has been resolved, a selected layer may replace an earlier remote tip, including after amendment or restacking, using an exact expected-object lease.
+Remote observations establish current review identities and mutation preconditions; they do not authorise or veto selected content merely because its history differs.
 Local associations constrain intended identity.
 An existing trailer constrains the head ref and must agree with any stored head association.
 Fresh GitHub observations establish the review's current identity, lifecycle and relationships; they cannot silently substitute a different review for a recorded PR.
@@ -59,6 +63,7 @@ Compact navigation omits the complete historical list.
 
 Deleting some or all association keys is recoverable when surviving anchors and verifiable remote evidence determine one association.
 Maintained publication names permit recovery after a rebase or amendment even when local and remote hashes differ.
+This also applies to a previously pushed head for which no PR has yet been created.
 A Git branch rename normally carries its configuration to the new local name whilst retaining the original publication head.
 Copied bindings require disambiguation before submission.
 If every relationship to an old publication name has been destroyed, the local graph alone cannot reconstruct that historical choice.

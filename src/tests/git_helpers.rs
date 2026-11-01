@@ -130,6 +130,6 @@ impl Git<'_> {
     }
 
     pub(crate) fn push_all(&self, commits: &[&Commit]) -> Result<()> {
-        self.push_with_leases(commits, None)
+        self.push_with_leases(commits, None, &|| Ok(()))
     }
 }

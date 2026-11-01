@@ -47,7 +47,9 @@ pub(super) fn remove_temporary(
                 "temporary publication base {reference:?} is not a verified trunk ancestor; retained without deletion"
             );
         }
+        let acquired = github.now();
         github.check_publication_dependants(std::slice::from_ref(reference), &HashMap::new())?;
+        super::policy::require_fresh_publication(github.now(), [acquired])?;
         github.commands.git(&[
             "push",
             "--porcelain",

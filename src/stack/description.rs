@@ -365,11 +365,9 @@ impl BodyCache {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct Style<'a> {
+pub(crate) struct Style {
     pub stack_up: bool,
     pub emoji: bool,
-    pub host: &'a str,
-    pub repo: &'a str,
 }
 
 #[derive(Debug)]
@@ -378,8 +376,7 @@ pub(crate) struct StackRenderer<'a> {
     numbers: Vec<u64>,
     positions: HashMap<&'a str, (usize, usize, usize, &'a Commit, bool)>,
     len: usize,
-    has_unnumbered: bool,
-    style: Style<'a>,
+    style: Style,
 }
 
 impl<'a> StackRenderer<'a> {
@@ -387,7 +384,7 @@ impl<'a> StackRenderer<'a> {
         stack: impl Iterator<Item = &'a Commit> + Clone,
         history: &[HistoryEntry],
         merged: &HashSet<u64>,
-        style: Style<'a>,
+        style: Style,
     ) -> Self {
         let current_numbers: HashSet<_> = stack
             .clone()
@@ -400,11 +397,8 @@ impl<'a> StackRenderer<'a> {
             .filter(|h| !current_numbers.contains(&h.number) && seen.insert(h.number))
             .map(|h| (h.number, None, h.merged))
             .collect();
-        let mut has_unnumbered = false;
-        for c in stack {
-            let unnumbered = c.pr_number == 0;
-            has_unnumbered |= unnumbered;
-            if unnumbered || seen.insert(c.pr_number) {
+        for c in stack.filter(|c| c.pr_number != 0) {
+            if seen.insert(c.pr_number) {
                 entries.push((c.pr_number, Some(c), merged.contains(&c.pr_number)));
             }
         }
@@ -451,7 +445,6 @@ impl<'a> StackRenderer<'a> {
             numbers,
             positions,
             len,
-            has_unnumbered,
             style,
         }
     }
@@ -466,19 +459,11 @@ impl<'a> StackRenderer<'a> {
             } else {
                 "oldest"
             };
-            if self.has_unnumbered {
-                let _ = writeln!(
-                    header,
-                    "This PR is entry **{position} of {}** in a stack ({order} at the top)\n",
-                    self.len
-                );
-            } else {
-                let _ = writeln!(
-                    header,
-                    "This is PR **{position} of {}** in a stack ({order} at the top)\n",
-                    self.len
-                );
-            }
+            let _ = writeln!(
+                header,
+                "This is PR **{position} of {}** in a stack ({order} at the top)\n",
+                self.len
+            );
         }
         if let Some((_, start, end, commit, merged)) = row {
             Footer {
@@ -501,27 +486,16 @@ pub(crate) fn render_commit(
     commit: &Commit,
     current: &Commit,
     merged: bool,
-    style: Style<'_>,
+    style: Style,
 ) -> String {
+    if commit.pr_number == 0 {
+        return String::new();
+    }
     let is_current = commit.hash == current.hash;
-    let reference = if commit.pr_number != 0 && is_current {
+    let reference = if is_current {
         format!("#{} 👈 This PR", commit.pr_number)
-    } else if commit.pr_number != 0 {
-        format!("#{}", commit.pr_number)
     } else {
-        let (user, host) = commit.author_email.split_once('@').map_or(
-            (commit.author_email.as_str(), String::new()),
-            |(user, host)| (user, format!("@{host}")),
-        );
-        format!(
-            "[{}](https://{}/{}/commit/{}) — {}&#x200B;{}",
-            escape_context_text(&commit.title),
-            style.host,
-            style.repo,
-            commit.hash,
-            escape_context_text(user),
-            escape_context_text(&host),
-        )
+        format!("#{}", commit.pr_number)
     };
     let marker = if !style.emoji {
         String::new()
@@ -533,24 +507,6 @@ pub(crate) fn render_commit(
         " ⬛".into()
     };
     format!("*{marker} {reference}\n")
-}
-
-fn escape_context_text(text: &str) -> String {
-    let mut escaped = String::with_capacity(text.len());
-    for character in text.chars() {
-        match character {
-            '&' => escaped.push_str("&amp;"),
-            '<' => escaped.push_str("&lt;"),
-            '>' => escaped.push_str("&gt;"),
-            '\\' | '[' | ']' | '`' | '*' | '_' => {
-                escaped.push('\\');
-                escaped.push(character);
-            }
-            '\r' | '\n' => escaped.push(' '),
-            _ => escaped.push(character),
-        }
-    }
-    escaped
 }
 
 /// Constant-size navigation for each PR; historical full-stack lists are omitted explicitly.
