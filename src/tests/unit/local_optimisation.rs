@@ -1,6 +1,7 @@
 //! Cache and preparation budgets, with byte-oriented wildcard equivalence.
 use super::support::{DRAFT_EVALUATIONS, DRAFT_PREPARATIONS, WORKER_STARTS, World, commit, log};
 use crate::stack::selection::{DraftPatterns, match_wildcard};
+use crate::tests::unit::support::stack_probe;
 
 #[test]
 fn cached_submission_needs_no_workers_in_either_stack_mode() {
@@ -67,7 +68,7 @@ fn descendant_observation_reads_only_beyond_the_frozen_tip() {
         let w = World::new(3);
         let selected = w.0.lock().unwrap().commits.clone();
         if empty_tip {
-            w.reply("git log --format=%H%x00%an%x00%ae%x00%aI%x00%T%x00%P%x00%B%x00 --no-decorate --no-color --encoding=UTF-8 --no-show-signature refs/remotes/origin/main..HEAD",0,&log(&selected).replace("\0tree3\0","\0tree2\0"));
+            w.reply(&format!("git log --format=%H%x00%an%x00%ae%x00%aI%x00%T%x00%P%x00%B%x00 --no-decorate --no-color --encoding=UTF-8 --no-show-signature {:040x}..{}",0,commit(3).hash),0,&log(&selected).replace("\0tree3\0","\0tree2\0"));
         }
         let anchor = commit(3).hash;
         let extra = commit(4);
@@ -284,11 +285,11 @@ fn discovery_reuses_base_and_tip_identities_in_both_native_modes() {
                 v["program"] == "git"
                     && v["args"]
                         == serde_json::json!([
-                            "show",
-                            "--no-show-signature",
-                            "-s",
-                            "--format=%H %T",
-                            "refs/remotes/origin/main"
+                            "rev-parse",
+                            "--is-shallow-repository",
+                            "refs/remotes/origin/main^{commit}",
+                            "refs/remotes/origin/main^{tree}",
+                            "HEAD^{commit}"
                         ])
             })
             .count();
@@ -349,13 +350,17 @@ fn descendant_description_reads_require_no_jujutsu_recovery_queries() {
 
 #[test]
 fn malformed_base_observations_stop_before_publication_with_clear_guidance() {
-    for value in ["", "missing-tree", " tree", "hash ", "hash tree extra"] {
+    for value in [
+        "",
+        "missing-tree",
+        " tree",
+        "hash ",
+        "hash tree extra",
+        "false hash tree hash",
+        "unknown hash tree hash",
+    ] {
         let w = World::new(1);
-        w.reply(
-            "git show --no-show-signature -s --format=%H %T refs/remotes/origin/main",
-            0,
-            value,
-        );
+        w.reply(&stack_probe("refs/remotes/origin/main", "HEAD"), 0, value);
         let error = format!("{:#}", w.run(&["--no-stack"]).unwrap_err());
         assert!(
             error.contains("invalid base commit/tree observation for refs/remotes/origin/main")

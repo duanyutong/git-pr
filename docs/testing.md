@@ -253,6 +253,15 @@ Title reversions and unrelated human title edits following acknowledgement shall
 Unrelated observation errors shall fail without disabling subsequent stack-schema checks.
 A separate wait-boundary regression edits human text whilst the clock advances and verifies that content is freshly rendered before the delayed write.
 These tests shall perform no repeated Git publication or PR creation.
+Shallow-history regressions use stored commit parents and genuine shallow metadata to require equivalent publication identities and safe staging without a full clone, automatic fetching or shallow-file changes.
+Stack-discovery regressions retain changed layers across single and successive shallow markers, omit genuinely empty commits, reject concealed merges and fail explicitly when required local history is unavailable.
+They also cover advanced trunks, markers on excluded ancestors, integrated merges and unavailable older history outside the selected range.
+An excluded boundary with a Git-valid empty author email shall not constrain a valid selected commit; selected author validation and refusal of unavailable or malformed boundary trees remain enforced.
+Merged-downstack recovery covers complete and shallow repositories for merge, squash and rebase integration with deleted and retained branches.
+Positive ancestry cases additionally cover temporary-ref adoption and orphan cleanup, unreviewed-head protection, branch and bookmark synchronisation and native failures caused by irrelevant missing older objects.
+Depth cases constrain native acquisition requests for 10, 100, 500 and 1,000-commit paths, while raw-history tests exercise bounded pages, overlapping frontiers, opaque non-UTF-8 messages, missing objects and malformed or contradictory framing.
+Range-selection depth cases require exactly one linearity validation per selected commit and bound resumption reads through 1,000 layers.
+The native indirect-merge oracle exercises reordered submissions in complete and shallow repositories with native linking enabled and disabled.
 Nested native recovery cases compose owner-level and read-level delays against one cumulative budget, including retention of confirmed dissolution after later exhaustion.
 Label cases change policy-relevant labels during dispatch waits, confirm lost acknowledgements without duplicate writes and preserve unrelated labels and earlier effects.
 Retargeting regressions require each acknowledgement to confirm the exact intended PR before the following mutation is dispatched.

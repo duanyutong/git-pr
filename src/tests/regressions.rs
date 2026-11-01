@@ -20,83 +20,96 @@ use crate::{
 fn merged_downstack_recovery_uses_real_ancestry_and_preserves_the_open_pr() {
     for method in ["merge", "squash", "rebase"] {
         for deleted in [false, true] {
-            let f = Fixture::with_service(
-                2,
-                true,
-                Service {
-                    indirect_merges: Some(false),
-                    ..Service::default()
-                },
-            );
-            f.run(&["--no-stack"]).unwrap();
-            f.git(&["checkout", "main"]);
-            match method {
-                "merge" => {
-                    f.git(&["merge", "--no-ff", "topic/1", "-m", "Merge downstack"]);
+            for shallow in [false, true] {
+                let f = Fixture::with_service(
+                    2,
+                    true,
+                    Service {
+                        indirect_merges: Some(false),
+                        ..Service::default()
+                    },
+                );
+                f.run(&["--no-stack"]).unwrap();
+                f.git(&["checkout", "main"]);
+                match method {
+                    "merge" => {
+                        f.git(&["merge", "--no-ff", "topic/1", "-m", "Merge downstack"]);
+                    }
+                    "squash" => {
+                        f.git(&["merge", "--squash", "topic/1"]);
+                        f.git(&["commit", "-m", "Squash downstack"]);
+                    }
+                    "rebase" => {
+                        f.git(&["cherry-pick", "topic/1"]);
+                        f.git(&["commit", "--amend", "-m", "Rebase downstack"]);
+                    }
+                    _ => unreachable!(),
                 }
-                "squash" => {
-                    f.git(&["merge", "--squash", "topic/1"]);
-                    f.git(&["commit", "-m", "Squash downstack"]);
+                let merged = f.git(&["rev-parse", "main"]);
+                f.git(&["push", "origin", "main"]);
+                {
+                    let mut prs = f.service.prs.lock().unwrap();
+                    for (number, head) in [(101, &f.hashes[0]), (102, &f.hashes[1])] {
+                        let pr = prs.get_mut(&number).unwrap();
+                        pr["head"]["sha"] = json!(head);
+                        pr["base"]["sha"] = json!(f.trunk);
+                        pr["stack"] = serde_json::Value::Null;
+                    }
+                    let parent = prs.get_mut(&101).unwrap();
+                    parent["state"] = json!("closed");
+                    parent["merged"] = json!(true);
+                    parent["merge_commit_sha"] = json!(merged);
+                    parent["base"]["ref"] = json!("intermediate");
+                    parent["stack"] = json!({"number":9});
+                    drop(prs);
                 }
-                "rebase" => {
-                    f.git(&["cherry-pick", "topic/1"]);
-                    f.git(&["commit", "--amend", "-m", "Rebase downstack"]);
+                if deleted {
+                    f.git(&["push", "origin", "--delete", "topic/1"]);
                 }
-                _ => unreachable!(),
-            }
-            let merged = f.git(&["rev-parse", "main"]);
-            f.git(&["push", "origin", "main"]);
-            {
-                let mut prs = f.service.prs.lock().unwrap();
-                for (number, head) in [(101, &f.hashes[0]), (102, &f.hashes[1])] {
-                    let pr = prs.get_mut(&number).unwrap();
-                    pr["head"]["sha"] = json!(head);
-                    pr["base"]["sha"] = json!(f.trunk);
-                    pr["stack"] = serde_json::Value::Null;
+                f.git(&["checkout", "topic/2"]);
+                f.git(&["rebase", "--onto", "main", "topic/1"]);
+                let expected = f.git(&["rev-parse", "HEAD"]);
+                let metadata = f.git(&["rev-parse", "--absolute-git-dir"]);
+                let marker = std::path::Path::new(&metadata).join("shallow");
+                if shallow {
+                    std::fs::write(&marker, format!("{}\n", f.hashes[1])).unwrap();
                 }
-                let parent = prs.get_mut(&101).unwrap();
-                parent["state"] = json!("closed");
-                parent["merged"] = json!(true);
-                parent["merge_commit_sha"] = json!(merged);
-                parent["base"]["ref"] = json!("intermediate");
-                parent["stack"] = json!({"number":9});
+                f.service.trace.lock().unwrap().clear();
+                f.run(&["--no-stack"]).unwrap();
+                let trace = f.trace();
+                let patch = trace
+                    .iter()
+                    .position(|e| e["body"]["variables"]["input"]["baseRefName"] == "main")
+                    .unwrap();
+                let push = trace.iter().position(|e| e["args"][0] == "push").unwrap();
+                assert!(patch < push);
+                assert!(
+                    trace[push]["args"]
+                        .as_array()
+                        .unwrap()
+                        .contains(&json!(format!(
+                            "--force-with-lease=refs/heads/topic/2:{}",
+                            f.hashes[1]
+                        )))
+                );
+                let prs = f.service.prs.lock().unwrap();
+                assert_eq!(prs.len(), 2);
+                assert_eq!(prs[&102]["state"], "open");
+                assert_eq!(prs[&102]["merged"], false);
+                assert_eq!(prs[&102]["base"]["ref"], "main");
+                assert_eq!(prs[&102]["head"]["sha"], expected);
                 drop(prs);
+                assert!(
+                    f.git(&["ls-remote", "origin", "refs/heads/topic/2"])
+                        .starts_with(&expected)
+                );
+                if shallow {
+                    assert_eq!(
+                        std::fs::read_to_string(&marker).unwrap(),
+                        format!("{}\n", f.hashes[1])
+                    );
+                }
             }
-            if deleted {
-                f.git(&["push", "origin", "--delete", "topic/1"]);
-            }
-            f.git(&["checkout", "topic/2"]);
-            f.git(&["rebase", "--onto", "main", "topic/1"]);
-            let expected = f.git(&["rev-parse", "HEAD"]);
-            f.service.trace.lock().unwrap().clear();
-            f.run(&["--no-stack"]).unwrap();
-            let trace = f.trace();
-            let patch = trace
-                .iter()
-                .position(|e| e["body"]["variables"]["input"]["baseRefName"] == "main")
-                .unwrap();
-            let push = trace.iter().position(|e| e["args"][0] == "push").unwrap();
-            assert!(patch < push);
-            assert!(
-                trace[push]["args"]
-                    .as_array()
-                    .unwrap()
-                    .contains(&json!(format!(
-                        "--force-with-lease=refs/heads/topic/2:{}",
-                        f.hashes[1]
-                    )))
-            );
-            let prs = f.service.prs.lock().unwrap();
-            assert_eq!(prs.len(), 2);
-            assert_eq!(prs[&102]["state"], "open");
-            assert_eq!(prs[&102]["merged"], false);
-            assert_eq!(prs[&102]["base"]["ref"], "main");
-            assert_eq!(prs[&102]["head"]["sha"], expected);
-            drop(prs);
-            assert!(
-                f.git(&["ls-remote", "origin", "refs/heads/topic/2"])
-                    .starts_with(&expected)
-            );
         }
     }
 }
@@ -481,48 +494,61 @@ fn independent_trunk_changes_do_not_invalidate_stack_publication_or_cleanup() {
 fn reordered_stack_preserves_open_prs_with_the_hosts_indirect_merge_lifecycle() {
     for native in [false, true] {
         for delete in [false, true] {
-            let f = Fixture::with_service(
-                3,
-                true,
-                Service {
-                    indirect_merges: Some(delete),
-                    ..Service::default()
-                },
-            );
-            let flags = [
-                if native {
-                    "--github-stack"
-                } else {
-                    "--no-stack"
-                },
-                "--yes",
-            ];
-            f.run(&flags).unwrap();
-            hydrate_publication_heads(&f);
-            let original = f.service.prs.lock().unwrap().clone();
-            f.git(&["checkout", "--detach", &f.trunk]);
-            for index in [1, 0, 2] {
-                f.git(&["cherry-pick", &f.hashes[index]]);
+            for shallow in [false, true] {
+                let f = Fixture::with_service(
+                    3,
+                    true,
+                    Service {
+                        indirect_merges: Some(delete),
+                        ..Service::default()
+                    },
+                );
+                let flags = [
+                    if native {
+                        "--github-stack"
+                    } else {
+                        "--no-stack"
+                    },
+                    "--yes",
+                ];
+                f.run(&flags).unwrap();
+                hydrate_publication_heads(&f);
+                let original = f.service.prs.lock().unwrap().clone();
+                f.git(&["checkout", "--detach", &f.trunk]);
+                for index in [1, 0, 2] {
+                    f.git(&["cherry-pick", &f.hashes[index]]);
+                }
+                let metadata = f.git(&["rev-parse", "--absolute-git-dir"]);
+                let marker = std::path::Path::new(&metadata).join("shallow");
+                if shallow {
+                    std::fs::write(&marker, format!("{}\n", f.hashes[1])).unwrap();
+                }
+                f.service.trace.lock().unwrap().clear();
+                f.run(&flags).unwrap();
+                let prs = f.service.prs.lock().unwrap();
+                for (number, base) in [(102, "main"), (101, "topic/2"), (103, "topic/1")] {
+                    assert_eq!(prs[&number]["state"], "open");
+                    assert_eq!(prs[&number]["merged"], false);
+                    assert_eq!(prs[&number]["node_id"], original[&number]["node_id"]);
+                    assert_eq!(prs[&number]["base"]["ref"], base);
+                }
+                drop(prs);
+                assert!(
+                    !f.git(&["ls-remote", "--heads", "origin"])
+                        .contains("git-pr/transition/")
+                );
+                assert!(
+                    !f.git(&["config", "--local", "--list"])
+                        .contains("transitionjournal")
+                );
+                f.run(&flags).unwrap();
+                if shallow {
+                    assert_eq!(
+                        std::fs::read_to_string(&marker).unwrap(),
+                        format!("{}\n", f.hashes[1])
+                    );
+                }
             }
-            f.service.trace.lock().unwrap().clear();
-            f.run(&flags).unwrap();
-            let prs = f.service.prs.lock().unwrap();
-            for (number, base) in [(102, "main"), (101, "topic/2"), (103, "topic/1")] {
-                assert_eq!(prs[&number]["state"], "open");
-                assert_eq!(prs[&number]["merged"], false);
-                assert_eq!(prs[&number]["node_id"], original[&number]["node_id"]);
-                assert_eq!(prs[&number]["base"]["ref"], base);
-            }
-            drop(prs);
-            assert!(
-                !f.git(&["ls-remote", "--heads", "origin"])
-                    .contains("git-pr/transition/")
-            );
-            assert!(
-                !f.git(&["config", "--local", "--list"])
-                    .contains("transitionjournal")
-            );
-            f.run(&flags).unwrap();
         }
     }
 }

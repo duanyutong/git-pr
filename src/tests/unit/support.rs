@@ -9,7 +9,7 @@ use crate::{
     model::Commit,
     submission::Application,
 };
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, VecDeque},
@@ -24,6 +24,7 @@ thread_local! {
     pub(crate) static PR_REFRESH_PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     pub(crate) static LABEL_FRESHNESS_CHECKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     pub(crate) static LITERAL_STEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(crate) static LINEARITY_CHECKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     pub(crate) static WORKER_STARTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     pub(crate) static CONTENT_ENCODINGS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     pub(crate) static DRAFT_PREPARATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -66,6 +67,7 @@ pub(crate) struct Memory {
     pub file_errors: BTreeMap<PathBuf, std::io::ErrorKind>,
     pub attempt_error: Option<std::io::ErrorKind>,
     pub commits: Vec<Commit>,
+    pub parents: BTreeMap<String, Vec<String>>,
     pub prs: BTreeMap<u64, Value>,
     pub changes_on_push: BTreeMap<u64, Option<Value>>,
     pub remote_refs: BTreeMap<String, String>,
@@ -96,30 +98,37 @@ pub(crate) fn commit(number: u64) -> Commit {
     }
 }
 
+fn frame(commit: &Commit, tree: &str, parents: &[String]) -> String {
+    format!(
+        "{}\0{}\0{}\02024-01-01T00:00:00Z\0{tree}\0{}\0{}\0\n",
+        commit.hash,
+        commit.author_name,
+        commit.author_email,
+        parents.join(" "),
+        commit.full_message(),
+    )
+}
+
 pub(crate) fn log(commits: &[Commit]) -> String {
     commits
         .iter()
         .enumerate()
         .rev()
-        .map(|(i, c)| {
-            format!(
-                "{}\0{}\0{}\02024-01-01T00:00:00Z\0tree{}\0{}\0{}\0\n",
-                c.hash,
-                c.author_name,
-                c.author_email,
-                i + 1,
-                if i == 0 {
-                    format!("{:040x}", 0)
-                } else {
-                    commits[i - 1].hash.clone()
-                },
-                c.full_message()
-            )
+        .map(|(i, commit)| {
+            let parent = if i == 0 {
+                format!("{:040x}", 0)
+            } else {
+                commits[i - 1].hash.clone()
+            };
+            frame(commit, &format!("tree{}", i + 1), &[parent])
         })
-        .fold(String::new(), |mut text, row| {
-            text.push_str(&row);
-            text
-        })
+        .collect()
+}
+
+pub(crate) fn stack_probe(base: &str, tip: &str) -> String {
+    format!(
+        "git rev-parse --is-shallow-repository {base}^{{commit}} {base}^{{tree}} {tip}^{{commit}}"
+    )
 }
 
 impl World {
@@ -216,6 +225,140 @@ fn response(responses: &mut BTreeMap<String, VecDeque<Response>>, key: &str) -> 
 }
 
 impl CommandRunner for World {
+    fn execute_data(
+        &self,
+        program: &str,
+        args: &[String],
+        cwd: &Path,
+        env: &BTreeMap<OsString, OsString>,
+        input: &[u8],
+    ) -> Result<crate::commands::StructuredOutput> {
+        if program == "git" && args == ["--no-replace-objects", "cat-file", "--batch"] {
+            let mut memory = self.0.lock().unwrap();
+            memory
+                .trace
+                .push(json!({"kind":"command","program":program,"args":args}));
+            if let Some(reply) = response(&mut memory.responses, &format!("git {}", args.join(" ")))
+            {
+                return match reply {
+                    Response::Failure(error) => bail!("{error}"),
+                    Response::Output(status, text) => Ok(crate::commands::StructuredOutput {
+                        status,
+                        stdout: text.into_bytes(),
+                        ..Default::default()
+                    }),
+                };
+            }
+            let mut stdout = Vec::new();
+            for oid in std::str::from_utf8(input)?.lines() {
+                if let Some(parents) = memory.parents.get(oid) {
+                    let body = format!(
+                        "tree {}\n{}\nfixture\n",
+                        "0".repeat(40),
+                        parents.iter().fold(String::new(), |mut text, parent| {
+                            use std::fmt::Write as _;
+                            writeln!(text, "parent {parent}").unwrap();
+                            text
+                        })
+                    );
+                    stdout.extend_from_slice(
+                        format!("{oid} commit {}\n{body}\n", body.len()).as_bytes(),
+                    );
+                } else {
+                    stdout.extend_from_slice(format!("{oid} missing\n").as_bytes());
+                }
+            }
+            drop(memory);
+            return Ok(crate::commands::StructuredOutput {
+                stdout,
+                ..Default::default()
+            });
+        }
+        if program == "git" && args.get(1).is_some_and(|arg| arg == "rev-list") {
+            let mut memory = self.0.lock().unwrap();
+            memory
+                .trace
+                .push(json!({"kind":"command","program":program,"args":args}));
+            let roots = std::str::from_utf8(input)?
+                .lines()
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
+            let stdout = raw_parent_history(&roots, |oid| memory.parents.get(oid));
+            drop(memory);
+            return Ok(crate::commands::StructuredOutput {
+                stdout,
+                ..Default::default()
+            });
+        }
+        if program == "git" && args.last().is_some_and(|arg| arg == "--stdin") {
+            let mut memory = self.0.lock().unwrap();
+            memory
+                .trace
+                .push(json!({"kind":"command","program":program,"args":args}));
+            if let Some(reply) = response(&mut memory.responses, &format!("git {}", args.join(" ")))
+            {
+                return match reply {
+                    Response::Failure(error) => bail!("{error}"),
+                    Response::Output(status, text) => Ok(crate::commands::StructuredOutput {
+                        status,
+                        stdout: text.into_bytes(),
+                        ..Default::default()
+                    }),
+                };
+            }
+            let mut stdout = String::new();
+            for oid in std::str::from_utf8(input)?.lines() {
+                if oid == format!("{:040x}", 0) {
+                    let base = Commit {
+                        hash: oid.into(),
+                        title: "Base".into(),
+                        author_name: "Unit Author".into(),
+                        author_email: "unit@example.com".into(),
+                        ..Commit::default()
+                    };
+                    stdout.push_str(&frame(&base, "tree0", &[]));
+                } else {
+                    let (index, commit) = memory
+                        .commits
+                        .iter()
+                        .enumerate()
+                        .find(|(_, c)| c.hash == oid)
+                        .context("missing fixture metadata")?;
+                    let parents = memory.parents.get(oid).cloned().unwrap_or_else(|| {
+                        vec![if index == 0 {
+                            format!("{:040x}", 0)
+                        } else {
+                            memory.commits[index - 1].hash.clone()
+                        }]
+                    });
+                    stdout.push_str(&frame(commit, &format!("tree{}", index + 1), &parents));
+                }
+            }
+            drop(memory);
+            return Ok(crate::commands::StructuredOutput {
+                stdout: stdout.into_bytes(),
+                ..Default::default()
+            });
+        }
+        if !input.is_empty() {
+            anyhow::bail!("command adapter does not support input");
+        }
+        let output = self.execute(program, args, cwd, env)?;
+        Ok(crate::commands::StructuredOutput {
+            status: output.status,
+            stdout: if output.status == 0 {
+                output.text.as_bytes().to_vec()
+            } else {
+                Vec::new()
+            },
+            stderr: if output.status != 0 {
+                output.text.as_bytes().to_vec()
+            } else {
+                Vec::new()
+            },
+        })
+    }
+
     fn edit_messages(
         &self,
         program: &str,
@@ -388,6 +531,32 @@ impl CommandRunner for World {
                 "/unit/repo".into()
             }
             ("git", ["rev-parse", "--is-shallow-repository"]) => "false".into(),
+            ("git", ["rev-parse", "--is-shallow-repository", base, _, tip]) => {
+                let base = base.trim_end_matches("^{commit}");
+                let base = if base == "HEAD" {
+                    m.commits
+                        .last()
+                        .map_or_else(|| format!("{:040x}", 0), |c| c.hash.clone())
+                } else if crate::git::policy::valid_oid(base) {
+                    base.to_owned()
+                } else {
+                    format!("{:040x}", 0)
+                };
+                let tree = m
+                    .commits
+                    .iter()
+                    .position(|c| c.hash == base)
+                    .map_or(0, |i| i + 1);
+                let resolved = resolve_mock_revision(&m.commits, tip);
+                let tip = if crate::git::policy::valid_oid(&resolved) {
+                    resolved
+                } else {
+                    m.commits
+                        .last()
+                        .map_or_else(|| format!("{:040x}", 0), |c| c.hash.clone())
+                };
+                format!("false\n{base}\ntree{tree}\n{tip}")
+            }
             ("git", ["remote", "-v"]) => "origin https://github.com/org/repo.git (push)".into(),
             ("git", ["remote", "get-url", "--push", "--all", "--", _]) => {
                 "https://github.com/org/repo.git".into()
@@ -459,9 +628,6 @@ impl CommandRunner for World {
                         text.push_str(&row);
                         text
                     })
-            }
-            ("git", ["show", "--no-show-signature", "-s", "--format=%H %T", _]) => {
-                format!("{:040x} tree0", 0)
             }
             (
                 "jj",
@@ -832,4 +998,36 @@ fn resolve_mock_revision(commits: &[Commit], name: &str) -> String {
     } else {
         name.into()
     }
+}
+
+/// Git's bounded raw-history wire format, including explicit unavailable objects.
+pub(crate) fn raw_parent_history<'a>(
+    roots: &[String],
+    parents: impl Fn(&str) -> Option<&'a Vec<String>>,
+) -> Vec<u8> {
+    use std::fmt::Write as _;
+    let mut pending = std::collections::VecDeque::from(roots.to_vec());
+    let mut seen = std::collections::BTreeSet::new();
+    let mut output = String::new();
+    let mut count = 0;
+    while count < 128 {
+        let Some(oid) = pending.pop_front() else {
+            break;
+        };
+        if !seen.insert(oid.clone()) {
+            continue;
+        }
+        if let Some(values) = parents(&oid) {
+            writeln!(output, "commit {oid}\ntree {}", "0".repeat(40)).unwrap();
+            for parent in values {
+                writeln!(output, "parent {parent}").unwrap();
+            }
+            output.push_str("\n    fixture\n\n");
+            pending.extend(values.iter().cloned());
+            count += 1;
+        } else {
+            writeln!(output, "?{oid}").unwrap();
+        }
+    }
+    output.into_bytes()
 }

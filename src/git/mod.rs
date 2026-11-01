@@ -2,6 +2,7 @@
 #[path = "../tests/git_helpers.rs"]
 mod test_helpers;
 
+mod ancestry;
 pub(crate) mod policy;
 mod publication;
 mod snapshot;
@@ -86,6 +87,13 @@ impl Git<'_> {
             "true" => Ok(false),
             _ => bail!("invalid shallow-repository observation"),
         }
+    }
+
+    pub(crate) fn scoped_ancestry(
+        &self,
+        pairs: &std::collections::BTreeSet<(String, String)>,
+    ) -> Result<std::collections::BTreeMap<(String, String), bool>> {
+        ancestry::observe(*self, pairs)
     }
 
     pub(crate) fn head(&self) -> Result<String> {
@@ -176,8 +184,9 @@ impl Git<'_> {
     }
 
     fn read_history(&self, base: &str, tip: &str) -> Result<snapshot::Snapshot> {
-        let output = self
-            .commands
+        let mut commands = self.commands.clone();
+        commands.env.insert("GIT_NO_LAZY_FETCH".into(), "1".into());
+        let output = commands
             .git_data(
                 &[
                     "log",
@@ -200,17 +209,82 @@ impl Git<'_> {
     }
 
     fn read_stack(&self, base: &str, tip: &str) -> Result<(snapshot::Snapshot, String)> {
-        let mut snapshot = self.read_history(base, tip)?;
-        snapshot.reject_merges()?;
-        let base_tree =
-            self.commands
-                .git(&["show", "--no-show-signature", "-s", "--format=%H %T", base])?;
-        let mut fields = base_tree.split_whitespace();
-        let (Some(oid), Some(tree), None) = (fields.next(), fields.next(), fields.next()) else {
+        let mut commands = self.commands.clone();
+        commands.env.insert("GIT_NO_LAZY_FETCH".into(), "1".into());
+        let output = commands.git(&[
+            "rev-parse",
+            "--is-shallow-repository",
+            &format!("{base}^{{commit}}"),
+            &format!("{base}^{{tree}}"),
+            &format!("{tip}^{{commit}}"),
+        ])?;
+        let fields = output.split_whitespace().collect::<Vec<_>>();
+        let [shallow @ ("true" | "false"), oid, tree, tip_oid] = fields.as_slice() else {
             bail!("invalid base commit/tree observation for {base}");
         };
-        snapshot.trees.insert(oid.into(), tree.into());
-        Ok((snapshot, oid.into()))
+        if !policy::valid_oid(oid) || !policy::valid_oid(tip_oid) {
+            bail!("invalid base commit/tree observation for {base}");
+        }
+        let mut snapshot = if *shallow == "true" {
+            self.read_shallow_stack(oid, tip_oid)?
+        } else {
+            let snapshot = self.read_history(oid, tip_oid)?;
+            snapshot.reject_merges()?;
+            snapshot
+        };
+        snapshot.trees.insert((*oid).into(), (*tree).into());
+        Ok((snapshot, (*oid).into()))
+    }
+
+    fn read_shallow_stack(&self, base: &str, tip: &str) -> Result<snapshot::Snapshot> {
+        let selected = ancestry::stack(*self, base, tip)?;
+        if selected.is_empty() {
+            return Ok(snapshot::Snapshot::default());
+        }
+        let requested = selected
+            .iter()
+            .map(|(oid, _)| oid.as_str())
+            .collect::<Vec<_>>();
+        let input = format!("{}\n", requested.join("\n"));
+        let mut commands = self.commands.clone();
+        commands.env.insert("GIT_NO_LAZY_FETCH".into(), "1".into());
+        let output = commands.git_data(
+            &[
+                "log",
+                snapshot::FORMAT,
+                "--no-decorate",
+                "--no-color",
+                "--encoding=UTF-8",
+                "--no-show-signature",
+                "--no-walk=unsorted",
+                "--stdin",
+            ],
+            input.as_bytes(),
+        )?;
+        let mut snapshot = snapshot::parse(&output)?;
+        if snapshot
+            .commits
+            .iter()
+            .map(|c| c.hash.as_str())
+            .ne(requested)
+        {
+            bail!("incomplete or reordered local stack metadata");
+        }
+        if let Some(parent) = selected
+            .last()
+            .and_then(|(_, parents)| parents.first())
+            .filter(|parent| parent.as_str() != base)
+        {
+            let tree = commands
+                .git(&["rev-parse", "--verify", &format!("{parent}^{{tree}}")])
+                .with_context(|| format!("could not read boundary tree for {parent}"))?;
+            if !policy::valid_oid(&tree) {
+                bail!("invalid boundary tree identity for {parent}");
+            }
+            snapshot.trees.insert(parent.clone(), tree);
+        }
+        snapshot.parents = selected.into_iter().collect();
+        Ok(snapshot)
     }
 
     fn validate_commits(
@@ -241,6 +315,7 @@ impl Git<'_> {
                     .commands
                     .git(&[
                         "diff-tree",
+                        "--root",
                         "--no-commit-id",
                         "--name-only",
                         "-r",
@@ -432,7 +507,7 @@ impl Git<'_> {
         }
     }
 
-    pub(crate) fn is_ancestor(&self, ancestor: &str, descendant: &str) -> Result<bool> {
+    pub(crate) fn is_ancestor_native(&self, ancestor: &str, descendant: &str) -> Result<bool> {
         let args = ["merge-base", "--is-ancestor", ancestor, descendant].map(str::to_owned);
         let output = self
             .commands
@@ -448,6 +523,21 @@ impl Git<'_> {
             .success()
             .map(|_| true)
             .with_context(|| format!("could not compare ancestry of {ancestor} and {descendant}"))
+    }
+
+    /// A shallow false result cannot refute a stored-parent relationship.
+    pub(crate) fn is_ancestor(&self, ancestor: &str, descendant: &str) -> Result<bool> {
+        let observed = self.is_ancestor_native(ancestor, descendant);
+        if matches!(observed, Ok(true)) {
+            return Ok(true);
+        }
+        if self.complete_graph()? {
+            return observed;
+        }
+        let pair = (ancestor.to_owned(), descendant.to_owned());
+        self.scoped_ancestry(&std::collections::BTreeSet::from([pair.clone()]))?
+            .remove(&pair)
+            .context("missing verified local ancestry")
     }
 
     pub(crate) fn stack_tip(&self, hash: &str) -> Result<String> {

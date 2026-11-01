@@ -1,5 +1,6 @@
 //! Independent examples and bounded generators for the behavioural contracts.
 
+use crate::tests::unit::support::stack_probe;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Write as _;
 
@@ -74,8 +75,10 @@ fn winners(attrs: &[(String, String)]) -> BTreeMap<String, String> {
     expected
 }
 
-fn git_log_key() -> String {
-    "git log --format=%H%x00%an%x00%ae%x00%aI%x00%T%x00%P%x00%B%x00 --no-decorate --no-color --encoding=UTF-8 --no-show-signature trunk..HEAD".into()
+fn git_log_key(base: &str, tip: &str) -> String {
+    format!(
+        "git log --format=%H%x00%an%x00%ae%x00%aI%x00%T%x00%P%x00%B%x00 --no-decorate --no-color --encoding=UTF-8 --no-show-signature {base}..{tip}"
+    )
 }
 
 #[test]
@@ -295,8 +298,8 @@ proptest! {
             writeln!(frames, "{hash}\0{author}\0author{i}@example.com\02024-06-01T12:30:00+02:00\0tree{}\0{parent}\0{title}\n\nBody {i}: commit fake\n\nTags: {tag}\nRemote-Ref: topic/{i}\n\0", i + 1).unwrap();
         }
         let w = World::new(0);
-        w.reply(&git_log_key(), 0, &frames);
-        w.reply("git show --no-show-signature -s --format=%H %T trunk", 0, &format!("{base} tree0"));
+        w.reply(&git_log_key(&base, &format!("{:0width$x}", rows.len())), 0, &frames);
+        w.reply(&stack_probe("trunk", "HEAD"), 0, &format!("false\n{base}\ntree0\n{:0width$x}", rows.len()));
         let commands = w.commands();
         let repo = Repository::default();
         let observed = Git { commands: &commands, repo: &repo }.observe_stack("trunk", "HEAD", false).unwrap();
@@ -325,12 +328,12 @@ proptest! {
             "2024-01-01T00:00:00Z".into(), "tree1".into(), format!("{:040x}", 0), "Feature".into()];
         let output = format!("{}\0", fields[..present].join("\0"));
         let w = World::new(0);
-        w.reply(&git_log_key(), 0, &output);
+        w.reply(&git_log_key(&format!("{:040x}", 0), &format!("{:040x}", 0)), 0, &output);
         let commands = w.commands();
         let repo = Repository::default();
         let git = Git { commands: &commands, repo: &repo };
         prop_assert!(git.observe_stack("trunk", "HEAD", false).is_err());
-        prop_assert_eq!(w.0.lock().unwrap().trace.len(), 1);
+        prop_assert_eq!(w.0.lock().unwrap().trace.len(), 2);
     }
 
     #[test]

@@ -156,6 +156,19 @@ DEFECTS = (
         ),
     ),
     Defect(
+        "shallow-negative-ancestry",
+        "submission::transition::unit::shallow_transitions_use_local_parent_evidence_without_full_history",
+        (
+            Change(
+                "src/submission/transition.rs",
+                "        if !git.complete_graph()? {\n"
+                "            return git.scoped_ancestry(&pairs).map(Ancestry);\n"
+                "        }\n",
+                "",
+            ),
+        ),
+    ),
+    Defect(
         "native-nested-budget-renewal",
         "github::unit::native_recovery_shares_its_budget_with_nested_head_and_topology_retries",
         (

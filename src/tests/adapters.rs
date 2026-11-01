@@ -1,3 +1,4 @@
+use crate::tests::unit::support::stack_probe;
 use std::{
     collections::BTreeMap,
     ffi::OsString,
@@ -471,23 +472,26 @@ fn git_stack_empty_titles_empty_commits_and_backend_diagnostics() {
         ),
         ("Empty feature", "", "has no file changes", true),
     ] {
-        let log = format!("{hash}\0A\0a@example.com\02025-01-01T00:00:00Z\0tree\0\0{body}\0");
+        let log = format!("{hash}\0A\0a@example.com\02025-01-01T00:00:00Z\0tree\0parent\0{body}\0");
         let terminal = Arc::new(MemoryTerminal::default());
         let mut commands = scripted(&[
             (
-                "git log --format=%H%x00%an%x00%ae%x00%aI%x00%T%x00%P%x00%B%x00 --no-decorate --no-color --encoding=UTF-8 --no-show-signature main..HEAD",
+                &format!(
+                    "git log --format=%H%x00%an%x00%ae%x00%aI%x00%T%x00%P%x00%B%x00 --no-decorate --no-color --encoding=UTF-8 --no-show-signature {}..{hash}",
+                    "0".repeat(40)
+                ),
                 0,
                 &log,
             ),
             (
-                &format!("git diff-tree --no-commit-id --name-only -r {hash}"),
+                &format!("git diff-tree --root --no-commit-id --name-only -r {hash}"),
                 0,
                 files,
             ),
             (
-                "git show --no-show-signature -s --format=%H %T main",
+                &stack_probe("main", "HEAD"),
                 0,
-                "base tree",
+                &format!("false\n{}\ntree\n{hash}", "0".repeat(40)),
             ),
         ]);
         commands.terminal = terminal.clone();
@@ -504,7 +508,7 @@ fn git_stack_empty_titles_empty_commits_and_backend_diagnostics() {
         jj: true,
         ..Repository::default()
     };
-    let log = format!("{hash}\0A\0a@example.com\02025-01-01T00:00:00Z\0tree\0\0Feature\0");
+    let log = format!("{hash}\0A\0a@example.com\02025-01-01T00:00:00Z\0tree\0parent\0Feature\0");
     let mut commands = scripted(&[
         (
             "jj --ignore-working-copy op log --limit 1 --no-graph -T id",
@@ -519,19 +523,22 @@ fn git_stack_empty_titles_empty_commits_and_backend_diagnostics() {
             &format!("{hash} change false"),
         ),
         (
-            "git log --format=%H%x00%an%x00%ae%x00%aI%x00%T%x00%P%x00%B%x00 --no-decorate --no-color --encoding=UTF-8 --no-show-signature main..HEAD",
+            &format!(
+                "git log --format=%H%x00%an%x00%ae%x00%aI%x00%T%x00%P%x00%B%x00 --no-decorate --no-color --encoding=UTF-8 --no-show-signature {}..{hash}",
+                "0".repeat(40)
+            ),
             0,
             &log,
         ),
         (
-            &format!("git diff-tree --no-commit-id --name-only -r {hash}"),
+            &format!("git diff-tree --root --no-commit-id --name-only -r {hash}"),
             0,
             "changed.txt",
         ),
         (
-            "git show --no-show-signature -s --format=%H %T main",
+            &stack_probe("main", "HEAD"),
             0,
-            "base tree",
+            &format!("false\n{}\ntree\n{hash}", "0".repeat(40)),
         ),
         (
             &format!("jj --ignore-working-copy log -r {hash} --no-graph -T change_id"),
@@ -593,7 +600,7 @@ impl CommandRunner for Script {
         self.calls.lock().unwrap().push(key.clone());
         let fallback = (0, String::new());
         let (status, text) = self.responses.get(&key).unwrap_or_else(|| {
-            if key.starts_with("git show --no-show-signature -s --format=%H %T ") {
+            if key.starts_with("git rev-parse --is-shallow-repository ") {
                 return &fallback;
             }
             panic!("Unscripted command: {key}")
@@ -1308,6 +1315,7 @@ fn local_ref_reconciliation_guards_checked_out_and_unrelated_refs() {
                 ancestor,
                 "",
             ),
+            ("git rev-parse --is-shallow-repository", 0, "false"),
             (
                 &format!("git update-ref refs/heads/topic {new} {old}"),
                 update,
@@ -1396,6 +1404,7 @@ fn jj_bookmark_reconciliation_covers_conflicts_stale_exports_and_failures() {
                 ancestor,
                 "",
             ),
+            ("git rev-parse --is-shallow-repository", 0, "false"),
             (
                 &format!("jj bookmark set topic -r {new} --allow-backwards"),
                 set_status,
@@ -1780,5 +1789,568 @@ fn hyperlink_git_values_are_validated_unless_overridden() {
     assert_eq!(
         loaded_config(&fixture).hyperlinks,
         crate::cli::hyperlinks::Mode::Never
+    );
+}
+
+#[test]
+fn shallow_stack_discovery_preserves_available_layers_and_empty_commit_policy() {
+    let fixture = Fixture::new(2, true);
+    let base_tree = fixture.git(&["rev-parse", &format!("{}:", fixture.trunk)]);
+    let empty = fixture.git(&[
+        "commit-tree",
+        &base_tree,
+        "-p",
+        &fixture.trunk,
+        "-m",
+        "Empty",
+    ]);
+    let first_tree = fixture.git(&["rev-parse", &format!("{}:", fixture.hashes[0])]);
+    let first = fixture.git(&[
+        "commit-tree",
+        &first_tree,
+        "-p",
+        &empty,
+        "-m",
+        "First layer",
+    ]);
+    let tip_tree = fixture.git(&["rev-parse", "HEAD:"]);
+    let tip = fixture.git(&["commit-tree", &tip_tree, "-p", &first, "-m", "Second layer"]);
+    let git = Git {
+        commands: &fixture.app.commands,
+        repo: &Repository::default(),
+    };
+    let expected = vec![first.clone(), tip.clone()];
+    let metadata = fixture.git(&["rev-parse", "--absolute-git-dir"]);
+    let shallow = Path::new(&metadata).join("shallow");
+    for markers in [
+        Vec::new(),
+        vec![empty.as_str()],
+        vec![first.as_str()],
+        vec![tip.as_str()],
+        vec![empty.as_str(), first.as_str(), tip.as_str()],
+    ] {
+        if markers.is_empty() {
+            assert!(!shallow.exists());
+        } else {
+            std::fs::write(
+                &shallow,
+                format!("{}\n{}\n", markers.join("\n"), fixture.trunk),
+            )
+            .unwrap();
+        }
+        let before = std::fs::read(&shallow).ok();
+        for commits in [
+            git.observe_stack(&fixture.trunk, &tip, false)
+                .unwrap()
+                .commits,
+            git.description_commits(&fixture.trunk, &tip).unwrap(),
+        ] {
+            assert_eq!(
+                commits.into_iter().map(|c| c.hash).collect::<Vec<_>>(),
+                expected
+            );
+        }
+        assert_eq!(std::fs::read(&shallow).ok(), before);
+    }
+    assert!(
+        !fixture
+            .trace()
+            .iter()
+            .any(|event| event["args"][0] == "fetch")
+    );
+}
+
+#[test]
+fn shallow_stack_discovery_rejects_hidden_merges_and_missing_required_history() {
+    let fixture = Fixture::new(2, true);
+    let tree = fixture.git(&["rev-parse", "HEAD:"]);
+    let other = fixture.git(&["commit-tree", &tree, "-p", &fixture.trunk, "-m", "Other"]);
+    let merge = fixture.git(&[
+        "commit-tree",
+        &tree,
+        "-p",
+        &fixture.hashes[0],
+        "-p",
+        &other,
+        "-m",
+        "Merge",
+    ]);
+    let git = Git {
+        commands: &fixture.app.commands,
+        repo: &Repository::default(),
+    };
+    let metadata = fixture.git(&["rev-parse", "--absolute-git-dir"]);
+    let shallow = Path::new(&metadata).join("shallow");
+    std::fs::write(&shallow, format!("{merge}\n")).unwrap();
+    assert!(
+        format!(
+            "{:#}",
+            git.observe_stack(&fixture.trunk, &merge, false)
+                .unwrap_err()
+        )
+        .contains("merge commit")
+    );
+    let missing = "f".repeat(40);
+    let body = format!(
+        "tree {tree}\nparent {missing}\nauthor Fixture <fixture@example.invalid> 1 +0000\ncommitter Fixture <fixture@example.invalid> 1 +0000\n\nMissing parent\n"
+    );
+    let tip = fixture
+        .app
+        .commands
+        .git_data(
+            &["hash-object", "-t", "commit", "-w", "--stdin"],
+            body.as_bytes(),
+        )
+        .unwrap();
+    let tip = tip.trim();
+    std::fs::write(&shallow, format!("{tip}\n")).unwrap();
+    let error = format!(
+        "{:#}",
+        git.description_commits(&fixture.trunk, tip).unwrap_err()
+    );
+    assert!(
+        error.contains("required stack") && error.contains(&missing),
+        "{error}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&shallow).unwrap(),
+        format!("{tip}\n")
+    );
+    assert!(
+        !fixture
+            .trace()
+            .iter()
+            .any(|event| event["args"][0] == "fetch")
+    );
+}
+
+#[test]
+fn stored_parent_ancestry_crosses_real_shallow_boundaries_without_fetching() {
+    let fixture = Fixture::new(2, true);
+    let lower = fixture.hashes[0].clone();
+    let upper = fixture.hashes[1].clone();
+    let tree = fixture.git(&["rev-parse", "HEAD:"]);
+    let other = fixture.git(&[
+        "commit-tree",
+        &tree,
+        "-p",
+        &fixture.trunk,
+        "-m",
+        "independent layer",
+    ]);
+    let git = Git {
+        commands: &fixture.app.commands,
+        repo: &Repository::default(),
+    };
+    let pairs = std::collections::BTreeSet::from([
+        (lower.clone(), upper.clone()),
+        (upper.clone(), other.clone()),
+        (other, upper.clone()),
+    ]);
+    let full = git.scoped_ancestry(&pairs).unwrap();
+    let metadata = fixture.git(&["rev-parse", "--absolute-git-dir"]);
+    let shallow = std::path::Path::new(&metadata).join("shallow");
+    std::fs::write(&shallow, format!("{upper}\n")).unwrap();
+    assert!(!git.complete_graph().unwrap());
+    assert!(!git.is_ancestor_native(&lower, &upper).unwrap());
+    assert!(git.is_ancestor(&lower, &upper).unwrap());
+    assert_eq!(git.scoped_ancestry(&pairs).unwrap(), full);
+    assert!(full[&(lower, upper.clone())]);
+    let marker = std::fs::read(&shallow).unwrap();
+    std::fs::write(&shallow, format!("{upper}\n{}\n", fixture.trunk)).unwrap();
+    assert_eq!(git.scoped_ancestry(&pairs).unwrap(), full);
+    assert!(std::fs::read(&shallow).unwrap().starts_with(&marker));
+    // Older missing objects do not invalidate a proof inside the recent common history.
+    let missing = "f".repeat(40);
+    let body = format!(
+        "tree {tree}\nparent {missing}\nauthor Fixture <fixture@example.invalid> 1 +0000\ncommitter Fixture <fixture@example.invalid> 1 +0000\n\nrecent base\n"
+    );
+    let base = fixture
+        .app
+        .commands
+        .git_data(
+            &["hash-object", "-t", "commit", "-w", "--stdin"],
+            body.as_bytes(),
+        )
+        .unwrap()
+        .trim()
+        .to_owned();
+    std::fs::write(&shallow, format!("{base}\n")).unwrap();
+    let left = fixture.git(&["commit-tree", &tree, "-p", &base, "-m", "left"]);
+    let right = fixture.git(&["commit-tree", &tree, "-p", &base, "-m", "right"]);
+    // An unrelated shallow root leaves Git's native walk exposed to absent
+    // older parents, even though the recent relation itself is conclusive.
+    std::fs::write(&shallow, format!("{upper}\n")).unwrap();
+    let before = std::fs::read(&shallow).unwrap();
+    assert!(git.is_ancestor_native(&base, &left).is_err());
+    assert!(git.is_ancestor(&base, &left).unwrap());
+    assert!(!git.is_ancestor(&left, &right).unwrap());
+    assert_eq!(std::fs::read(&shallow).unwrap(), before);
+    std::fs::write(&shallow, format!("{base}\n")).unwrap();
+    let recent =
+        std::collections::BTreeSet::from([(left.clone(), right.clone()), (base.clone(), right)]);
+    assert_eq!(
+        git.scoped_ancestry(&recent)
+            .unwrap()
+            .values()
+            .filter(|&&answer| answer)
+            .count(),
+        1
+    );
+    let unavailable = "e".repeat(40);
+    let error = git
+        .scoped_ancestry(&std::collections::BTreeSet::from([(
+            left,
+            unavailable.clone(),
+        )]))
+        .unwrap_err();
+    assert!(error.to_string().contains(&unavailable));
+    assert_eq!(
+        std::fs::read_to_string(&shallow).unwrap(),
+        format!("{base}\n")
+    );
+    assert!(!fixture.trace().iter().any(|event| {
+        event["args"]
+            .as_array()
+            .is_some_and(|args| args.first().is_some_and(|arg| arg == "fetch"))
+    }));
+}
+
+fn shallow_trunk_exclusion(missing_older: bool) {
+    let fixture = Fixture::new(3, true);
+    let common = &fixture.hashes[0];
+    let main = &fixture.hashes[1];
+    fixture.git(&["update-ref", "refs/heads/main", main]);
+    fixture.git(&["update-ref", "refs/remotes/origin/main", main]);
+    let tree = fixture.git(&["rev-parse", "HEAD:"]);
+    let tip = fixture.git(&[
+        "commit-tree",
+        &tree,
+        "-p",
+        common,
+        "-m",
+        "Only selected layer",
+    ]);
+    let git = Git {
+        commands: &fixture.app.commands,
+        repo: &Repository::default(),
+    };
+    let expected = git
+        .observe_stack(main, &tip, false)
+        .unwrap()
+        .commits
+        .into_iter()
+        .map(|c| c.hash)
+        .collect::<Vec<_>>();
+    assert_eq!(expected, vec![tip.clone()]);
+    let metadata = fixture.git(&["rev-parse", "--absolute-git-dir"]);
+    let shallow = Path::new(&metadata).join("shallow");
+    let markers = if missing_older {
+        format!("{main}\n{common}\n")
+    } else {
+        format!("{main}\n")
+    };
+    std::fs::write(&shallow, &markers).unwrap();
+    if missing_older {
+        let oid = &fixture.trunk;
+        std::fs::remove_file(
+            Path::new(&metadata)
+                .join("objects")
+                .join(&oid[..2])
+                .join(&oid[2..]),
+        )
+        .unwrap();
+    }
+    for actual in [
+        git.observe_stack(main, &tip, false).map(|s| s.commits),
+        git.description_commits(main, &tip),
+    ] {
+        assert_eq!(
+            actual
+                .map(|commits| commits.into_iter().map(|c| c.hash).collect::<Vec<_>>())
+                .map_err(|e| format!("{e:#}")),
+            Ok(expected.clone()),
+            "a shallow trunk must still exclude its locally provable ancestors"
+        );
+    }
+    assert_eq!(std::fs::read_to_string(&shallow).unwrap(), markers);
+    assert!(
+        !fixture
+            .trace()
+            .iter()
+            .any(|event| event["args"][0] == "fetch")
+    );
+}
+#[test]
+fn shallow_trunk_does_not_select_integrated_ancestors() {
+    shallow_trunk_exclusion(false);
+}
+#[test]
+fn shallow_trunk_does_not_require_irrelevant_older_history() {
+    shallow_trunk_exclusion(true);
+}
+
+#[test]
+fn shallow_trunk_does_not_reject_already_integrated_merges() {
+    let fixture = Fixture::new(3, true);
+    let root_tree = fixture.git(&["rev-parse", &format!("{}:", fixture.trunk)]);
+    let other = fixture.git(&[
+        "commit-tree",
+        &root_tree,
+        "-p",
+        &fixture.trunk,
+        "-m",
+        "Other integrated history",
+    ]);
+    let common_tree = fixture.git(&["rev-parse", &format!("{}:", fixture.hashes[0])]);
+    let common = fixture.git(&[
+        "commit-tree",
+        &common_tree,
+        "-p",
+        &fixture.hashes[0],
+        "-p",
+        &other,
+        "-m",
+        "Integrated merge",
+    ]);
+    let main_tree = fixture.git(&["rev-parse", &format!("{}:", fixture.hashes[1])]);
+    let main = fixture.git(&[
+        "commit-tree",
+        &main_tree,
+        "-p",
+        &common,
+        "-m",
+        "Main advance",
+    ]);
+    let tree = fixture.git(&["rev-parse", "HEAD:"]);
+    let tip = fixture.git(&[
+        "commit-tree",
+        &tree,
+        "-p",
+        &common,
+        "-m",
+        "Only selected layer",
+    ]);
+    let git = Git {
+        commands: &fixture.app.commands,
+        repo: &Repository::default(),
+    };
+    assert_eq!(
+        git.observe_stack(&main, &tip, false).unwrap().commits.len(),
+        1
+    );
+    let metadata = fixture.git(&["rev-parse", "--absolute-git-dir"]);
+    std::fs::write(Path::new(&metadata).join("shallow"), format!("{main}\n")).unwrap();
+    for commits in [
+        git.observe_stack(&main, &tip, false).unwrap().commits,
+        git.description_commits(&main, &tip).unwrap(),
+    ] {
+        assert_eq!(
+            commits.into_iter().map(|c| c.hash).collect::<Vec<_>>(),
+            vec![tip.clone()]
+        );
+    }
+    assert_eq!(
+        std::fs::read_to_string(Path::new(&metadata).join("shallow")).unwrap(),
+        format!("{main}\n")
+    );
+    assert!(
+        !fixture
+            .trace()
+            .iter()
+            .any(|event| event["args"][0] == "fetch")
+    );
+}
+
+#[test]
+fn shallow_trunk_ancestor_holes_do_not_require_selected_side_markers() {
+    let fixture = Fixture::new(3, true);
+    let tree = fixture.git(&["rev-parse", "HEAD:"]);
+    let main = fixture.git(&[
+        "commit-tree",
+        &tree,
+        "-p",
+        &fixture.hashes[1],
+        "-p",
+        &fixture.trunk,
+        "-m",
+        "Integration merge",
+    ]);
+    let tip = fixture.git(&[
+        "commit-tree",
+        &tree,
+        "-p",
+        &fixture.hashes[0],
+        "-m",
+        "Selected layer",
+    ]);
+    let git = Git {
+        commands: &fixture.app.commands,
+        repo: &Repository::default(),
+    };
+    assert_eq!(git.description_commits(&main, &tip).unwrap().len(), 1);
+    let metadata = fixture.git(&["rev-parse", "--absolute-git-dir"]);
+    let shallow = Path::new(&metadata).join("shallow");
+    let marker = format!("{}\n", fixture.hashes[1]);
+    std::fs::write(&shallow, &marker).unwrap();
+    for commits in [
+        git.observe_stack(&main, &tip, false).unwrap().commits,
+        git.description_commits(&main, &tip).unwrap(),
+    ] {
+        assert_eq!(
+            commits.into_iter().map(|c| c.hash).collect::<Vec<_>>(),
+            vec![tip.clone()]
+        );
+    }
+    assert_eq!(std::fs::read_to_string(&shallow).unwrap(), marker);
+    assert!(
+        !fixture
+            .trace()
+            .iter()
+            .any(|event| event["args"][0] == "fetch")
+    );
+}
+
+#[test]
+fn complete_stack_discovery_retains_captured_identities_when_refs_move() {
+    for moved_base in [false, true] {
+        let fixture = Fixture::new(2, true);
+        let captured = fixture.git(&[
+            "rev-parse",
+            "--is-shallow-repository",
+            "main^{commit}",
+            "main^{tree}",
+            "HEAD^{commit}",
+        ]);
+        let (reference, replacement) = if moved_base {
+            ("refs/heads/main", &fixture.hashes[1])
+        } else {
+            ("refs/heads/topic/2", &fixture.hashes[0])
+        };
+        fixture.git(&["update-ref", reference, replacement]);
+        // Return the completed probe after the refs have moved, without timing-dependent threads.
+        fixture
+            .service
+            .command_errors
+            .lock()
+            .unwrap()
+            .insert(stack_probe("main", "HEAD"), (0, captured));
+        fixture.service.trace.lock().unwrap().clear();
+        let git = Git {
+            commands: &fixture.app.commands,
+            repo: &Repository::default(),
+        };
+        let observed = git.observe_stack("main", "HEAD", false).unwrap();
+        assert_eq!(observed.base_hash, fixture.trunk);
+        assert_eq!(observed.tip_hash, fixture.hashes[1]);
+        for commits in [
+            observed.commits,
+            git.description_commits("main", "HEAD").unwrap(),
+        ] {
+            assert_eq!(
+                commits.into_iter().map(|c| c.hash).collect::<Vec<_>>(),
+                fixture.hashes
+            );
+        }
+        assert_eq!(fixture.trace().len(), 4, "two commands per reader");
+    }
+}
+
+#[test]
+fn shallow_boundary_metadata_does_not_reject_valid_selected_commits() {
+    let fixture = Fixture::new(2, true);
+    let common_tree = fixture.git(&["rev-parse", &format!("{}:", fixture.hashes[0])]);
+    let common = fixture.git(&[
+        "-c",
+        "user.email=",
+        "commit-tree",
+        &common_tree,
+        "-p",
+        &fixture.trunk,
+        "-m",
+        "Valid boundary with omitted email",
+    ]);
+    let tree = fixture.git(&["rev-parse", "HEAD:"]);
+    let main = fixture.git(&["commit-tree", &tree, "-p", &common, "-m", "Integration"]);
+    let tip = fixture.git(&[
+        "commit-tree",
+        &tree,
+        "-p",
+        &common,
+        "-m",
+        "Selected valid layer",
+    ]);
+    let invalid = fixture.git(&[
+        "-c",
+        "user.email=",
+        "commit-tree",
+        &tree,
+        "-p",
+        &common,
+        "-m",
+        "Selected missing email",
+    ]);
+    fixture.git(&["update-ref", "refs/heads/main", &main]);
+    fixture.git(&["update-ref", "refs/remotes/origin/main", &main]);
+    fixture.git(&["update-ref", "refs/heads/selected", &tip]);
+    assert_eq!(fixture.git(&["show", "-s", "--format=%ae", &common]), "");
+    fixture.git(&["fsck", "--full"]);
+    let git = Git {
+        commands: &fixture.app.commands,
+        repo: &Repository::default(),
+    };
+    for full in [
+        git.description_commits(&main, &tip).unwrap(),
+        git.observe_stack(&main, &tip, false).unwrap().commits,
+    ] {
+        assert_eq!(
+            full.iter().map(|c| c.hash.as_str()).collect::<Vec<_>>(),
+            vec![tip.as_str()]
+        );
+    }
+    assert!(
+        git.description_commits(&main, &invalid)
+            .unwrap_err()
+            .to_string()
+            .contains("missing author identity")
+    );
+    let metadata = fixture.git(&["rev-parse", "--absolute-git-dir"]);
+    let shallow = Path::new(&metadata).join("shallow");
+    std::fs::write(&shallow, format!("{main}\n")).unwrap();
+    let actual = [
+        git.description_commits("refs/remotes/origin/main", &tip),
+        git.observe_stack("refs/remotes/origin/main", &tip, false)
+            .map(|s| s.commits),
+    ]
+    .map(|result| {
+        result
+            .map(|cs| cs.into_iter().map(|c| c.hash).collect::<Vec<_>>())
+            .map_err(|e| format!("{e:#}"))
+    });
+    assert_eq!(
+        actual,
+        [Ok(vec![tip.clone()]), Ok(vec![tip])],
+        "only the selected layer requires valid author metadata; the excluded parent supplies its tree"
+    );
+    for result in [
+        git.description_commits(&main, &invalid),
+        git.observe_stack(&main, &invalid, false).map(|s| s.commits),
+    ] {
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("missing author identity")
+        );
+    }
+    assert_eq!(
+        std::fs::read_to_string(&shallow).unwrap(),
+        format!("{main}\n")
+    );
+    assert!(
+        !fixture
+            .trace()
+            .iter()
+            .any(|event| event["args"][0] == "fetch")
     );
 }

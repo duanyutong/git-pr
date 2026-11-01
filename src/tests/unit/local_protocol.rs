@@ -1,5 +1,265 @@
 //! Local snapshots, ref protection and bounded backend observations.
 
+use crate::tests::unit::support::stack_probe;
+fn shallow_fork_world() -> std::sync::Arc<World> {
+    let w = World::new(3);
+    let base = commit(2).hash;
+    {
+        let mut memory = w.0.lock().unwrap();
+        memory.parents.extend([
+            (base.clone(), vec![commit(1).hash]),
+            (commit(3).hash, vec![commit(1).hash]),
+        ]);
+    }
+    w.reply(
+        &stack_probe(&base, &commit(3).hash),
+        0,
+        &format!("true\n{base}\ntree2\n{}", commit(3).hash),
+    );
+    w.reply(
+        &format!("git rev-parse --verify {}^{{tree}}", commit(1).hash),
+        0,
+        &"c".repeat(40),
+    );
+    w
+}
+
+#[test]
+fn shallow_stack_discovery_excludes_advanced_trunk_history_in_both_readers() {
+    let w = shallow_fork_world();
+    let base = commit(2).hash;
+    let commands = w.commands();
+    let git = Git {
+        commands: &commands,
+        repo: &Repository::default(),
+    };
+    for commits in [
+        git.observe_stack(&base, &commit(3).hash, false)
+            .unwrap()
+            .commits,
+        git.description_commits(&base, &commit(3).hash).unwrap(),
+    ] {
+        assert_eq!(
+            commits.into_iter().map(|c| c.hash).collect::<Vec<_>>(),
+            vec![commit(3).hash]
+        );
+    }
+    let trace = w.trace();
+    assert_eq!(
+        trace
+            .iter()
+            .filter(|event| event["args"][0] == "log")
+            .count(),
+        2
+    );
+    assert!(trace.iter().all(|event| event["args"][0] != "fetch"));
+}
+
+#[test]
+fn shallow_boundary_trees_preserve_empty_filtering_without_author_metadata() {
+    for empty in [false, true] {
+        let w = shallow_fork_world();
+        {
+            let mut memory = w.0.lock().unwrap();
+            memory.commits[0].author_name.clear();
+            memory.commits[0].author_email.clear();
+        }
+        if empty {
+            let metadata =
+                log(&[commit(3)]).replace("\0tree1\0", &format!("\0{}\0", "c".repeat(40)));
+            w.reply("git log --format=%H%x00%an%x00%ae%x00%aI%x00%T%x00%P%x00%B%x00 --no-decorate --no-color --encoding=UTF-8 --no-show-signature --no-walk=unsorted --stdin", 0, &metadata);
+        }
+        let commands = w.commands();
+        let git = Git {
+            commands: &commands,
+            repo: &Repository::default(),
+        };
+        for commits in [
+            git.observe_stack(&commit(2).hash, &commit(3).hash, false)
+                .unwrap()
+                .commits,
+            git.description_commits(&commit(2).hash, &commit(3).hash)
+                .unwrap(),
+        ] {
+            assert_eq!(commits.len(), usize::from(!empty));
+        }
+        let tree_queries = w
+            .trace()
+            .iter()
+            .filter(|event| {
+                event["args"]
+                    == serde_json::json!([
+                        "rev-parse",
+                        "--verify",
+                        format!("{}^{{tree}}", commit(1).hash)
+                    ])
+            })
+            .count();
+        assert_eq!(tree_queries, 2);
+    }
+}
+
+#[test]
+fn shallow_boundary_tree_failures_do_not_return_partial_selections() {
+    for response in [
+        None,
+        Some(String::new()),
+        Some("invalid".into()),
+        Some(format!("{} {}", "c".repeat(40), "d".repeat(40))),
+    ] {
+        let w = shallow_fork_world();
+        let key = format!("git rev-parse --verify {}^{{tree}}", commit(1).hash);
+        if let Some(response) = response {
+            w.reply(&key, 0, &response);
+        } else {
+            w.fail(&key);
+        }
+        let commands = w.commands();
+        let git = Git {
+            commands: &commands,
+            repo: &Repository::default(),
+        };
+        let error = format!(
+            "{:#}",
+            git.description_commits(&commit(2).hash, &commit(3).hash)
+                .unwrap_err()
+        );
+        assert!(error.contains("boundary tree"), "{error}");
+        assert!(w.trace().iter().all(|event| event["args"][0] != "push"));
+    }
+}
+
+#[test]
+fn shallow_stacks_reuse_the_captured_trunk_tree_without_another_query() {
+    for empty in [false, true] {
+        let w = World::new(1);
+        w.0.lock().unwrap().parents.extend([
+            (format!("{:040x}", 0), vec![]),
+            (commit(1).hash, vec![format!("{:040x}", 0)]),
+        ]);
+        w.reply(
+            &stack_probe("base", "HEAD"),
+            0,
+            &format!("true\n{:040x}\ntree0\n{}", 0, commit(1).hash),
+        );
+        if empty {
+            w.reply("git log --format=%H%x00%an%x00%ae%x00%aI%x00%T%x00%P%x00%B%x00 --no-decorate --no-color --encoding=UTF-8 --no-show-signature --no-walk=unsorted --stdin", 0, &log(&[commit(1)]).replace("\0tree1\0", "\0tree0\0"));
+        }
+        let commands = w.commands();
+        let git = Git {
+            commands: &commands,
+            repo: &Repository::default(),
+        };
+        for commits in [
+            git.observe_stack("base", "HEAD", false).unwrap().commits,
+            git.description_commits("base", "HEAD").unwrap(),
+        ] {
+            assert_eq!(commits.len(), usize::from(!empty));
+        }
+        let trace = w.trace();
+        assert_eq!(trace.len(), 6);
+        assert!(
+            trace
+                .iter()
+                .all(|event| event["args"][1] != "--verify" && event["args"][0] != "diff-tree")
+        );
+    }
+}
+
+#[test]
+fn selected_shallow_commits_still_require_valid_author_metadata() {
+    let w = shallow_fork_world();
+    w.0.lock().unwrap().commits[2].author_email.clear();
+    let commands = w.commands();
+    let git = Git {
+        commands: &commands,
+        repo: &Repository::default(),
+    };
+    let error = format!(
+        "{:#}",
+        git.observe_stack(&commit(2).hash, &commit(3).hash, false)
+            .unwrap_err()
+    );
+    assert!(error.contains("missing author identity"), "{error}");
+    assert!(!w.trace().iter().any(|event| event["args"][1] == "--verify"));
+}
+
+#[test]
+fn shallow_stack_metadata_failures_do_not_return_a_partial_selection() {
+    let key = "git log --format=%H%x00%an%x00%ae%x00%aI%x00%T%x00%P%x00%B%x00 --no-decorate --no-color --encoding=UTF-8 --no-show-signature --no-walk=unsorted --stdin";
+    for outcome in ["unavailable", "malformed", "incomplete", "reordered"] {
+        let w = World::new(2);
+        {
+            let mut m = w.0.lock().unwrap();
+            m.parents.extend([
+                (format!("{:040x}", 0), vec![]),
+                (commit(1).hash, vec![format!("{:040x}", 0)]),
+                (commit(2).hash, vec![commit(1).hash]),
+            ]);
+            drop(m);
+        }
+        w.reply(
+            &stack_probe("base", "HEAD"),
+            0,
+            &format!("true\n{:040x}\ntree0\n{}", 0, commit(2).hash),
+        );
+        match outcome {
+            "unavailable" => w.fail(key),
+            "malformed" => w.reply(key, 0, "invalid\0"),
+            "incomplete" => w.reply(key, 0, ""),
+            _ => w.reply(key, 0, &log(&[commit(2), commit(1)])),
+        }
+        let commands = w.commands();
+        let git = Git {
+            commands: &commands,
+            repo: &Repository::default(),
+        };
+        assert!(
+            git.observe_stack("base", "HEAD", false).is_err(),
+            "{outcome}"
+        );
+        assert!(w.trace().iter().all(|event| event["args"][0] != "push"));
+    }
+}
+
+#[test]
+fn integrated_shallow_tips_require_no_metadata_walk() {
+    let w = World::new(1);
+    w.reply(
+        &stack_probe(&commit(1).hash, &commit(1).hash),
+        0,
+        &format!("true\n{}\ntree1\n{}", commit(1).hash, commit(1).hash),
+    );
+    let commands = w.commands();
+    let git = Git {
+        commands: &commands,
+        repo: &Repository::default(),
+    };
+    assert_eq!(
+        git.description_commits(&commit(1).hash, &commit(1).hash)
+            .unwrap(),
+        [] as [crate::model::Commit; 0]
+    );
+    assert_eq!(w.trace().len(), 1);
+}
+
+#[test]
+fn shallow_stack_proof_failures_stop_before_metadata_reads() {
+    let w = World::new(1);
+    w.reply(
+        &stack_probe("base", "HEAD"),
+        0,
+        &format!("true\n{:040x}\ntree0\n{}", 0, commit(1).hash),
+    );
+    let commands = w.commands();
+    let git = Git {
+        commands: &commands,
+        repo: &Repository::default(),
+    };
+    assert!(git.observe_stack("base", "HEAD", false).is_err());
+    assert!(w.trace().iter().all(|event| event["args"][0] != "log"));
+}
+
 #[test]
 fn jujutsu_conflicts_in_published_ancestry_stop_all_effects() {
     for position in 0..3 {
@@ -46,7 +306,7 @@ fn jujutsu_conflicts_in_published_ancestry_stop_all_effects() {
         memory.commits[0].conflicted = true;
         log(&memory.commits).replace("\0tree1\0", "\0tree0\0")
     };
-    w.reply("git log --format=%H%x00%an%x00%ae%x00%aI%x00%T%x00%P%x00%B%x00 --no-decorate --no-color --encoding=UTF-8 --no-show-signature base..HEAD", 0, &history);
+    w.reply(&format!("git log --format=%H%x00%an%x00%ae%x00%aI%x00%T%x00%P%x00%B%x00 --no-decorate --no-color --encoding=UTF-8 --no-show-signature {:040x}..{}", 0, commit(3).hash), 0, &history);
     let commands = w.commands();
     let repo = Repository {
         jj: true,
@@ -268,7 +528,11 @@ fn framed_history_rejects_truncation_and_keeps_full_stack() {
         commands: &commands,
         repo: &repo,
     };
-    let key = "git log --format=%H%x00%an%x00%ae%x00%aI%x00%T%x00%P%x00%B%x00 --no-decorate --no-color --encoding=UTF-8 --no-show-signature base..tip";
+    let key = format!(
+        "git log --format=%H%x00%an%x00%ae%x00%aI%x00%T%x00%P%x00%B%x00 --no-decorate --no-color --encoding=UTF-8 --no-show-signature {:040x}..{}",
+        0,
+        commit(1).hash
+    );
     let fields = [
         commit(1).hash,
         "name".into(),
@@ -279,18 +543,22 @@ fn framed_history_rejects_truncation_and_keeps_full_stack() {
         "title".into(),
     ];
     for length in 1..7 {
-        w.reply(key, 0, &format!("{}\0", fields[..length].join("\0")));
+        w.reply(&key, 0, &format!("{}\0", fields[..length].join("\0")));
         assert!(git.stack("base", "tip", false).is_err());
     }
     for value in ["invalid\0".to_owned(), format!("{}\0", "z".repeat(40))] {
-        w.reply(key, 0, &value);
+        w.reply(&key, 0, &value);
         assert!(git.stack("base", "tip", false).is_err());
     }
-    w.reply(key, 0, &format!("\0{}", fields.join("\0")));
+    w.0.lock()
+        .unwrap()
+        .parents
+        .insert(commit(1).hash, Vec::new());
+    w.reply(&key, 0, &format!("\0{}", fields.join("\0")));
     assert_eq!(git.stack("base", "tip", false).unwrap().len(), 1);
-    w.reply(key, 0, &log(&[commit(1), commit(2)]));
+    w.reply(&key, 0, &log(&[commit(1), commit(2)]));
     assert_eq!(git.stack("base", "tip", false).unwrap().len(), 2);
-    w.reply("git show --no-show-signature -s --format=%H %T base", 0, "");
+    w.reply(&stack_probe("base", "tip"), 0, "");
     assert!(
         git.stack("base", "tip", false)
             .unwrap_err()
@@ -492,10 +760,18 @@ fn malformed_local_observations_and_missing_identities_fail_closed() {
         commands: &commands,
         repo: &repo,
     };
-    w.fail("git show --no-show-signature -s --format=%H %T base");
+    w.fail(&stack_probe("base", "tip"));
     assert!(git.stack("base", "tip", false).is_err());
-    w.reply("git show --no-show-signature -s --format=%H %T base", 0, "");
-    let key = "git log --format=%H%x00%an%x00%ae%x00%aI%x00%T%x00%P%x00%B%x00 --no-decorate --no-color --encoding=UTF-8 --no-show-signature base..tip";
+    w.reply(
+        &stack_probe("base", "tip"),
+        0,
+        &format!("false\n{:040x}\ntree0\n{}", 0, commit(1).hash),
+    );
+    let key = format!(
+        "git log --format=%H%x00%an%x00%ae%x00%aI%x00%T%x00%P%x00%B%x00 --no-decorate --no-color --encoding=UTF-8 --no-show-signature {:040x}..{}",
+        0,
+        commit(1).hash
+    );
     for value in [
         format!(
             "{}\0\0email\02025-01-01T00:00:00Z\0tree\0\0title\0",
@@ -510,7 +786,7 @@ fn malformed_local_observations_and_missing_identities_fail_closed() {
             commit(1).hash
         ),
     ] {
-        w.reply(key, 0, &value);
+        w.reply(&key, 0, &value);
         assert!(git.stack("base", "tip", false).is_err());
     }
     w.0.lock().unwrap().jj = true;
@@ -786,7 +1062,7 @@ fn invalid_histories_stop_before_remote_observation_or_rewriting() {
                 &format!("\0{}\0", commit(1).hash),
                 &format!("\0{} {}\0", commit(1).hash, commit(3).hash),
             );
-            w.reply("git log --format=%H%x00%an%x00%ae%x00%aI%x00%T%x00%P%x00%B%x00 --no-decorate --no-color --encoding=UTF-8 --no-show-signature refs/remotes/origin/main..HEAD", 0, &history);
+            w.reply(&format!("git log --format=%H%x00%an%x00%ae%x00%aI%x00%T%x00%P%x00%B%x00 --no-decorate --no-color --encoding=UTF-8 --no-show-signature {:040x}..{}", 0, commit(2).hash), 0, &history);
         } else {
             let mut m = w.0.lock().unwrap();
             m.commits[1].title.clear();
@@ -1010,4 +1286,48 @@ fn non_linear_observations_do_not_supply_fabricated_selection_depths() {
             .depths
             .is_empty()
     );
+}
+
+#[test]
+fn shallow_local_ref_synchronisation_uses_conclusive_stored_ancestry() {
+    for jj in [false, true] {
+        for available in [false, true] {
+            let world = World::new(1);
+            let published = commit(1);
+            let old = "a".repeat(40);
+            world.reply("git rev-parse --is-shallow-repository", 0, "true");
+            world.reply("git worktree list --porcelain", 0, "");
+            world.reply(
+                "git for-each-ref --format=%(refname:strip=2)|%(objectname) refs/heads/",
+                0,
+                &format!("topic/1|{old}"),
+            );
+            world.reply(
+                &format!("git merge-base --is-ancestor {old} {}", published.hash),
+                1,
+                "",
+            );
+            let bookmarks = "jj --ignore-working-copy bookmark list -T name ++ \"\\0\" ++ if(conflict, \"1\", \"0\") ++ \"\\0\" ++ added_targets.map(|c| c.commit_id() ++ \" \" ++ c.change_id()).join(\",\") ++ \"\\n\"";
+            world.reply(bookmarks, 0, &format!("topic/1\x000\0{old} different"));
+            if available {
+                world
+                    .0
+                    .lock()
+                    .unwrap()
+                    .parents
+                    .insert(published.hash.clone(), vec![old]);
+            }
+            let commands = world.commands();
+            let repo = Repository {
+                jj,
+                ..Repository::default()
+            };
+            Git {
+                commands: &commands,
+                repo: &repo,
+            }
+            .sync_refs(&[published]);
+            assert_eq!(world.trace().iter().any(|event| event["args"][0] == "update-ref" || event["args"][0] == "bookmark"), available, "jj={jj}, available={available}");
+        }
+    }
 }

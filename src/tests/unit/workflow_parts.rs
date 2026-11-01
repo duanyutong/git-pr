@@ -1,4 +1,5 @@
 use super::{State, presentation::validate_duplicates};
+use crate::tests::unit::support::stack_probe;
 use crate::tests::unit::support::{World, commit};
 use crate::{git::Git, github::GitHub, model::Commit};
 
@@ -1648,7 +1649,7 @@ fn descendant_discovery_accepts_missing_refs_but_propagates_failed_lookups() {
             w.0.lock().unwrap().commits[1].attrs.clear();
         }
         if failed_log {
-            w.fail(&format!("git log --format=%H%x00%an%x00%ae%x00%aI%x00%T%x00%P%x00%B%x00 --no-decorate --no-color --encoding=UTF-8 --no-show-signature refs/remotes/origin/main..{}", commit(2).hash));
+            w.fail(&format!("git log --format=%H%x00%an%x00%ae%x00%aI%x00%T%x00%P%x00%B%x00 --no-decorate --no-color --encoding=UTF-8 --no-show-signature {:040x}..{}", 0, commit(2).hash));
         }
         if !missing {
             w.http(
@@ -1821,11 +1822,12 @@ fn descendant_description_context_is_observed_in_batches() {
 #[test]
 fn failed_descendant_read_preserves_open_pr_history() {
     for failure in [
-        "git show --no-show-signature -s --format=%H %T HEAD".to_owned(),
+        stack_probe("HEAD", &commit(2).hash),
         "git for-each-ref --contains HEAD --format=%(objectname) refs/heads/".to_owned(),
         format!("git merge-base --independent {}", commit(2).hash),
         format!(
-            "git log --format=%H%x00%an%x00%ae%x00%aI%x00%T%x00%P%x00%B%x00 --no-decorate --no-color --encoding=UTF-8 --no-show-signature HEAD..{}",
+            "git log --format=%H%x00%an%x00%ae%x00%aI%x00%T%x00%P%x00%B%x00 --no-decorate --no-color --encoding=UTF-8 --no-show-signature {}..{}",
+            commit(2).hash,
             commit(2).hash
         ),
     ] {
@@ -2014,9 +2016,9 @@ fn explicit_selection_batches_unique_inputs_and_reuses_diverged_path_ranks() {
             }
             if diverged {
                 w.reply(
-                    "git show --no-show-signature -s --format=%H %T refs/remotes/origin/main",
+                    &stack_probe("refs/remotes/origin/main", "HEAD"),
                     0,
-                    "diverged tree0",
+                    &format!("false\n{}\ntree0\n{}", "a".repeat(40), commit(count).hash),
                 );
             }
             let mut args = vec!["--stop-after=get-commits".to_owned()];

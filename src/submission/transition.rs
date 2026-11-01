@@ -320,11 +320,14 @@ impl Transition {
             &self.desired(stack, self.plan.link_native),
             &self.observed(&git.repo.trunk),
         )?;
+        if !git.complete_graph()? {
+            return git.scoped_ancestry(&pairs).map(Ancestry);
+        }
         crate::commands::parallel_cached(
             pairs.into_iter().collect(),
             |_| None,
             |(ancestor, descendant)| {
-                git.is_ancestor(&ancestor, &descendant)
+                git.is_ancestor_native(&ancestor, &descendant)
                     .map(|answer| ((ancestor, descendant), answer))
             },
         )

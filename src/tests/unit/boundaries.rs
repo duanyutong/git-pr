@@ -1,4 +1,5 @@
 use super::support::{Response, World, commit};
+use crate::tests::unit::support::stack_probe;
 use crate::{
     cli::Flags,
     config::{self, Loaded},
@@ -128,7 +129,7 @@ fn git_stack_validates_empty_commits_and_reports_available_branches() {
     );
     w.fail("git rev-list --count base..tip");
     assert!(git.depth("base", "tip").is_err());
-    w.reply("git log --format=%H%x00%an%x00%ae%x00%aI%x00%T%x00%P%x00%B%x00 --no-decorate --no-color --encoding=UTF-8 --no-show-signature invalid..tip", 0, "bad");
+    w.fail(&stack_probe("invalid", "tip"));
     assert!(git.stack("invalid", "tip", false).is_err());
     w.reply("git branch --format=%(refname:strip=2)|%(objectname)", 0, "main|other\nshort|abc\nother|aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nbad|hash|extra\n(HEAD detached at x)|abc\ninvalid");
     assert_eq!(
@@ -142,14 +143,14 @@ fn git_stack_validates_empty_commits_and_reports_available_branches() {
     );
     assert!(w.0.lock().unwrap().stdout.contains("short -> abc"));
     w.reply(
-        "git diff-tree --no-commit-id --name-only -r 0000000000000000000000000000000000000001",
+        "git diff-tree --root --no-commit-id --name-only -r 0000000000000000000000000000000000000001",
         0,
         "",
     );
     w.reply(
-        "git show --no-show-signature -s --format=%H %T base",
+        &stack_probe("base", "tip"),
         0,
-        &format!("{:040x} tree1", 0),
+        &format!("false\n{:040x}\ntree1\n{}", 0, commit(1).hash),
     );
     assert_eq!(git.stack("base", "tip", false).unwrap().len(), 0);
     w.fail("git rev-parse target");
@@ -209,10 +210,14 @@ fn jujutsu_working_copies_and_change_recovery_cover_success_and_failure() {
         0,
         "false\0NONEMPTY|HAS-DESC\0Other Author\0other@example.com\0working|hash| \nbody",
     );
-    w.reply("git diff-tree --no-commit-id --name-only -r hash", 0, "");
+    w.reply(
+        "git diff-tree --root --no-commit-id --name-only -r hash",
+        0,
+        "",
+    );
     assert_eq!(git.stack("base", "HEAD", true).unwrap().len(), 1);
     w.reply(
-        "git diff-tree --no-commit-id --name-only -r hash",
+        "git diff-tree --root --no-commit-id --name-only -r hash",
         0,
         "file",
     );

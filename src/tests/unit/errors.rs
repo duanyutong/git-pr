@@ -1,5 +1,6 @@
 //! Failed observations shall retain their cause and shall not authorise mutations.
 use super::support::{Response, World, commit};
+use crate::tests::unit::support::stack_probe;
 use crate::{
     commands::{CommandRunner, StructuredOutput, Terminal},
     config, credentials,
@@ -321,13 +322,13 @@ fn invalid_working_copy_markers_and_failed_diff_reads_stop_submission() {
 
     let w = World::new(1);
     w.reply(
-        "git show --no-show-signature -s --format=%H %T refs/remotes/origin/main",
+        &stack_probe("refs/remotes/origin/main", "HEAD"),
         0,
-        &format!("{} tree99", commit(99).hash),
+        &format!("false\n{}\ntree99\n{}", commit(99).hash, commit(1).hash),
     );
     w.reply(
         &format!(
-            "git diff-tree --no-commit-id --name-only -r {}",
+            "git diff-tree --root --no-commit-id --name-only -r {}",
             commit(1).hash
         ),
         128,
@@ -741,9 +742,9 @@ fn commit_filtering_preserves_order_after_skipping_an_empty_predecessor() {
         repo: &repo,
     };
     w.reply(
-        "git show --no-show-signature -s --format=%H %T base",
+        &stack_probe("base", "tip"),
         0,
-        &format!("{:040x} tree1", 0),
+        &format!("false\n{:040x}\ntree1\n{}", 0, commit(3).hash),
     );
     let commits = git.stack("base", "tip", false).unwrap();
     assert_eq!(

@@ -200,6 +200,34 @@ impl Service {
     }
 }
 impl CommandRunner for Service {
+    fn execute_data(
+        &self,
+        program: &str,
+        args: &[String],
+        cwd: &Path,
+        env: &BTreeMap<OsString, OsString>,
+        input: &[u8],
+    ) -> Result<crate::commands::StructuredOutput> {
+        if input.is_empty() {
+            let output = self.execute(program, args, cwd, env)?;
+            return Ok(crate::commands::StructuredOutput {
+                status: output.status,
+                stdout: if output.status == 0 {
+                    output.text.as_bytes().to_vec()
+                } else {
+                    Vec::new()
+                },
+                stderr: if output.status != 0 {
+                    output.text.as_bytes().to_vec()
+                } else {
+                    Vec::new()
+                },
+            });
+        }
+        self.record(json!({"kind":"command","program":program,"args":args}));
+        ProcessRunner::default().execute_data(program, args, cwd, env, input)
+    }
+
     fn edit_messages(
         &self,
         program: &str,

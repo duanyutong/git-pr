@@ -59,6 +59,15 @@ fn world(count: u64) -> Arc<World> {
 }
 
 fn mock_ancestry(w: &World, parents: &BTreeMap<u64, Vec<u64>>) {
+    w.0.lock().unwrap().parents = parents
+        .iter()
+        .map(|(node, parents)| {
+            (
+                oid(*node),
+                parents.iter().map(|parent| oid(*parent)).collect(),
+            )
+        })
+        .collect();
     for ancestor in parents.keys() {
         for descendant in parents.keys() {
             let mut pending = vec![*descendant];
@@ -532,7 +541,7 @@ fn recovery_destination_and_ref_observations_reject_ambiguity_and_malformed_valu
         assert!(
             git.push_with_leases(
                 &[&crate::tests::unit::support::commit(1)],
-                Some(&BTreeMap::new())
+                Some(&BTreeMap::new()),
             )
             .is_err()
         );
@@ -2512,11 +2521,7 @@ fn ancestry_evidence_is_reused_only_for_matching_inputs_and_a_complete_graph() {
                     event["args"][0] == "merge-base" && event["args"][1] == "--is-ancestor"
                 })
                 .count();
-            assert_eq!(
-                ancestry_reads > 0,
-                ["different", "shallow"].contains(&mode),
-                "{mode}"
-            );
+            assert_eq!(ancestry_reads > 0, mode == "different", "{mode}");
             assert!(!world.trace().iter().any(effect));
         });
     }
@@ -2720,6 +2725,25 @@ fn publication_planning_shares_initial_destination_refs_in_direct_and_staged_pat
             assert_eq!(reads, if staged { 2 } else { 1 });
         });
     }
+}
+
+#[test]
+fn small_transitions_check_graph_safety_without_extra_reuse_probes() {
+    let world = world(1);
+    world.0.lock().unwrap().commits[0].hash = oid(11);
+    with_github(&world, |github| {
+        let state = state(&world);
+        world.0.lock().unwrap().trace.clear();
+        super::super::pull_requests::Publication::observe(github, &state.stack, 0).unwrap();
+        assert_eq!(
+            world
+                .trace()
+                .iter()
+                .filter(|event| event["args"] == json!(["rev-parse", "--is-shallow-repository"]))
+                .count(),
+            1
+        );
+    });
 }
 
 #[derive(Debug)]
@@ -3024,6 +3048,45 @@ fn native_creation_and_append_recover_definite_rate_rejections() {
     }
 }
 
+#[test]
+fn shallow_transitions_use_local_parent_evidence_without_full_history() {
+    for order in [&[2, 1][..], &[1, 3, 2][..]] {
+        let world = transition_world(order, &[1, 2]);
+        world.reply("git rev-parse --is-shallow-repository", 0, "true");
+        world.reply(
+            &format!("git merge-base --is-ancestor {} {}", oid(11), oid(12)),
+            1,
+            "",
+        );
+        // Older history is genuinely absent; all relevant paths meet at this boundary.
+        world
+            .0
+            .lock()
+            .unwrap()
+            .parents
+            .insert(oid(0), vec![oid(999)]);
+        with_github(&world, |github| {
+            let state = state(&world);
+            let (plan, bases) = observe(&world, github, &state);
+            assert!(matches!(plan.plan.strategy, Strategy::Stage(_)));
+            plan.apply(github, &state, &bases).unwrap();
+        });
+    }
+    let world = transition_world(&[2, 1], &[1, 2]);
+    world.reply("git rev-parse --is-shallow-repository", 0, "true");
+    world.0.lock().unwrap().parents.remove(&oid(12));
+    with_github(&world, |github| {
+        let state = state(&world);
+        let bases = crate::stack::selection::resolve_bases(&state.stack, 0, "main");
+        github
+            .observe(&["topic/1".into(), "topic/2".into()])
+            .unwrap();
+        let error = planned_transition(github, &state.stack, 0, &bases).unwrap_err();
+        assert!(error.to_string().contains("unavailable commit"));
+        assert!(!world.trace().iter().any(effect));
+    });
+}
+
 #[derive(Debug)]
 struct TransitionTopologyDelay<'a> {
     world: &'a World,
@@ -3089,4 +3152,70 @@ fn budgeted_recovery_membership_fallback_keeps_the_outer_request_context() {
             101
         );
     });
+}
+
+#[test]
+fn shallow_merged_parent_and_temporary_guards_use_available_local_proofs() {
+    for unavailable_native in [false, true] {
+        let world = world(1);
+        world.reply("git rev-parse --is-shallow-repository", 0, "true");
+        let key = format!("git merge-base --is-ancestor {} {}", oid(10), oid(11));
+        if unavailable_native {
+            world.fail(&key);
+        } else {
+            world.reply(&key, 1, "");
+        }
+        world
+            .0
+            .lock()
+            .unwrap()
+            .remote_refs
+            .insert("refs/heads/git-pr/transition/101".into(), oid(20));
+        world.reply(
+            &format!("git merge-base --is-ancestor {} {}", oid(20), oid(0)),
+            1,
+            "",
+        );
+        with_github(&world, |github| {
+            let state = state(&world);
+            let (plan, _) = observe(&world, github, &state);
+            assert_eq!(plan.cleanup_candidates()["git-pr/transition/101"], oid(20));
+            assert!(!world.trace().iter().any(effect));
+        });
+    }
+}
+
+#[test]
+fn shallow_unreviewed_heads_preserve_related_local_history_without_adoption() {
+    for available in [false, true] {
+        let world = World::new(1);
+        let old = oid(10);
+        world.reply("git rev-parse --is-shallow-repository", 0, "true");
+        world.reply(
+            &format!("git merge-base --is-ancestor {old} {}", oid(1)),
+            1,
+            "",
+        );
+        {
+            let mut memory = world.0.lock().unwrap();
+            memory.remote_refs.insert("refs/heads/topic/1".into(), old);
+            if available {
+                memory.parents.insert(oid(1), vec![oid(10)]);
+            }
+        }
+        with_github(&world, |github| {
+            let mut stack = state(&world).stack;
+            stack[0].publication = Some(crate::identity::Binding {
+                anchor: None,
+                anchor_oid: None,
+                head: crate::identity::Head::new(&github.config.repo, "topic/1").unwrap(),
+                review: None,
+                adopted: false,
+                previous_anchor: None,
+            });
+            let result = super::super::pull_requests::Publication::observe(github, &stack, 0);
+            assert_eq!(result.is_ok(), available, "{result:?}");
+            assert!(!world.trace().iter().any(effect));
+        });
+    }
 }

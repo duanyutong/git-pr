@@ -1,4 +1,5 @@
 use super::support::{Response, World, commit, log};
+use crate::tests::unit::support::stack_probe;
 use crate::{diagnostics::errors, model::REMOTE_REF, stack::description};
 use serde_json::{Value, json};
 
@@ -182,8 +183,12 @@ fn discovery_and_rewrite_failures_do_not_push_or_create_prs() {
     let w = World::new(0);
     assert!(w.run(&[]).unwrap_err().to_string().contains("no commits"));
     for key in [
-        "git show --no-show-signature -s --format=%H %T refs/remotes/origin/main",
-        "git log --format=%H%x00%an%x00%ae%x00%aI%x00%T%x00%P%x00%B%x00 --no-decorate --no-color --encoding=UTF-8 --no-show-signature refs/remotes/origin/main..HEAD",
+        &stack_probe("refs/remotes/origin/main", "HEAD"),
+        &format!(
+            "git log --format=%H%x00%an%x00%ae%x00%aI%x00%T%x00%P%x00%B%x00 --no-decorate --no-color --encoding=UTF-8 --no-show-signature {:040x}..{}",
+            0,
+            commit(1).hash
+        ),
         "git status --porcelain=v1 --untracked-files=no",
     ] {
         let w = World::new(1);
@@ -279,7 +284,12 @@ fn author_filters_detached_restoration_descendant_history_and_native_linking() {
     let mut descendant = commit(2);
     descendant.hash = "dddddddddddddddddddddddddddddddddddddddd".into();
     w.reply(
-        &format!("git log --format=%H%x00%an%x00%ae%x00%aI%x00%T%x00%P%x00%B%x00 --no-decorate --no-color --encoding=UTF-8 --no-show-signature {}..descendant",commit(1).hash),
+        &stack_probe(&commit(1).hash, "descendant"),
+        0,
+        &format!("false\n{}\ntree1\n{}", commit(1).hash, descendant.hash),
+    );
+    w.reply(
+        &format!("git log --format=%H%x00%an%x00%ae%x00%aI%x00%T%x00%P%x00%B%x00 --no-decorate --no-color --encoding=UTF-8 --no-show-signature {}..{}",commit(1).hash,descendant.hash),
         0,
         &log(&[descendant]),
     );

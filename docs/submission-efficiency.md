@@ -43,13 +43,14 @@ Related commits may remain necessary as description context even when they are n
 ## Observations and mutation planning
 
 Git history is acquired through a NUL-framed protocol carrying full object identities, author metadata, trees, parents and messages.
-Structured history and tree queries explicitly disable signature display, preventing presentation settings from contaminating metadata or launching signature verifiers.
+Structured history queries explicitly disable signature display, preventing presentation settings from contaminating metadata or launching signature verifiers.
+Commit and tree resolution use Git's revision parser.
 The former 100-commit truncation is removed.
-Merge commits in the discovered history are rejected before remote observation or local metadata writes, because submission requires a linear stack.
+Merge commits in the selected history are rejected before remote observation or local metadata writes, because submission requires a linear stack.
 Commits without a message remain subject to tree validation; a changed commit without a title prevents submission.
 Known parent trees establish ordinary single-parent emptiness without per-commit subprocesses; unknown boundary trees retain an authoritative Git comparison.
-The initial visible snapshot also supplies explicit selection and verified linear depths.
-Its base commit/tree observation supplies the resolved trunk identity, avoiding a separate resolution command.
+The initial selected snapshot also supplies explicit selection and verified linear depths.
+One combined shallow-status, base commit/tree and tip observation replaces the former base/tree query, retaining two Git commands for complete-history discovery.
 Descendant discovery consumes the immutable observed tip directly rather than resolving that identity again.
 Explicit selection retains the original observed commit identities throughout submission.
 Missing or ambiguous publication associations prevent mutation.
@@ -167,6 +168,25 @@ Independent destination-ref and PR observations overlap within the recovery barr
 Merged-parent evidence retains its historical REST observation and merge-result verification.
 Independent local ancestry checks execute in groups of at most eight workers, with every started worker joined before a failure is propagated.
 Required Git objects shall be available locally; failed ancestry reads stop recovery and require synchronisation rather than an inferred negative result.
+Shallow repositories remain supported when their relevant local history supplies the required proof.
+Stack and description discovery prove exclusions through locally stored parents on both sides of the range before validating selected commits.
+One batched metadata read covers the selected commits, reusing the already resolved trunk tree.
+Where the proven boundary differs from the trunk, one local revision-parser query obtains only that parent's tree identity.
+Excluded author, date and message fields are not subject to selected-commit validation.
+Each selected parent is validated once, without rescanning accumulated prefixes during shallow resumption.
+A shallow proof confirms frontier objects in groups of at most 128 identities, then acquires bounded native raw-history pages of at most 128 commits.
+Git's [raw format](https://git-scm.com/docs/pretty-formats) retains stored parent identities even where shallow traversal stops, permitting a subsequent bounded read without altering shallow metadata.
+The bounded local-only shallow-history reader requires Git 2.45 or later for [explicit missing-commit observations and disabled lazy fetching](https://github.com/git/git/blob/v2.45.0/Documentation/RelNotes/2.45.0.txt); complete-history native ancestry retains its existing compatibility.
+Per-pair frontiers retain their visited nodes for the duration of the proof instead of repeatedly traversing acquired prefixes.
+Ancestor and descendant read-ahead alternate so skewed commit timestamps cannot starve a required path.
+A native page may acquire additional older objects before the next proof check; this bounded read-ahead does not establish a minimum-object guarantee for every graph.
+Dense shallow markers can require additional bounded resumptions.
+Unavailable history before such a boundary does not prevent a conclusive answer; a genuinely indeterminate relationship stops the transition before mutation.
+The finite reader retains the command adapter's cancellation, deadlines and output bounds, disables lazy fetching and leaves shallow metadata unchanged.
+Positive ancestry guards, including merged-parent recovery, temporary-ref reuse and cleanup, unreviewed refs and local synchronisation, accept an immediate native proof and otherwise use conclusive stored-parent evidence in a shallow repository.
+A complete repository retains its native result or error without additional object acquisition.
+Complete repositories retain Git's native ancestry traversal, and matching complete-graph observations retain their existing reuse path.
+Even a small transition checks graph completeness for safety; ordinary complete-history submissions without a base transition require no separate graph-completeness command.
 The original published heads and the prepared heads must remain outside their intended bases' ancestry throughout every old/new ref combination, and prepared heads must contain their selected development bases.
 The bottom head need not contain the trunk snapshot.
 Deleted obsolete refs are permitted, whilst reused branches, ambiguous historical identities and unselected dependants are refused.

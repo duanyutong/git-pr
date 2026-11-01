@@ -21,6 +21,7 @@ unit = [
   "src/credentials/mod.rs",
   "src/diagnostics/errors.rs",
   "src/git/mod.rs",
+  "src/git/ancestry.rs",
   "src/git/policy.rs",
   "src/git/publication.rs",
   "src/git/snapshot.rs",

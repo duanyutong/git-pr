@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 pub(super) const FORMAT: &str = "--format=%H%x00%an%x00%ae%x00%aI%x00%T%x00%P%x00%B%x00";
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub(super) struct Snapshot {
     pub commits: Vec<Commit>,
     pub trees: HashMap<String, String>,
@@ -15,18 +15,28 @@ pub(super) struct Snapshot {
 
 impl Snapshot {
     pub(super) fn reject_merges(&self) -> Result<()> {
-        if let Some(commit) = self.commits.iter().find(|c| {
-            self.parents
-                .get(&c.hash)
-                .is_some_and(|parents| parents.len() > 1)
-        }) {
-            bail!(
-                "merge commit {} is not supported; rebase the stack onto a linear history before submission",
-                commit.short_hash()
-            );
+        for commit in &self.commits {
+            require_linear(
+                &commit.hash,
+                self.parents
+                    .get(&commit.hash)
+                    .map_or(&[][..], Vec::as_slice),
+            )?;
         }
         Ok(())
     }
+}
+
+pub(super) fn require_linear(hash: &str, parents: &[String]) -> Result<()> {
+    #[cfg(test)]
+    crate::tests::unit::support::LINEARITY_CHECKS.update(|n| n + 1);
+    if parents.len() > 1 {
+        bail!(
+            "merge commit {} is not supported; rebase the stack onto a linear history before submission",
+            hash.get(..8).unwrap_or(hash)
+        );
+    }
+    Ok(())
 }
 
 pub(super) fn parse(output: &str) -> Result<Snapshot> {
