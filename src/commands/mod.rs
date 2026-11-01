@@ -406,3 +406,30 @@ pub(crate) fn parallel_cached<T: Send, R: Send>(
         output.extend(results);
     }
 }
+
+/// Run independent observations concurrently and join both before returning either failure.
+pub(crate) fn parallel_pair<A: Send, B: Send>(
+    left: impl FnOnce() -> Result<A> + Send,
+    right: impl FnOnce() -> Result<B> + Send,
+) -> Result<(A, B)> {
+    std::thread::scope(|scope| {
+        let left = system::spawn_worker(scope, left);
+        let right = system::spawn_worker(scope, right);
+        let join = |worker: Result<std::thread::ScopedJoinHandle<'_, _>>| {
+            worker.and_then(|worker| {
+                worker
+                    .join()
+                    .map_err(|_| anyhow::anyhow!("worker terminated unexpectedly"))
+                    .and_then(std::convert::identity)
+            })
+        };
+        let left = join(left);
+        let right = right.and_then(|worker| {
+            worker
+                .join()
+                .map_err(|_| anyhow::anyhow!("worker terminated unexpectedly"))
+                .and_then(std::convert::identity)
+        });
+        Ok((left?, right?))
+    })
+}

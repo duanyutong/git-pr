@@ -155,7 +155,17 @@ Observation and execution adapters acquire ancestry and service evidence, rechec
 Dry runs and preparation checkpoints do not mutate remote relationships.
 
 An obsolete base may be repaired before publication when its unique merged PR has a verified merge result in the locally captured trunk snapshot, its original head is present in the surviving published history, and any remaining obsolete ref still identifies that generation.
-Recovery obtains strict individual PR observations, complete historical identity observations and live refs from a single resolved push destination matching the observed hosting repository.
+Recovery obtains strict PR observations, complete historical identity observations and live refs from a single resolved push destination matching the observed hosting repository.
+Selected PR recovery evidence is queried by number in groups of at most 25 distinct identities, including exact head and base objects, repository identities, lifecycle and explicit native membership in the same GraphQL response.
+Each publication barrier acquires fresh evidence independently of the ordinary observation cache; malformed aliases, incomplete fields and GraphQL errors invalidate the observation.
+Retargeting dispatches one mutation at a time and verifies the returned identity, lifecycle, exact head, repository identities, base and native membership before dispatching another mutation.
+Each successful GraphQL mutation returns both its updated PR and the next PR's precondition through the repository relationship.
+The first mutation in each phase requires an explicit precondition query; subsequent mutations reuse the preceding response only while its conservatively measured observation age remains within 30 seconds.
+Missing, malformed or mismatched ancillary observations require a fresh query before the next mutation.
+Uncertain mutation responses require fresh confirmation of the affected PR without replaying the mutation; confirmed earlier outcomes remain retained when a later observation fails.
+Independent destination-ref and PR observations overlap within the recovery barrier, with both workers joined before either failure is propagated.
+Merged-parent evidence retains its historical REST observation and merge-result verification.
+Independent local ancestry checks execute in groups of at most eight workers, with every started worker joined before a failure is propagated.
 Required Git objects shall be available locally; failed ancestry reads stop recovery and require synchronisation rather than an inferred negative result.
 The original published heads and the prepared heads must remain outside their intended bases' ancestry throughout every old/new ref combination, and prepared heads must contain their selected development bases.
 The bottom head need not contain the trunk snapshot.
@@ -263,6 +273,10 @@ Publication batches contain at most 128 full-object refspecs and at most 64 KiB 
 Git performs its normal hooks and transport negotiation once per batch.
 Progress output retains one logical publication line per ref; verbose command traces expose the actual batched invocation.
 A batched authoritative `ls-remote` observation supplies expected-object leases before any publication mutation, including absence leases for new heads.
+Publication and transition planning share their initial destination, ref and lease observation.
+Existing ancestry answers pass directly to transition validation when their required pairs match and Git confirms a complete repository graph at both boundaries.
+Shallow or changed requirements retain recomputation; malformed or unavailable graph observations stop publication.
+Final transition preparation overlaps Git destination-ref reads with ordered GitHub head and dependant checks, joining both readers before publication.
 Ordinary publication omits refs whose observed destination objects already equal their selected commits.
 An entirely unchanged publication performs no push, Git hooks or local ref synchronisation and reuses the invocation's fresh PR observations without a publication-triggered refresh.
 Mixed publication pushes only changing refs with their exact expected-object leases and retains the complete post-publication PR identity and lifecycle barrier.
@@ -335,9 +349,7 @@ The bounds below exclude Git's own graph traversal and the bytes that must be re
 | Configuration discovery | Three ordinary queries, independent of stack size; failed typed conversions retain scalar diagnostic fallback. |
 | Selection and identity deduplication | Expected O(N + S), using indices and sets; initial Git resolution uses bounded batches rather than one process per selection. |
 | Predecessor/base resolution | O(N), using one prefix pass before association persistence; PR creation, number recovery and native management share the resulting bases. |
-| Local branch-name assignment | Expected O(B + N), using one branch inventory and an identity index. |
 | Descendant-tip choice | One `merge-base --independent` call for at most 128 candidates; larger inventories require at most ceil((B − 1)/127) + ceil(B/127) bounded calls. Failed discovery commands stop description updates. |
-| Rewrite message lookup | O(LN) prefix indexing, where L is the bounded object-identity length. |
 | Required-label membership | Expected linear work in observed and desired labels, preserving deterministic output order. |
 | Label refresh preflight | One check per target; only an expired target requires a bounded suffix refresh. |
 | Description context | O(N + H) auxiliary storage for borrowed context, shared history and positions; extraction reads the observed footer bytes, and rendering performs work proportional to compared or emitted bodies. |
@@ -361,7 +373,6 @@ Changing every PR in a large stack therefore remains quadratic in body bytes und
 The implementation removes repeated context construction without changing that representation or silently truncating history.
 Optional compact footers build an O(N) navigation index and emit at most three PR links per description, giving O(N + U) navigation work and entries.
 Historical lists are deliberately omitted in compact mode; full footers remain the default.
-A persistent cache, daemon and embedded VCS implementation remain conditional design options requiring separate evidence.
 
 ## Verification and interpretation
 
@@ -369,6 +380,7 @@ The strict unit gate covers every declared application policy module completely 
 Routine unchanged-submission tests exercise 1, 5, 24, 25, 26, 100 and 101 commits, including full discovery, bounded request/publication counts and a mutation-free unchanged pass.
 An optional 1,000-commit operation-count regression is available through `cargo test --locked unchanged_submission_at_large_scale -- --ignored`.
 These assertions use controlled observation time and impose no elapsed-time performance threshold.
+Ordinary configuration discovery performs no git-branchless version probe; backend compatibility remains subject to the independent native acceptance gate.
 Regression counters enforce one body analysis per unchanged observation and one predecessor-base calculation per active submission in both native modes, including trailer-free selections and compact presentation.
 Protocol tests cover pagination, malformed identities, lost responses, partial mutation results, stale observations, ref guards, literal editor inputs and process deadlines.
 Disposable backend tests independently verify published objects and completed remote effects.
@@ -379,6 +391,18 @@ The normal repeat uses nine batched configuration reads, including association c
 Native mode adds one topology read for the selected existing stack.
 Pagination, capability fallback, descendant context, recovery and long-submission refresh are explicit additional work.
 These bounds establish removal of identified duplication; they do not establish a universal optimum or a live-service latency guarantee.
+The ten-PR reversal fixture, including native-stack dissolution and restoration and REST responses without membership, requires 41 HTTP requests, compared with 43 before shared post-publication verification, 83 after collective-read batching and the former 256.
+Its five explicit recovery queries comprise three collective observations and the initial precondition for each of two retargeting phases.
+One combined observation supplies ordinary PR content and selected recovery metadata to the post-publication validators, preserving identity, cardinality, lifecycle, object, base and membership checks.
+Expired combined evidence is reacquired together within the existing retry and recovery limits; an ordinary-only refresh cannot replace half of that evidence.
+The remaining transition barriers acquire ordinary content and selected recovery metadata in the same paginated head observation, retaining complete label and membership checks.
+Twenty sequential base-change mutations each return their acknowledgement and, where applicable, the next precondition; those selected-head checks require no REST PR reads.
+A complete, validated mutation acknowledgement remains confirmed when ancillary GraphQL lookahead fields fail; only pending preconditions require another observation.
+Deferred requests which have not been dispatched refresh their preconditions after waiting, subject to bounded deferral and cumulative waiting budgets.
+Retarget acknowledgement decoding transfers owned JSON fields into typed observations without cloning their subtrees.
+Verbose diagnostics distinguish HTTP duration, dispatch queueing, deliberate waits and local commands, and retain a separate `PR base transitions` phase for the complete retargeting interval.
+Concurrent observation durations overlap, so their accumulated durations shall not be added to infer elapsed time.
+This comparison measures request count under controlled responses, rather than elapsed time against GitHub.
 The [validation evidence guide](validation.md) specifies how acceptance results and performance measurements shall be recorded and interpreted.
 
 ## Preparation and byte reuse

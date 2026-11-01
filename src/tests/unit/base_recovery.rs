@@ -261,10 +261,7 @@ fn recovery_refuses_unproven_or_unsafe_evidence_without_effects() {
             "malformed-membership" => {
                 let mut rest = w.0.lock().unwrap().prs[&101].clone();
                 rest["stack"] = json!("unknown");
-                w.http(
-                    "GET pulls/101",
-                    vec![Response::Output(200, rest.to_string())],
-                );
+                w.http("POST recovery", vec![recovery_reply(&[rest])]);
             }
             "unrelated" => w.reply(
                 &format!("git merge-base --is-ancestor {} {}", oid(10), oid(11)),
@@ -708,10 +705,7 @@ fn failed_recovery_reads_stop_before_rewriting_or_mutation() {
     let w = world(1);
     let mut closed = w.0.lock().unwrap().prs[&101].clone();
     closed["state"] = json!("closed");
-    w.http(
-        "GET pulls/101",
-        vec![Response::Output(200, closed.to_string())],
-    );
+    w.http("POST recovery", vec![recovery_reply(&[closed])]);
     assert!(w.run(&["--no-stack"]).is_err());
     assert!(!w.trace().iter().any(effect));
 }
@@ -887,7 +881,7 @@ impl crate::github::http::Transport for AfterRetarget {
                 "refs" => self.world.fail("git ls-remote --refs -- https://github.com/org/repo.git refs/heads/git-pr/transition/101 refs/heads/obsolete refs/heads/topic/1"),
                 "dependants" => { self.world.0.lock().unwrap().prs.insert(200, pr(200, "outside", 12, "topic/1")); },
                 "head" => {
-                    self.world.http("GET pulls/101", vec![Response::Failure("read unavailable".into())]);
+                    self.world.http("POST recovery", vec![Response::Failure("read unavailable".into())]);
                 },
                 _ => unreachable!(),
             }
@@ -1497,10 +1491,7 @@ fn arrange_transition_failure(w: &World, case: &str) {
             [102, 101, 103].map(|number| memory.prs[&number].clone())
         };
         values[0]["node_id"] = json!("OTHER");
-        w.http(
-            "GET pulls/102",
-            vec![Response::Output(200, values[0].to_string())],
-        );
+        w.http("POST recovery", vec![recovery_reply(&values)]);
     }
 }
 
@@ -1908,6 +1899,75 @@ fn recovery_reply(prs: &[Value]) -> Response {
         })
         .collect();
     Response::Output(200, json!({"data":{"repository":nodes}}).to_string())
+}
+
+#[derive(Debug)]
+struct RestWithoutMembership(Arc<World>);
+
+impl crate::github::http::Transport for RestWithoutMembership {
+    fn request(&self, request: crate::github::http::Request<'_>) -> Result<Vec<u8>> {
+        let rest_pr = request.method == "GET" && request.url.contains("/pulls/");
+        let bytes = crate::github::http::Transport::request(self.0.as_ref(), request)?;
+        if rest_pr {
+            let mut value: Value = serde_json::from_slice(&bytes)?;
+            value.as_object_mut().unwrap().remove("stack");
+            return Ok(serde_json::to_vec(&value)?);
+        }
+        Ok(bytes)
+    }
+}
+
+#[test]
+fn ten_pr_transition_request_budget() {
+    let w = transition_world(
+        &(1..=10).rev().collect::<Vec<_>>(),
+        &(1..=10).collect::<Vec<_>>(),
+    );
+    for pr in w.0.lock().unwrap().prs.values_mut() {
+        pr["stack"] = json!({"number":9});
+    }
+    let mut app = w.app();
+    app.transport = Arc::new(RestWithoutMembership(w.clone()));
+    let flags = crate::cli::Flags::parse(vec!["--github-stack".into(), "--yes".into()]).unwrap();
+    app.execute(
+        &flags,
+        &BTreeMap::from([("HOME".into(), "/unit/home".into())]),
+    )
+    .unwrap();
+    let trace = w.trace();
+    let requests = trace.iter().filter(|e| e["kind"] == "http").count();
+    let reads = trace
+        .iter()
+        .filter(|e| {
+            e["method"] == "GET" && e["path"].as_str().is_some_and(|p| p.starts_with("pulls/"))
+        })
+        .count();
+    let batches = trace
+        .iter()
+        .filter(|e| e["body"]["variables"].get("r0").is_some())
+        .count();
+    eprintln!(
+        "10-PR transition: {requests} HTTP requests, {reads} REST PR reads, {batches} recovery batches"
+    );
+    assert_eq!(reads, 0);
+    assert_eq!(batches, 5);
+    assert_eq!(requests, 41);
+    let memory = w.0.lock().unwrap();
+    for (index, number) in (1..=10).rev().enumerate() {
+        let pr = &memory.prs[&(100 + number)];
+        assert_eq!(pr["state"], "open");
+        assert_eq!(pr["head"]["sha"], oid(20 + number));
+        assert_eq!(
+            pr["base"]["ref"],
+            if index == 0 {
+                "main".into()
+            } else {
+                format!("topic/{}", number + 1)
+            }
+        );
+        assert_eq!(pr["stack"]["number"], 9);
+    }
+    drop(memory);
 }
 
 #[test]
@@ -2414,6 +2474,206 @@ fn retarget_pipeline_rejects_an_unrepresentable_next_identity_before_dispatch() 
 }
 
 #[test]
+fn ancestry_evidence_is_reused_only_for_matching_inputs_and_a_complete_graph() {
+    for mode in ["reuse", "shallow", "different", "invalid", "unavailable"] {
+        let world = world(1);
+        with_github(&world, |github| {
+            let state = state(&world);
+            let (plan, _) = observe(&world, github, &state);
+            let git = Git {
+                commands: github.commands,
+                repo: &github.config.repo,
+            };
+            let mut evidence = plan.ancestry(git, &state.stack).unwrap();
+            if mode == "different" {
+                evidence.0.clear();
+            }
+            if mode == "unavailable" {
+                world.fail("git rev-parse --is-shallow-repository");
+            }
+            if ["shallow", "invalid"].contains(&mode) {
+                world.reply(
+                    "git rev-parse --is-shallow-repository",
+                    0,
+                    if mode == "shallow" { "true" } else { "invalid" },
+                );
+            }
+            world.0.lock().unwrap().trace.clear();
+            let result = plan.check_strategy(git, &state.stack, Some(&evidence));
+            assert_eq!(
+                result.is_ok(),
+                !["invalid", "unavailable"].contains(&mode),
+                "{mode}: {result:?}"
+            );
+            let ancestry_reads = world
+                .trace()
+                .iter()
+                .filter(|event| {
+                    event["args"][0] == "merge-base" && event["args"][1] == "--is-ancestor"
+                })
+                .count();
+            assert_eq!(
+                ancestry_reads > 0,
+                ["different", "shallow"].contains(&mode),
+                "{mode}"
+            );
+            assert!(!world.trace().iter().any(effect));
+        });
+    }
+}
+
+#[test]
+fn published_transition_verification_rejects_missing_and_additional_observations() {
+    let world = world(1);
+    with_github(&world, |github| {
+        let state = state(&world);
+        let (plan, _) = observe(&world, github, &state);
+        assert!(plan.verify_published(&state, &[]).is_err());
+        let actual = github.recovery_prs(&plan.numbers()).unwrap();
+        let extra = vec![actual[0].clone(), actual[0].clone()];
+        assert!(plan.verify_published(&state, &extra).is_err());
+        assert!(plan.verify_published(&state, &actual).is_err());
+    });
+}
+
+#[derive(Debug)]
+struct FinalReaders {
+    world: Arc<World>,
+    refs: std::sync::atomic::AtomicUsize,
+    prs: std::sync::atomic::AtomicUsize,
+    git_ready: std::sync::mpsc::SyncSender<()>,
+    api_ready: std::sync::mpsc::SyncSender<()>,
+    git_wait: std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
+    api_wait: std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
+    failure: &'static str,
+}
+impl crate::commands::CommandRunner for FinalReaders {
+    fn edit_messages(
+        &self,
+        _: &str,
+        _: &[String],
+        _: &std::path::Path,
+        _: &BTreeMap<std::ffi::OsString, std::ffi::OsString>,
+        _: &[(String, String)],
+    ) -> Result<crate::commands::CommandOutput> {
+        unreachable!()
+    }
+    fn execute(
+        &self,
+        program: &str,
+        args: &[String],
+        cwd: &std::path::Path,
+        env: &BTreeMap<std::ffi::OsString, std::ffi::OsString>,
+    ) -> Result<crate::commands::CommandOutput> {
+        if args.first().is_some_and(|arg| arg == "ls-remote")
+            && self.refs.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 1
+        {
+            self.git_ready.send(()).unwrap();
+            self.git_wait
+                .lock()
+                .unwrap()
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("final GitHub reader did not overlap");
+            if self.failure == "git" {
+                bail!("final ref read failed");
+            }
+        }
+        crate::commands::CommandRunner::execute(self.world.as_ref(), program, args, cwd, env)
+    }
+}
+impl crate::github::http::Transport for FinalReaders {
+    fn request(&self, request: crate::github::http::Request<'_>) -> Result<Vec<u8>> {
+        let body: Value = request
+            .body
+            .map_or(Value::Null, |bytes| serde_json::from_slice(bytes).unwrap());
+        if body["variables"].get("r0").is_some()
+            && self.prs.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 1
+        {
+            self.api_ready.send(()).unwrap();
+            self.api_wait
+                .lock()
+                .unwrap()
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("final Git reader did not overlap");
+            if self.failure == "github" {
+                bail!("final PR read failed");
+            }
+        }
+        crate::github::http::Transport::request(self.world.as_ref(), request)
+    }
+}
+#[test]
+fn final_preparation_readers_overlap_and_both_finish_before_failure_returns() {
+    for failure in ["none", "git", "github"] {
+        let world = world(1);
+        with_github(&world, |original| {
+            let state = state(&world);
+            let (plan, bases) = observe(&world, original, &state);
+            let (git_ready, api_wait) = std::sync::mpsc::sync_channel(1);
+            let (api_ready, git_wait) = std::sync::mpsc::sync_channel(1);
+            let readers = Arc::new(FinalReaders {
+                world: world.clone(),
+                refs: 0.into(),
+                prs: 0.into(),
+                git_ready,
+                api_ready,
+                git_wait: git_wait.into(),
+                api_wait: api_wait.into(),
+                failure,
+            });
+            let mut commands = original.commands.clone();
+            commands.runner = readers.clone();
+            let github = GitHub {
+                commands: &commands,
+                transport: readers.as_ref(),
+                session: crate::github::Session::default(),
+                ..*original
+            };
+            let result = plan.apply(&github, &state, &bases);
+            assert_eq!(result.is_ok(), failure == "none", "{failure}: {result:?}");
+            assert_eq!(readers.refs.load(std::sync::atomic::Ordering::SeqCst), 2);
+            assert_eq!(readers.prs.load(std::sync::atomic::Ordering::SeqCst), 2);
+            assert!(!world.trace().iter().any(|event| event["args"][0] == "push"));
+        });
+    }
+}
+
+#[test]
+fn recovery_identity_cardinality_and_ancestry_requirements_fail_closed() {
+    let world = world(1);
+    with_github(&world, |github| {
+        let state = state(&world);
+        github.observe(&["topic/1".into()]).unwrap();
+        let duplicate = [state.stack[0].clone(), state.stack[0].clone()];
+        assert!(Transition::observe_prs(github, &duplicate, 0).is_err());
+        let (mut plan, _) = observe(&world, github, &state);
+        plan.anchor.clear();
+        let git = Git {
+            commands: github.commands,
+            repo: &github.config.repo,
+        };
+        assert!(plan.check_strategy(git, &state.stack, None).is_err());
+    });
+}
+#[test]
+fn combined_postpublication_verification_checks_the_head_object() {
+    let world = world(1);
+    with_github(&world, |github| {
+        let mut state = state(&world);
+        let plan =
+            super::super::pull_requests::Publication::observe(github, &state.stack, 0).unwrap();
+        let mut memory = world.0.lock().unwrap();
+        let pr = memory.prs.get_mut(&101).unwrap();
+        pr["base"]["ref"] = json!("main");
+        pr["head"]["sha"] = json!(oid(99));
+        drop(memory);
+        let error = plan.verify(github, &mut state, true).unwrap_err();
+        assert!(format!("{error:#}").contains("changed"), "{error:#}");
+        assert!(!world.trace().iter().any(effect));
+    });
+}
+
+#[test]
 fn combined_head_recovery_observations_cross_the_25_head_boundary() {
     let world = world(26);
     with_github(&world, |github| {
@@ -2439,6 +2699,27 @@ fn combined_head_recovery_observations_cross_the_25_head_boundary() {
             );
         }
     });
+}
+#[test]
+fn publication_planning_shares_initial_destination_refs_in_direct_and_staged_paths() {
+    for staged in [false, true] {
+        let world = if staged {
+            transition_world(&[2, 1, 3], &[1, 2, 3])
+        } else {
+            world(1)
+        };
+        with_github(&world, |github| {
+            let state = state(&world);
+            world.0.lock().unwrap().trace.clear();
+            super::super::pull_requests::Publication::observe(github, &state.stack, 0).unwrap();
+            let reads = world
+                .trace()
+                .iter()
+                .filter(|event| event["program"] == "git" && event["args"][0] == "ls-remote")
+                .count();
+            assert_eq!(reads, if staged { 2 } else { 1 });
+        });
+    }
 }
 
 #[derive(Debug)]
@@ -2588,6 +2869,80 @@ fn native_transition_renews_scope_after_quota_and_rate_waits() {
         }
     }
 }
+#[derive(Debug)]
+struct SlowCombined {
+    world: Arc<World>,
+    mode: &'static str,
+    reads: std::sync::atomic::AtomicUsize,
+}
+impl crate::github::http::Transport for SlowCombined {
+    fn request(&self, request: crate::github::http::Request<'_>) -> Result<Vec<u8>> {
+        let body: Value = request
+            .body
+            .map_or(Value::Null, |body| serde_json::from_slice(body).unwrap());
+        let combined = body["query"]
+            .as_str()
+            .is_some_and(|query| query.starts_with("query RecoveryHeads"));
+        let slow = combined
+            && (self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0
+                || self.mode == "always");
+        let bytes = crate::github::http::Transport::request(self.world.as_ref(), request)?;
+        if slow {
+            let mut memory = self.world.0.lock().unwrap();
+            memory.clock_elapsed += std::time::Duration::from_secs(31);
+            if self.mode == "head" {
+                memory.prs.get_mut(&101).unwrap()["head"]["sha"] = json!(oid(99));
+            }
+            if self.mode == "membership" {
+                memory.prs.get_mut(&101).unwrap()["stack"] = json!({"number":9});
+            }
+        }
+        Ok(bytes)
+    }
+}
+#[test]
+fn postpublication_renewal_keeps_recovery_and_ordinary_evidence_together() {
+    for mode in ["same", "head", "membership", "always"] {
+        let world = world(1);
+        with_github(&world, |original| {
+            let mut state = state(&world);
+            let plan = super::super::pull_requests::Publication::observe(original, &state.stack, 0)
+                .unwrap();
+            let mut memory = world.0.lock().unwrap();
+            memory.prs.get_mut(&101).unwrap()["base"]["ref"] = json!("main");
+            memory.prs.get_mut(&101).unwrap()["head"]["sha"] = json!(state.stack[0].hash);
+            memory.trace.clear();
+            drop(memory);
+            let transport = SlowCombined {
+                world: world.clone(),
+                mode,
+                reads: 0.into(),
+            };
+            let github = GitHub {
+                transport: &transport,
+                session: crate::github::Session::default(),
+                ..*original
+            };
+            let result = plan.verify(&github, &mut state, true);
+            assert_eq!(result.is_ok(), mode == "same", "{mode}: {result:?}");
+            assert_eq!(
+                transport.reads.load(std::sync::atomic::Ordering::SeqCst),
+                if mode == "always" { 4 } else { 2 }
+            );
+            assert!(!world.trace().iter().any(effect));
+            assert!(
+                world
+                    .trace()
+                    .iter()
+                    .filter(|event| event["kind"] == "http")
+                    .all(|event| event["body"]["query"]
+                        .as_str()
+                        .is_some_and(|query| query.starts_with("query RecoveryHeads")))
+            );
+        });
+    }
+}
+
 #[test]
 fn rate_rejected_base_updates_recheck_concurrent_head_changes_before_retrying() {
     for unavailable in [false, true] {
@@ -2734,89 +3089,4 @@ fn budgeted_recovery_membership_fallback_keeps_the_outer_request_context() {
             101
         );
     });
-}
-
-#[derive(Debug)]
-struct SlowCombined {
-    world: Arc<World>,
-    mode: &'static str,
-    reads: std::sync::atomic::AtomicUsize,
-}
-impl crate::github::http::Transport for SlowCombined {
-    fn request(&self, request: crate::github::http::Request<'_>) -> Result<Vec<u8>> {
-        let body: Value = request
-            .body
-            .map_or(Value::Null, |body| serde_json::from_slice(body).unwrap());
-        let combined = body["query"]
-            .as_str()
-            .is_some_and(|query| query.starts_with("query RecoveryHeads"));
-        let slow = combined
-            && (self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0
-                || self.mode == "always");
-        let bytes = crate::github::http::Transport::request(self.world.as_ref(), request)?;
-        if slow {
-            let mut memory = self.world.0.lock().unwrap();
-            memory.clock_elapsed += std::time::Duration::from_secs(31);
-            if self.mode == "head" {
-                memory.prs.get_mut(&101).unwrap()["head"]["sha"] = json!(oid(99));
-            }
-            if self.mode == "membership" {
-                memory.prs.get_mut(&101).unwrap()["stack"] = json!({"number":9});
-            }
-        }
-        Ok(bytes)
-    }
-}
-#[test]
-fn postpublication_renewal_keeps_recovery_and_ordinary_evidence_together() {
-    for mode in ["same", "head", "membership", "always"] {
-        let world = world(1);
-        with_github(&world, |original| {
-            let state = state(&world);
-            let mut memory = world.0.lock().unwrap();
-            memory.prs.get_mut(&101).unwrap()["base"]["ref"] = json!("main");
-            memory.prs.get_mut(&101).unwrap()["head"]["sha"] = json!(state.stack[0].hash);
-            memory.trace.clear();
-            drop(memory);
-            let transport = SlowCombined {
-                world: world.clone(),
-                mode,
-                reads: 0.into(),
-            };
-            let github = GitHub {
-                transport: &transport,
-                session: crate::github::Session::default(),
-                ..*original
-            };
-            let result = github.observe_recovery(&["topic/1".into()], &[101]);
-            assert_eq!(result.is_ok(), mode != "always", "{mode}: {result:?}");
-            if let Ok(observed) = result {
-                let ordinary = github.get(101).unwrap();
-                assert_eq!(ordinary.stack, observed[0].stack);
-                assert_eq!(ordinary.head.name, observed[0].head.name);
-                assert_eq!(
-                    observed[0].head.sha,
-                    if mode == "head" {
-                        oid(99)
-                    } else {
-                        state.stack[0].hash.clone()
-                    }
-                );
-            }
-            assert_eq!(
-                transport.reads.load(std::sync::atomic::Ordering::SeqCst),
-                if mode == "always" { 4 } else { 2 }
-            );
-            assert!(!world.trace().iter().any(effect));
-            assert!(
-                world
-                    .trace()
-                    .iter()
-                    .filter(|event| event["kind"] == "http")
-                    .all(|event| event["body"]["query"]
-                        .as_str()
-                        .is_some_and(|query| query.starts_with("query RecoveryHeads")))
-            );
-        });
-    }
 }

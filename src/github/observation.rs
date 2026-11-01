@@ -490,7 +490,6 @@ impl GitHub<'_> {
     }
 
     /// Refresh identity, content and selected recovery metadata in the same observation.
-    #[cfg(test)]
     pub(crate) fn observe_recovery(
         &self,
         references: &[String],

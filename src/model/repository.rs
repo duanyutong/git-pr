@@ -12,5 +12,7 @@ pub(crate) struct Repository {
     pub user: String,
     pub email: String,
     pub jj: bool,
+    /// Selects the legacy editor fixture; production submission does not probe this backend.
+    #[cfg(test)]
     pub branchless: bool,
 }

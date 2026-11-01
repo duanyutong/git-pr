@@ -338,7 +338,6 @@ fn discover(
     if repo.jj {
         commands.jj(&["version"]).context("Jujutsu workspace detected, but `jj version` failed; install or repair jj before submitting this workspace")?;
     }
-    repo.branchless = !repo.jj && commands.git(&["branchless", "--version"]).is_ok();
     Ok(repo)
 }
 

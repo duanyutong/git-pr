@@ -55,6 +55,11 @@ fn assert_unchanged_submission(size: u64) {
         0
     );
     assert!(!trace.iter().any(|v| v["program"] == "gh"));
+    assert!(
+        !trace
+            .iter()
+            .any(|v| v["program"] == "git" && v["args"] == json!(["branchless", "--version"]))
+    );
     assert_eq!(
         count(&trace, |v| v["program"] == "git"
             && v["args"][0] == "config"),

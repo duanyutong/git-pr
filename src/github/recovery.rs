@@ -21,7 +21,6 @@ struct RetargetAcknowledgement {
 impl GitHub<'_> {
     /// Acquire complete recovery evidence in one bounded query per group.
     /// These observations deliberately bypass the ordinary content cache.
-    #[cfg(test)]
     pub(crate) fn recovery_prs(&self, numbers: &[u64]) -> Result<Vec<RecoveryPullRequest>> {
         self.recovery_prs_at(numbers, None).map(|(prs, _)| prs)
     }
@@ -168,6 +167,7 @@ impl GitHub<'_> {
         self.recovery_pr(*number)
     }
 
+    #[cfg(test)]
     pub(crate) fn retarget_recovery(
         &self,
         expected: &RecoveryPullRequest,

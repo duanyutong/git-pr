@@ -868,3 +868,41 @@ fn renderers_accept_borrowed_commit_context_across_separate_owned_stacks() {
             .all(|c| c.message.len() == 60_000)
     );
 }
+
+#[test]
+fn paired_observations_overlap_and_join_both_results_before_failure() {
+    use std::sync::{
+        Barrier,
+        atomic::{AtomicUsize, Ordering},
+    };
+    for case in 0..=4 {
+        let barrier = Barrier::new(2);
+        let completed = AtomicUsize::new(0);
+        let result = crate::commands::parallel_pair(
+            || {
+                barrier.wait();
+                completed.fetch_add(1, Ordering::SeqCst);
+                assert_ne!(case, 3, "left panic");
+                if case == 1 {
+                    anyhow::bail!("left failed");
+                }
+                Ok(1)
+            },
+            || {
+                barrier.wait();
+                completed.fetch_add(1, Ordering::SeqCst);
+                assert_ne!(case, 4, "right panic");
+                if case == 2 {
+                    anyhow::bail!("right failed");
+                }
+                Ok(2)
+            },
+        );
+        assert_eq!(completed.load(Ordering::SeqCst), 2);
+        if case == 0 {
+            assert_eq!(result.unwrap(), (1, 2));
+        } else {
+            assert!(result.is_err());
+        }
+    }
+}

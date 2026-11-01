@@ -76,6 +76,18 @@ pub(crate) struct StackObservation {
 }
 
 impl Git<'_> {
+    pub(crate) fn complete_graph(&self) -> Result<bool> {
+        match self
+            .commands
+            .git(&["rev-parse", "--is-shallow-repository"])?
+            .as_str()
+        {
+            "false" => Ok(true),
+            "true" => Ok(false),
+            _ => bail!("invalid shallow-repository observation"),
+        }
+    }
+
     pub(crate) fn head(&self) -> Result<String> {
         if self.repo.jj {
             self.commands

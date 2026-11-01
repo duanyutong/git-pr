@@ -78,6 +78,7 @@ impl Transition {
             .filter(|c| !c.skip)
             .map(Commit::remote_ref)
             .collect();
+        let mut observed = Self::observe_prs(github, stack, start)?;
         let mut references = BTreeSet::new();
         let mut obsolete = Vec::new();
         for (index, commit) in stack
@@ -87,7 +88,7 @@ impl Transition {
             .filter(|(_, c)| !c.skip)
         {
             let reference = commit.remote_ref();
-            let pr = Self::observe_pr(github, reference)?;
+            let pr = observed.remove(reference);
             references.insert(reference.to_owned());
             references.insert(bases[index].clone());
             if let Some(pr) = &pr {
@@ -190,26 +191,43 @@ impl Transition {
         Ok(())
     }
 
-    fn observe_pr(github: &GitHub<'_>, reference: &str) -> Result<Option<RecoveryPullRequest>> {
-        github
-            .publication_pr(reference)?
-            .map(|expected| {
-                let pr = github.recovery_pr(expected.number).with_context(|| {
-                    format!(
-                        "cannot observe PR #{} for publication transition",
-                        expected.number
-                    )
-                })?;
+    fn observe_prs(
+        github: &GitHub<'_>,
+        stack: &[Commit],
+        start: usize,
+    ) -> Result<BTreeMap<String, RecoveryPullRequest>> {
+        let expected = stack
+            .iter()
+            .skip(start)
+            .filter(|c| !c.skip)
+            .map(|c| github.publication_pr(c.remote_ref()))
+            .collect::<Result<Vec<_>>>()?;
+        let observed = github.recovery_prs(
+            &expected
+                .iter()
+                .flatten()
+                .map(|p| p.number)
+                .collect::<Vec<_>>(),
+        )?;
+        if expected.iter().flatten().count() != observed.len() {
+            bail!("incomplete recovery identity observation");
+        }
+        expected
+            .into_iter()
+            .flatten()
+            .zip(observed)
+            .map(|(expected, pr)| {
                 policy::require_recovery_open(&pr)?;
-                if pr.node_id != expected.node_id
-                    || pr.head.name != reference
+                if pr.number != expected.number
+                    || pr.node_id != expected.node_id
+                    || pr.head.name != expected.head.name
                     || pr.base.name != expected.base.name
                 {
                     bail!("PR #{} changed during recovery observation", pr.number);
                 }
-                Ok(pr)
+                Ok((pr.head.name.clone(), pr))
             })
-            .transpose()
+            .collect()
     }
 
     fn observe_parent(&mut self, github: &GitHub<'_>, pr: &RecoveryPullRequest) -> Result<()> {
@@ -302,14 +320,15 @@ impl Transition {
             &self.desired(stack, self.plan.link_native),
             &self.observed(&git.repo.trunk),
         )?;
-        pairs
-            .into_iter()
-            .map(|(ancestor, descendant)| {
+        crate::commands::parallel_cached(
+            pairs.into_iter().collect(),
+            |_| None,
+            |(ancestor, descendant)| {
                 git.is_ancestor(&ancestor, &descendant)
                     .map(|answer| ((ancestor, descendant), answer))
-            })
-            .collect::<Result<BTreeMap<_, _>>>()
-            .map(Ancestry)
+            },
+        )
+        .map(|answers| Ancestry(answers.into_iter().collect()))
     }
 
     fn staging(&self) -> Option<&str> {
@@ -322,6 +341,10 @@ impl Transition {
 
     pub(super) const fn cleanup_candidates(&self) -> &BTreeMap<String, String> {
         &self.temporary
+    }
+
+    pub(super) fn destination(&self) -> &str {
+        &self.destination
     }
 
     fn check_dependants(
@@ -423,18 +446,45 @@ impl Transition {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(super) fn apply(&self, github: &GitHub<'_>, state: &State, bases: &[String]) -> Result<()> {
+        self.apply_with_ancestry(github, state, bases, None)
+    }
+
+    fn check_strategy(
+        &self,
+        git: Git<'_>,
+        stack: &[Commit],
+        prior: Option<&Ancestry>,
+    ) -> Result<()> {
+        let desired = self.desired(stack, self.plan.link_native);
+        let observed = self.observed(&git.repo.trunk);
+        let requirements = Ancestry::requirements(&desired, &observed)?;
+        let reusable = prior.filter(|answers| answers.0.keys().eq(requirements.iter()));
+        let current;
+        let ancestry = match reusable {
+            Some(prior) if git.complete_graph()? => prior,
+            _ => {
+                current = self.ancestry(git, stack)?;
+                &current
+            }
+        };
+        ancestry.verify_strategy(&self.plan.strategy, &desired, &observed)
+    }
+
+    pub(super) fn apply_with_ancestry(
+        &self,
+        github: &GitHub<'_>,
+        state: &State,
+        bases: &[String],
+        ancestry: Option<&Ancestry>,
+    ) -> Result<()> {
         self.validate_selection(&state.stack, state.start, bases)?;
         let git = Git {
             commands: github.commands,
             repo: &github.config.repo,
         };
-        let ancestry = self.ancestry(git, &state.stack)?;
-        ancestry.verify_strategy(
-            &self.plan.strategy,
-            &self.desired(&state.stack, self.plan.link_native),
-            &self.observed(&git.repo.trunk),
-        )?;
+        self.check_strategy(git, &state.stack, ancestry)?;
         let current = self.prepare_native(github, state, bases)?;
         if let Some(reference) = self.staging() {
             let anchor = Commit {
@@ -444,17 +494,28 @@ impl Transition {
             };
             git.push_with_leases(&[&anchor], Some(&current.refs))?;
         }
-        for entry in &current.entries {
-            if let Some(pr) = &entry.pr {
+        let changes: Vec<_> = current
+            .entries
+            .iter()
+            .filter_map(|entry| entry.pr.as_ref().map(|pr| (entry, pr)))
+            .filter_map(|(entry, pr)| {
                 let base = self.publication_base(entry.index);
-                if pr.base.name != base {
-                    github.retarget_recovery(pr, base)?;
-                }
-            }
-        }
-        self.verify_heads(github, state, false)?;
-        self.fresh_refs(git, &state.stack)?;
-        self.check_dependants(github, true, None)?;
+                (pr.base.name != base).then(|| (pr.clone(), base.to_owned()))
+            })
+            .collect();
+        github
+            .commands
+            .diagnostics
+            .phase("PR base transitions", || {
+                github.retarget_recoveries(&changes)
+            })?;
+        crate::commands::parallel_pair(
+            || self.fresh_refs(git, &state.stack),
+            || {
+                self.verify_heads(github, state, false)?;
+                self.check_dependants(github, true, None)
+            },
+        )?;
         github.invalidate_heads(
             &self
                 .entries
@@ -570,9 +631,10 @@ impl Transition {
             .iter()
             .map(|entry| entry.reference.clone())
             .collect::<Vec<_>>();
-        let refs = self.fresh_refs(git, stack)?;
-        let (observed_recovery, acquired) =
-            github.observe_recovery_with_budget(&references, &self.numbers(), started)?;
+        let (refs, (observed_recovery, acquired)) = crate::commands::parallel_pair(
+            || self.fresh_refs(git, stack),
+            || github.observe_recovery_with_budget(&references, &self.numbers(), started),
+        )?;
         for parent in self.parents.values() {
             if github.recovery_pr_with_budget(parent.pr.number, Some(started))? != parent.pr {
                 bail!("merged downstack evidence changed before base recovery");
@@ -616,23 +678,39 @@ impl Transition {
     }
 
     fn verify_heads(&self, github: &GitHub<'_>, state: &State, published: bool) -> Result<()> {
-        for entry in &self.entries {
-            if let Some(pr) = &entry.pr {
-                let mut expected = pr.clone();
-                expected.stack = None;
-                if published {
-                    expected.head.sha.clone_from(&state.stack[entry.index].hash);
-                }
-                policy::same_recovery_head(
-                    &expected,
-                    &github.recovery_pr(pr.number)?,
-                    if published {
-                        &self.bases[entry.index]
-                    } else {
-                        self.publication_base(entry.index)
-                    },
-                )?;
+        let observed = github.recovery_prs(&self.numbers())?;
+        self.verify_observed(state, published, &observed)
+    }
+
+    fn verify_observed(
+        &self,
+        state: &State,
+        published: bool,
+        observed: &[RecoveryPullRequest],
+    ) -> Result<()> {
+        if observed.len() != self.numbers().len() {
+            bail!("incomplete publication transition observation");
+        }
+        for ((entry, pr), actual) in self
+            .entries
+            .iter()
+            .filter_map(|entry| entry.pr.as_ref().map(|pr| (entry, pr)))
+            .zip(observed)
+        {
+            let mut expected = pr.clone();
+            expected.stack = None;
+            if published {
+                expected.head.sha.clone_from(&state.stack[entry.index].hash);
             }
+            policy::same_recovery_head(
+                &expected,
+                actual,
+                if published {
+                    &self.bases[entry.index]
+                } else {
+                    self.publication_base(entry.index)
+                },
+            )?;
         }
         Ok(())
     }
@@ -654,35 +732,52 @@ impl Transition {
     pub(super) fn complete(&self, github: &GitHub<'_>, state: &State) -> Result<()> {
         self.require_published_refs(github, state)?;
         // All final refs are now fixed; no old/new combinations remain.
-        for entry in &self.entries {
-            if let Some(pr) = &entry.pr {
+        let changes: Vec<_> = self
+            .entries
+            .iter()
+            .filter_map(|entry| entry.pr.as_ref().map(|pr| (entry, pr)))
+            .filter_map(|(entry, pr)| {
+                let base = self.publication_base(entry.index);
+                if base == self.bases[entry.index] {
+                    return None;
+                }
                 let mut expected = pr.clone();
                 expected.stack = None;
                 expected.head.sha.clone_from(&state.stack[entry.index].hash);
-                self.publication_base(entry.index)
-                    .clone_into(&mut expected.base.name);
-                if expected.base.name != self.bases[entry.index] {
-                    github.retarget_recovery(&expected, &self.bases[entry.index])?;
-                }
-            }
-        }
-        self.verify_published(github, state)
+                base.clone_into(&mut expected.base.name);
+                Some((expected, self.bases[entry.index].clone()))
+            })
+            .collect();
+        github
+            .commands
+            .diagnostics
+            .phase("PR base transitions", || {
+                github.retarget_recoveries(&changes)
+            })?;
+        Ok(())
     }
 
-    pub(super) fn verify_published(&self, github: &GitHub<'_>, state: &State) -> Result<()> {
-        self.verify_heads(github, state, true)
+    pub(super) fn verify_published(
+        &self,
+        state: &State,
+        observed: &[RecoveryPullRequest],
+    ) -> Result<()> {
+        self.verify_observed(state, true, observed)
     }
 
     pub(super) fn finish(&self, github: &GitHub<'_>, state: &State) -> Result<()> {
         self.require_published_refs(github, state)?;
-        for entry in &self.entries {
-            if let Some(pr) = &entry.pr {
-                let actual = github.recovery_pr(pr.number)?;
-                let mut expected = pr.clone();
-                expected.head.sha.clone_from(&state.stack[entry.index].hash);
-                expected.stack.clone_from(&actual.stack);
-                policy::same_recovery_head(&expected, &actual, &self.bases[entry.index])?;
-            }
+        let observed = github.recovery_prs(&self.numbers())?;
+        for ((entry, pr), actual) in self
+            .entries
+            .iter()
+            .filter_map(|entry| entry.pr.as_ref().map(|pr| (entry, pr)))
+            .zip(observed)
+        {
+            let mut expected = pr.clone();
+            expected.head.sha.clone_from(&state.stack[entry.index].hash);
+            expected.stack.clone_from(&actual.stack);
+            policy::same_recovery_head(&expected, &actual, &self.bases[entry.index])?;
         }
         Ok(())
     }

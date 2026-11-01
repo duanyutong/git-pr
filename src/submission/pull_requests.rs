@@ -39,6 +39,7 @@ pub(super) struct Publication {
     dependant_times: Vec<Cell<Instant>>,
     transition: Option<super::transition::Transition>,
     actions: Arc<PublicationPlan>,
+    ancestry: Option<Ancestry>,
     leases: Arc<std::collections::BTreeMap<String, Option<String>>>,
     cleanup: std::collections::BTreeMap<String, String>,
     destination: String,
@@ -80,34 +81,43 @@ impl Publication {
             dependant_times: Vec::new(),
             transition: None,
             actions: Arc::default(),
+            ancestry: None,
             leases: Arc::default(),
             cleanup: std::collections::BTreeMap::new(),
             destination: String::new(),
         };
         plan.observe_identities(github, stack, start)?;
-        plan.observe_refs(github, stack)?;
-        let desired =
-            DesiredPublication::new(stack, start, &plan.bases, github.config.github_stack);
-        if desired.changes_bases(&plan.observed(&github.config.repo.trunk)) {
+        if DesiredPublication::new(stack, start, &plan.bases, github.config.github_stack)
+            .changes_bases(&plan.observed(&github.config.repo.trunk))
+        {
             let transition =
                 super::transition::Transition::observe(github, stack, start, &plan.bases)
                     .context("unsafe publication: publication transition could not be verified")?;
             plan.leases = Arc::clone(&transition.refs);
+            transition.destination().clone_into(&mut plan.destination);
+            plan.cleanup.extend(transition.cleanup_candidates().clone());
             plan.transition = Some(transition);
+        } else {
+            plan.observe_refs(github)?;
         }
         let git = Git {
             commands: github.commands,
             repo: &github.config.repo,
         };
+        plan.check_unreviewed_heads(git, stack)?;
         let ancestry = plan.transition.as_ref().map_or_else(
             || Ok(Ancestry::default()),
             |transition| transition.ancestry(git, stack),
         )?;
         plan.actions = Arc::new(PublicationPlan::derive(
-            &desired,
+            &DesiredPublication::new(stack, start, &plan.bases, github.config.github_stack),
             &plan.observed(&github.config.repo.trunk),
             &ancestry,
         )?);
+        // Retain only evidence whose reuse avoids several ancestry processes.
+        if ancestry.0.len() > 2 {
+            plan.ancestry = Some(ancestry);
+        }
         if let Some(transition) = &mut plan.transition {
             transition.plan = Arc::clone(&plan.actions);
             transition.prepare_staging(git)?;
@@ -236,7 +246,7 @@ impl Publication {
         Ok(())
     }
 
-    fn observe_refs(&mut self, github: &GitHub<'_>, stack: &[Commit]) -> Result<()> {
+    fn observe_refs(&mut self, github: &GitHub<'_>) -> Result<()> {
         let git = Git {
             commands: github.commands,
             repo: &github.config.repo,
@@ -262,6 +272,10 @@ impl Publication {
             .filter(|(reference, _)| temporary_owner(reference).is_some())
             .filter_map(|(reference, tip)| tip.as_ref().map(|tip| (reference.clone(), tip.clone())))
             .collect();
+        Ok(())
+    }
+
+    fn check_unreviewed_heads(&self, git: Git<'_>, stack: &[Commit]) -> Result<()> {
         for (index, reference, pr) in &self.entries {
             if pr.is_none()
                 && let Some(Some(oid)) = self.leases.get(reference)
@@ -327,15 +341,26 @@ impl Publication {
                 "publication selection changed after preparation; refusing to publish an unverified selection"
             );
         }
-        if published {
-            github.invalidate_heads(
-                &self
+        let recovery = if published {
+            let references = self
+                .entries
+                .iter()
+                .map(|(_, reference, _)| reference.clone())
+                .collect::<Vec<_>>();
+            if self.transition.is_some() {
+                let numbers = self
                     .entries
                     .iter()
-                    .map(|(_, reference, _)| reference.clone())
-                    .collect::<Vec<_>>(),
-            );
-        }
+                    .filter_map(|(_, _, identity)| identity.as_ref().map(|pr| pr.number))
+                    .collect::<Vec<_>>();
+                Some(github.observe_recovery(&references, &numbers)?)
+            } else {
+                github.invalidate_heads(&references);
+                None
+            }
+        } else {
+            None
+        };
         let mut commits = state
             .stack
             .iter_mut()
@@ -343,19 +368,20 @@ impl Publication {
             .skip(state.start)
             .filter(|(_, commit)| !commit.skip);
         for chunk in self.entries.chunks(25) {
-            github.observe(
-                &chunk
+            if recovery.is_none() {
+                let references = chunk
                     .iter()
                     .map(|(_, reference, _)| reference.clone())
-                    .collect::<Vec<_>>(),
-            )?;
-            github.refresh_prs(
-                &chunk
-                    .iter()
-                    .map(|(_, reference, _)| github.observed_head(reference, "all"))
-                    .filter(|n| *n != 0)
-                    .collect::<Vec<_>>(),
-            )?;
+                    .collect::<Vec<_>>();
+                github.observe(&references)?;
+                github.refresh_prs(
+                    &chunk
+                        .iter()
+                        .map(|(_, reference, _)| github.observed_head(reference, "all"))
+                        .filter(|n| *n != 0)
+                        .collect::<Vec<_>>(),
+                )?;
+            }
             for ((index, reference, expected), (actual_index, commit)) in
                 chunk.iter().zip(commits.by_ref())
             {
@@ -397,8 +423,8 @@ impl Publication {
                 observed.set(acquired);
             }
         }
-        if published && let Some(recovery) = &self.transition {
-            recovery.verify_published(github, state)?;
+        if let (Some(transition), Some(recovery)) = (&self.transition, recovery) {
+            transition.verify_published(state, &recovery)?;
         }
         Ok(())
     }
@@ -455,7 +481,12 @@ impl Application {
                 "Preparing publication transition",
                 "Publication transition prepared",
             );
-            transition.apply(github, state, &publication.bases)?;
+            transition.apply_with_ancestry(
+                github,
+                state,
+                &publication.bases,
+                publication.ancestry.as_ref(),
+            )?;
             self.commands
                 .terminal
                 .stage_with_completion("Publishing branches", "Publication reconciled");
