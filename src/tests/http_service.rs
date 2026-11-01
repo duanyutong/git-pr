@@ -13,6 +13,31 @@ pub(crate) fn respond(
 ) -> Result<Value> {
     let payload = body.cloned().unwrap_or(Value::Null);
     if path == "graphql" {
+        if payload["query"]
+            .as_str()
+            .unwrap()
+            .starts_with("mutation Retarget")
+        {
+            let input = &payload["variables"]["input"];
+            let number: u64 = input["pullRequestId"]
+                .as_str()
+                .unwrap()
+                .trim_start_matches("PR_")
+                .parse()
+                .unwrap();
+            let pr = prs.get_mut(&number).unwrap();
+            if pr["state"] != "open" || pr["merged"] == true || pr["stack"].is_object() {
+                bail!("Cannot retarget a closed or native member PR");
+            }
+            pr["base"]["ref"] = input["baseRefName"].clone();
+            let mut node = recovery_node(pr);
+            if let Some(next) = payload["variables"]["next"].as_u64() {
+                node["repository"] =
+                    json!({"next":prs.get(&next).map_or(Value::Null,recovery_node)});
+            }
+            return Ok(json!({"data":{"retarget":{"pullRequest":node}}}));
+        }
+
         if payload["query"].as_str().unwrap().starts_with("mutation") {
             let mut data = json!({});
             for (key, input) in payload["variables"].as_object().unwrap() {
@@ -34,6 +59,12 @@ pub(crate) fn respond(
         }
         let mut repository = json!({});
         for (key, reference) in payload["variables"].as_object().unwrap() {
+            if let Some(index) = key.strip_prefix('r') {
+                repository[format!("p{index}")] = prs
+                    .get(&reference.as_u64().unwrap())
+                    .map_or(Value::Null, recovery_node);
+                continue;
+            }
             if let Some(index) = key.strip_prefix('b') {
                 repository[format!("p{index}")] = json!({"nodes":prs.values().filter(|p| p["base"]["ref"] == *reference && p["state"] == "open").map(|p| json!({"number":p["number"],"headRefName":p["head"]["ref"]})).collect::<Vec<_>>(),"pageInfo":{"hasNextPage":false}});
                 continue;
@@ -48,7 +79,12 @@ pub(crate) fn respond(
             let Some(index) = key.strip_prefix('h') else {
                 continue;
             };
-            let nodes: Vec<_> = prs.values().filter(|p| p["head"]["ref"] == *reference).map(|p| json!({"number":p["number"],"id":p.get("node_id").cloned().unwrap_or_else(||json!(format!("PR_{}",p["number"]))),"title":p["title"].as_str().unwrap_or(""),"body":p["body"].as_str().unwrap_or(""),"state":p["state"].as_str().unwrap_or("open").to_uppercase(),"merged":p.get("merged").unwrap_or(&json!(false)),"isDraft":p["draft"].as_bool().unwrap_or(false),"headRefName":p["head"]["ref"],"baseRefName":p["base"]["ref"],"headRepository":{"nameWithOwner":"org/repo"},"autoMergeRequest":if p["auto_merge"].is_object() {json!({"enabledAt":"2026-10-27T00:00:00Z"})} else {p["auto_merge"].clone()},"stack":p["stack"],"labels":{"nodes":p["labels"].as_array().into_iter().flatten().map(|l| if l.is_string(){json!({"name":l})} else {l.clone()}).collect::<Vec<_>>(),"pageInfo":{"hasNextPage":false}}})).collect();
+            let nodes: Vec<_> = prs.values().filter(|p| p["head"]["ref"] == *reference).map(|p| { let mut node = json!({"number":p["number"],"id":p.get("node_id").cloned().unwrap_or_else(||json!(format!("PR_{}",p["number"]))),"title":p["title"].as_str().unwrap_or(""),"body":p["body"].as_str().unwrap_or(""),"state":p["state"].as_str().unwrap_or("open").to_uppercase(),"merged":p.get("merged").unwrap_or(&json!(false)),"isDraft":p["draft"].as_bool().unwrap_or(false),"headRefName":p["head"]["ref"],"baseRefName":p["base"]["ref"],"headRepository":{"nameWithOwner":"org/repo"},"autoMergeRequest":if p["auto_merge"].is_object() {json!({"enabledAt":"2026-10-27T00:00:00Z"})} else {p["auto_merge"].clone()},"stack":p["stack"],"labels":{"nodes":p["labels"].as_array().into_iter().flatten().map(|l| if l.is_string(){json!({"name":l})} else {l.clone()}).collect::<Vec<_>>(),"pageInfo":{"hasNextPage":false}}});
+                if payload["query"].as_str().unwrap().starts_with("query RecoveryHeads") {
+                    node.as_object_mut().unwrap().extend(recovery_node(p).as_object().unwrap().clone());
+                }
+                node
+            }).collect();
             repository[format!("p{index}")] =
                 json!({"nodes":nodes,"pageInfo":{"hasNextPage":false}});
         }
@@ -187,4 +223,15 @@ pub(crate) fn respond(
 
 fn label_name(value: &Value) -> &str {
     value.as_str().or_else(|| value["name"].as_str()).unwrap()
+}
+
+/// Complete transition evidence, independent of the ordinary content observation.
+pub(crate) fn recovery_node(pr: &Value) -> Value {
+    json!({
+        "number":pr["number"],"id":pr["node_id"],"state":pr["state"].as_str().unwrap().to_uppercase(),
+        "merged":pr["merged"],"mergedAt":pr["merged_at"],"mergeCommit":pr["merge_commit_sha"].as_str().map(|oid|json!({"oid":oid})),"headRefName":pr["head"]["ref"],"headRefOid":pr["head"]["sha"],
+        "headRepository":{"nameWithOwner":pr["head"]["repo"]["full_name"]},
+        "baseRefName":pr["base"]["ref"],"baseRefOid":pr["base"]["sha"],
+        "baseRepository":{"nameWithOwner":pr["base"]["repo"]["full_name"]},"stack":pr["stack"]
+    })
 }

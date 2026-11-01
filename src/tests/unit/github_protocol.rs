@@ -511,7 +511,7 @@ fn closed_observations_cannot_skip_base_checks_or_authorise_content_and_native_m
 
 #[test]
 fn native_rebuild_refreshes_after_unstacking_and_never_retargets_changed_prs() {
-    for failure in ["read", "closed", "base"] {
+    for failure in ["read", "closed", "base", "identity", "head", "membership"] {
         with_github(|g, w| {
             for pr in w.0.lock().unwrap().prs.values_mut() {
                 pr["stack"] = json!({"number":9});
@@ -530,6 +530,17 @@ fn native_rebuild_refreshes_after_unstacking_and_never_retargets_changed_prs() {
                 } else {
                     "changed"
                 });
+                if failure == "identity" {
+                    node["id"] = json!("CHANGED");
+                    node["baseRefName"] = json!("main");
+                }
+                if failure == "head" {
+                    node["headRefName"] = json!("renamed");
+                }
+                if failure == "membership" {
+                    node["stack"] = json!({"number":10});
+                    node["baseRefName"] = json!("main");
+                }
                 graph_reply(
                     json!({"p0":connection(json!([node]),None),"p1":connection(json!([paged_node(102,"topic/2")]),None)}),
                 )
@@ -735,7 +746,7 @@ fn label_freshness_checks_scale_with_targets_and_expiry_retains_batching() {
                 .collect::<Vec<_>>()
         };
         for pr in observed {
-            g.observed(pr);
+            g.observed(pr, g.now());
         }
         let commits: Vec<_> = (1..=100)
             .map(|i| {
@@ -1118,8 +1129,8 @@ impl Transport for RateLimit {
         Ok(Response {
             acquired: std::time::Instant::now(),
             status: 200,
-            quota: crate::github::limits::Quota::default(),
             headers,
+            quota: crate::github::limits::Quota::default(),
             body: b"{}".to_vec(),
         })
     }
@@ -1842,7 +1853,7 @@ fn reduced_observations_require_authoritative_membership_only_for_native_changes
         w.0.lock().unwrap().prs.get_mut(&101).unwrap()["stack"] = json!({"number":9});
         assert!(g.verify_base(&target, "other").is_err());
         assert_eq!(w.trace(), [] as [serde_json::Value; 0]);
-        g.get_with_stack(101).unwrap();
+        g.get_with_stack(101, None).unwrap();
         assert_eq!(w.trace().len(), 1);
     });
     with_github(|g, w| {
@@ -1855,7 +1866,7 @@ fn reduced_observations_require_authoritative_membership_only_for_native_changes
         w.0.lock().unwrap().trace.clear();
         assert!(g.verify_base(&target, "main").is_err());
         assert_eq!(w.trace(), [] as [serde_json::Value; 0]);
-        g.get_with_stack(101).unwrap();
+        g.get_with_stack(101, None).unwrap();
         g.verify_base(&target, "main").unwrap();
         assert_eq!(w.trace().len(), 1);
         assert_eq!(w.trace()[0]["method"], "GET");
@@ -3065,4 +3076,789 @@ fn completion_observation_failure_retains_unverified_rows_without_authorising_wr
         Lifecycle::observed("closed", Some(false), None),
         Lifecycle::Closed
     );
+}
+
+#[derive(Debug)]
+struct ConfirmChange {
+    world: Arc<World>,
+    mode: &'static str,
+}
+impl crate::commands::Terminal for ConfirmChange {
+    fn out(&self, _: &str) {}
+    fn err(&self, _: &str) {}
+    fn confirm(&self, _: &str) -> bool {
+        let mut memory = self.world.0.lock().unwrap();
+        memory.clock_elapsed += std::time::Duration::from_secs(31);
+        match self.mode {
+            "identity" => memory.prs.get_mut(&101).unwrap()["node_id"] = json!("CHANGED"),
+            "base" => memory.prs.get_mut(&101).unwrap()["base"]["ref"] = json!("other"),
+            "eligibility" => {
+                memory.prs.get_mut(&101).unwrap()["auto_merge"] = json!({"merge_method":"squash"});
+            }
+            "missing" => {
+                memory.prs.remove(&101);
+            }
+            _ => {}
+        }
+        drop(memory);
+        if self.mode == "read" {
+            self.world.http(
+                "POST graphql",
+                vec![Reply::Failure("fresh PR evidence unavailable".into())],
+            );
+        }
+        if self.mode == "topology-read" {
+            self.world.http(
+                "GET stacks/9",
+                vec![Reply::Failure("fresh topology unavailable".into())],
+            );
+        }
+        if self.mode == "ambiguous" {
+            let mut memory = self.world.0.lock().unwrap();
+            let mut other = memory.prs[&101].clone();
+            other["number"] = json!(103);
+            other["node_id"] = json!("PR_103");
+            memory.prs.insert(103, other);
+        }
+        self.mode != "decline"
+    }
+}
+
+#[test]
+fn native_rebuilding_revalidates_the_confirmed_scope_before_dissolution() {
+    for mode in [
+        "same",
+        "read",
+        "topology-read",
+        "ambiguous",
+        "identity",
+        "base",
+        "eligibility",
+        "missing",
+        "membership",
+        "stack-base",
+        "decline",
+    ] {
+        with_github(|original, world| {
+            for pr in world.0.lock().unwrap().prs.values_mut() {
+                pr["stack"] = json!({"number":9});
+            }
+            let topology = json!({"number":9,"base":{"ref":"stale"},"pull_requests":[{"number":101},{"number":102}]});
+            let mut changed = topology.clone();
+            if mode == "membership" {
+                changed["pull_requests"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!({"number":999}));
+            }
+            if mode == "stack-base" {
+                changed["base"]["ref"] = json!("other");
+            }
+            world.http(
+                "GET stacks/9",
+                vec![
+                    Reply::Output(200, topology.to_string()),
+                    Reply::Output(200, changed.to_string()),
+                ],
+            );
+            let mut config = original.config.clone();
+            config.auto_accept = false;
+            let mut commands = world.commands();
+            commands.terminal = Arc::new(ConfirmChange {
+                world: world.clone(),
+                mode,
+            });
+            let github = GitHub {
+                config: &config,
+                commands: &commands,
+                session: Session::default(),
+                transport: world.as_ref(),
+                clock: Some(world.as_ref()),
+                template: "",
+            };
+            let mut commits = [commit(1), commit(2)];
+            commits[0].pr_number = 101;
+            commits[1].pr_number = 102;
+            world.0.lock().unwrap().trace.clear();
+            let result = github.manage_stack(&commits, "main");
+            if mode == "same" {
+                assert_eq!(result.unwrap(), super::native::StackOutcome::Updated);
+            } else if mode == "decline" {
+                assert_eq!(result.unwrap(), super::native::StackOutcome::Declined);
+            } else {
+                assert!(result.is_err(), "{mode}: {result:?}");
+            }
+            let trace = world.trace();
+            assert_eq!(
+                trace
+                    .iter()
+                    .filter(|event| event["path"] == "stacks/9/unstack")
+                    .count(),
+                usize::from(mode == "same"),
+                "{mode}"
+            );
+            assert_eq!(
+                trace
+                    .iter()
+                    .filter(|event| event["path"] == "stacks")
+                    .count(),
+                usize::from(mode == "same"),
+                "{mode}"
+            );
+        });
+    }
+}
+
+#[derive(Debug)]
+struct SlowRead(Arc<World>);
+impl Transport for SlowRead {
+    fn request(&self, request: Request<'_>) -> anyhow::Result<Vec<u8>> {
+        let bytes = self.0.request(request)?;
+        self.0.0.lock().unwrap().clock_elapsed += std::time::Duration::from_secs(31);
+        Ok(bytes)
+    }
+}
+
+#[test]
+fn observation_age_includes_transport_and_pagination_time() {
+    with_github(|original, world| {
+        let transport = SlowRead(world.clone());
+        let github = GitHub {
+            transport: &transport,
+            session: Session::default(),
+            ..*original
+        };
+        let acquired = github.now();
+        github.observe(&["topic/1".into()]).unwrap();
+        assert_eq!(super::guard(&github.session.pr_times)[&101], acquired);
+        assert_eq!(
+            super::guard(&github.session.head_times)["topic/1"],
+            acquired
+        );
+        assert!(!github.fresh(&acquired));
+        assert_eq!(github.find_head("topic/1", "open").unwrap(), 101);
+        let before = world.trace().len();
+        github.commit_prs(&format!("{:040x}", 1)).unwrap();
+        github.commit_prs(&format!("{:040x}", 1)).unwrap();
+        assert!(world.trace().len() >= before + 2);
+    });
+}
+
+#[test]
+fn pagination_keeps_the_oldest_contributing_acquisition_time() {
+    for labels in [false, true] {
+        with_github(|original, world| {
+            let transport = SlowRead(world.clone());
+            let github = GitHub {
+                transport: &transport,
+                session: Session::default(),
+                ..*original
+            };
+            let mut node = paged_node(101, "topic/1");
+            if labels {
+                node["labels"] = connection(json!([{"name":"initial"}]), Some("next"));
+            }
+            let second = if labels {
+                json!({"p0":{"number":101,"labels":connection(json!([{"name":"later"}]),None)}})
+            } else {
+                json!({"p0":connection(json!([paged_node(102,"topic/1")]), None)})
+            };
+            world.http("POST graphql", vec![graph_reply(json!({"p0":connection(json!([node]),if labels {None} else {Some("next")})})), graph_reply(second)]);
+            let acquired = github.now();
+            github.observe(&["topic/1".into()]).unwrap();
+            assert_eq!(github.now().duration_since(acquired).as_secs(), 62);
+            assert_eq!(github.acquisition_time([101]).unwrap(), acquired);
+            assert_eq!(
+                super::guard(&github.session.head_times)["topic/1"],
+                acquired
+            );
+        });
+    }
+}
+
+#[test]
+fn native_reconciliation_bounds_refreshes_when_acquisition_always_expires() {
+    for rebuilding in [false, true] {
+        with_github(|original, world| {
+            if rebuilding {
+                for pr in world.0.lock().unwrap().prs.values_mut() {
+                    pr["stack"] = json!({"number":9});
+                }
+                world.http("GET stacks/9", vec![Reply::Output(200, json!({"number":9,"base":{"ref":"stale"},"pull_requests":[{"number":101},{"number":102}]}).to_string())]);
+            }
+            let transport = SlowRead(world.clone());
+            let github = GitHub {
+                transport: &transport,
+                session: Session::default(),
+                ..*original
+            };
+            let mut commits = [commit(1), commit(2)];
+            commits[0].pr_number = 101;
+            commits[1].pr_number = 102;
+            world.0.lock().unwrap().trace.clear();
+            let error = github.manage_stack(&commits, "main").unwrap_err();
+            assert!(
+                format!("{error:#}").contains("exhausted its observation refreshes"),
+                "{error:#}"
+            );
+            assert!(
+                !world
+                    .trace()
+                    .iter()
+                    .any(|event| event["path"] == "stacks/9/unstack" || event["path"] == "stacks")
+            );
+            let outcome =
+                github.commands.outcomes.snapshot()[&crate::model::outcome::Operation::NativeStack];
+            assert!(!outcome.confirmed && !outcome.unconfirmed);
+        });
+    }
+}
+
+#[test]
+fn native_refreshed_evidence_cannot_bypass_the_automatic_wait_budget() {
+    with_github(|github, world| {
+        github.session.dispatch().reserve(github.now(), 450);
+        let mut commits = [commit(1), commit(2)];
+        commits[0].pr_number = 101;
+        commits[1].pr_number = 102;
+        let error = github.manage_stack(&commits, "main").unwrap_err();
+        assert!(error.is::<super::limits::Exhausted>());
+        assert!(!world.trace().iter().any(|event| event["path"] == "stacks"));
+    });
+}
+
+#[derive(Debug)]
+struct InvalidateTopologyRead<'a> {
+    world: &'a World,
+    session: &'a Session,
+}
+impl Transport for InvalidateTopologyRead<'_> {
+    fn request(&self, request: Request<'_>) -> anyhow::Result<Vec<u8>> {
+        let topology = request.url.ends_with("stacks/9");
+        let body = self.world.request(request)?;
+        if topology {
+            super::guard(&self.session.pr_times).clear();
+        }
+        Ok(body)
+    }
+}
+#[test]
+fn native_mutations_require_all_selected_acquisition_evidence() {
+    with_github(|original, world| {
+        for pr in world.0.lock().unwrap().prs.values_mut() {
+            pr["stack"] = json!({"number":9});
+        }
+        world.http(
+            "GET stacks/9",
+            vec![Reply::Output(
+                200,
+                json!({"number":9,"base":{"ref":"main"},"pull_requests":[{"number":101}]})
+                    .to_string(),
+            )],
+        );
+        let mut github = GitHub {
+            session: Session::default(),
+            ..*original
+        };
+        let transport = InvalidateTopologyRead {
+            world,
+            session: &github.session,
+        };
+        github.transport = &transport;
+        let mut commits = [commit(1), commit(2)];
+        commits[0].pr_number = 101;
+        commits[1].pr_number = 102;
+        // Only the first member currently claims membership, allowing a verified append.
+        world.0.lock().unwrap().prs.get_mut(&102).unwrap()["stack"] = json!(null);
+        let error = github.manage_stack(&commits, "main").unwrap_err();
+        assert!(
+            format!("{error:#}").contains("missing PR acquisition time"),
+            "{error:#}"
+        );
+        assert!(github.acquisition_time([]).is_err());
+    });
+}
+
+#[test]
+fn definite_dissolution_rejections_do_not_claim_an_unconfirmed_native_change() {
+    with_github(|github, world| {
+        for pr in world.0.lock().unwrap().prs.values_mut() {
+            pr["stack"] = json!({"number":9});
+        }
+        world.http("GET stacks/9",vec![Reply::Output(200,json!({"number":9,"base":{"ref":"stale"},"pull_requests":[{"number":101},{"number":102}]}).to_string())]);
+        world.http(
+            "POST stacks/9/unstack",
+            vec![Reply::Output(403, "permission denied".into())],
+        );
+        let mut commits = [commit(1), commit(2)];
+        commits[0].pr_number = 101;
+        commits[1].pr_number = 102;
+        assert!(github.manage_stack(&commits, "main").is_err());
+        let outcome =
+            github.commands.outcomes.snapshot()[&crate::model::outcome::Operation::NativeStack];
+        assert!(!outcome.confirmed && !outcome.unconfirmed);
+    });
+}
+
+#[derive(Debug)]
+struct NativeBudget {
+    world: Arc<World>,
+    mutations: std::sync::atomic::AtomicUsize,
+    read_rejected: std::sync::atomic::AtomicBool,
+    topology: bool,
+    delay: u64,
+}
+impl Transport for NativeBudget {
+    fn request(&self, request: Request<'_>) -> anyhow::Result<Vec<u8>> {
+        use std::sync::atomic::Ordering::SeqCst;
+        let mutation = request.method == "POST"
+            && (request.url.ends_with("/stacks")
+                || request.url.ends_with("/add")
+                || request.url.ends_with("/unstack"));
+        let reject = if mutation {
+            self.mutations.fetch_add(1, SeqCst) == 0
+        } else {
+            (if self.topology {
+                request.url.ends_with("/stacks/9")
+            } else {
+                request.url.ends_with("/graphql")
+            }) && self.mutations.load(SeqCst) == 1
+                && !self.read_rejected.swap(true, SeqCst)
+        };
+        if reject {
+            return Err(crate::github::http::HttpStatusError {
+                url: request.url.into(),
+                status: reqwest::StatusCode::TOO_MANY_REQUESTS,
+                body: "rate limited".into(),
+                quota: super::limits::Quota {
+                    retry_after: Some(std::time::Duration::from_secs(if mutation {
+                        600
+                    } else {
+                        self.delay
+                    })),
+                    ..Default::default()
+                },
+            }
+            .into());
+        }
+        self.world.request(request)
+    }
+}
+#[test]
+fn native_recovery_shares_its_budget_with_nested_head_and_topology_retries() {
+    for kind in ["create", "append", "rebuild"] {
+        for topology in [false, true] {
+            if kind == "create" && topology {
+                continue;
+            }
+            for delay in [200, 600] {
+                with_github(|original, world| {
+                    if kind != "create" {
+                        world.0.lock().unwrap().prs.get_mut(&101).unwrap()["stack"] =
+                            json!({"number":9});
+                    }
+                    if kind == "rebuild" {
+                        world.0.lock().unwrap().prs.get_mut(&102).unwrap()["stack"] =
+                            json!({"number":9});
+                        world.http("GET stacks/9", vec![Reply::Output(200, json!({"number":9,"base":{"ref":"stale"},"pull_requests":[{"number":101},{"number":102}]}).to_string())]);
+                    }
+                    let service = NativeBudget {
+                        world: world.clone(),
+                        mutations: 0.into(),
+                        read_rejected: false.into(),
+                        topology,
+                        delay,
+                    };
+                    let github = GitHub {
+                        transport: &service,
+                        session: Session::default(),
+                        ..*original
+                    };
+                    github
+                        .observe(&["topic/1".into(), "topic/2".into()])
+                        .unwrap();
+                    let mut commits = [commit(1), commit(2)];
+                    commits[0].pr_number = 101;
+                    commits[1].pr_number = 102;
+                    let started = github.now();
+                    let result = github.manage_stack(&commits, "main");
+                    if delay == 600 {
+                        assert!(
+                            format!("{:#}", result.unwrap_err()).contains("cumulative wait budget"),
+                            "{kind}/{topology}"
+                        );
+                        assert_eq!(github.now().duration_since(started).as_secs(), 600);
+                        assert_eq!(
+                            service.mutations.load(std::sync::atomic::Ordering::SeqCst),
+                            1
+                        );
+                    } else {
+                        result.unwrap();
+                        assert!(github.now().duration_since(started).as_secs() < 900);
+                    }
+                    let effect = github.commands.outcomes.snapshot()
+                        [&crate::model::outcome::Operation::NativeStack];
+                    assert_eq!(effect.confirmed, delay == 200);
+                    assert!(!effect.unconfirmed);
+                });
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+struct LabelWait<'a> {
+    world: &'a World,
+    labels: serde_json::Value,
+}
+impl crate::commands::Clock for LabelWait<'_> {
+    fn now(&self) -> std::time::Instant {
+        crate::commands::Clock::now(self.world)
+    }
+    fn sleep(&self, duration: std::time::Duration) {
+        crate::commands::Clock::sleep(self.world, duration);
+        if duration.as_secs() >= 2 {
+            self.world.0.lock().unwrap().prs.get_mut(&101).unwrap()["labels"] = self.labels.clone();
+        }
+    }
+}
+#[test]
+fn label_policy_renews_after_dispatch_waits_without_repeating_satisfied_changes() {
+    for labels in [json!(["tip-label", "human"]), json!(["required", "human"])] {
+        with_github(|original, world| {
+            world.0.lock().unwrap().prs.get_mut(&101).unwrap()["labels"] = json!([]);
+            let mut config = original.config.clone();
+            config.labels = vec!["required".into()];
+            config.tip_labels = vec!["tip-label".into()];
+            let clock = LabelWait {
+                world,
+                labels: labels.clone(),
+            };
+            let github = GitHub {
+                config: &config,
+                clock: Some(&clock),
+                session: Session::default(),
+                ..*original
+            };
+            github.observe(&["topic/1".into()]).unwrap();
+            github
+                .session
+                .dispatch()
+                .throttle(github.now(), std::time::Duration::from_secs(60));
+            let mut commit = commit(1);
+            commit.pr_number = 101;
+            world.0.lock().unwrap().trace.clear();
+            github.update_labels(&[(&commit, false)]).unwrap();
+            let remote = world.0.lock().unwrap().prs[&101]["labels"].clone();
+            assert!(
+                remote
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|label| label == "required")
+            );
+            assert!(
+                remote
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|label| label == "human")
+            );
+            assert!(
+                !remote
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|label| label == "tip-label")
+            );
+            let mutations = world
+                .trace()
+                .iter()
+                .filter(|event| {
+                    event["path"]
+                        .as_str()
+                        .is_some_and(|path| path.starts_with("issues/"))
+                })
+                .count();
+            assert_eq!(mutations, if labels[0] == "required" { 0 } else { 2 });
+            world.0.lock().unwrap().trace.clear();
+            github.update_labels(&[(&commit, false)]).unwrap();
+            assert_eq!(world.trace(), [] as [serde_json::Value; 0]);
+        });
+    }
+}
+
+#[derive(Debug)]
+struct LabelFault<'a> {
+    world: &'a World,
+    mode: &'static str,
+    calls: std::sync::atomic::AtomicUsize,
+}
+impl Transport for LabelFault<'_> {
+    fn request(&self, request: Request<'_>) -> anyhow::Result<Vec<u8>> {
+        if request.url.contains("/issues/") {
+            let attempt = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if self.mode == "lost" && attempt == 0 {
+                self.world.request(request)?;
+                anyhow::bail!("acknowledgement lost");
+            }
+            if attempt == 0 || self.mode == "repeat" {
+                return Err(crate::github::http::HttpStatusError {
+                    url: request.url.into(),
+                    status: reqwest::StatusCode::TOO_MANY_REQUESTS,
+                    body: "limited".into(),
+                    quota: super::limits::Quota {
+                        retry_after: Some(std::time::Duration::from_secs(
+                            if self.mode == "repeat" { 600 } else { 2 },
+                        )),
+                        ..Default::default()
+                    },
+                }
+                .into());
+            }
+        }
+        self.world.request(request)
+    }
+}
+#[test]
+fn label_recovery_handles_rejection_lost_acknowledgement_and_shared_exhaustion() {
+    for mode in ["rate", "lost", "repeat"] {
+        with_github(|original, world| {
+            world.0.lock().unwrap().prs.get_mut(&101).unwrap()["labels"] = json!(["human"]);
+            let mut config = original.config.clone();
+            config.labels = vec!["required".into()];
+            let transport = LabelFault {
+                world,
+                mode,
+                calls: 0.into(),
+            };
+            let github = GitHub {
+                config: &config,
+                transport: &transport,
+                session: Session::default(),
+                ..*original
+            };
+            let mut commit = commit(1);
+            commit.pr_number = 101;
+            let started = github.now();
+            let result = github.update_labels(&[(&commit, false)]);
+            if mode == "repeat" {
+                assert!(result.unwrap_err().is::<super::limits::Exhausted>());
+                assert_eq!(github.now().duration_since(started).as_secs(), 600);
+            } else {
+                result.unwrap();
+                assert_eq!(
+                    transport.calls.load(std::sync::atomic::Ordering::SeqCst),
+                    if mode == "lost" { 1 } else { 2 }
+                );
+                assert!(github.was_updated(101));
+                assert!(
+                    world.0.lock().unwrap().prs[&101]["labels"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|value| value == "human")
+                );
+            }
+            let effect =
+                github.commands.outcomes.snapshot()[&crate::model::outcome::Operation::Labels(101)];
+            assert_eq!(effect.confirmed, mode != "repeat");
+            assert!(!effect.unconfirmed);
+        });
+    }
+}
+
+#[derive(Debug)]
+struct AfterDissolution<'a> {
+    world: &'a World,
+    unstacked: std::sync::atomic::AtomicBool,
+}
+impl Transport for AfterDissolution<'_> {
+    fn request(&self, request: Request<'_>) -> anyhow::Result<Vec<u8>> {
+        if request.url.ends_with("/graphql")
+            && self.unstacked.load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(crate::github::http::HttpStatusError {
+                url: request.url.into(),
+                status: reqwest::StatusCode::TOO_MANY_REQUESTS,
+                body: "limited".into(),
+                quota: super::limits::Quota {
+                    retry_after: Some(std::time::Duration::from_secs(600)),
+                    ..Default::default()
+                },
+            }
+            .into());
+        }
+        let unstack = request.url.ends_with("/unstack");
+        let body = self.world.request(request)?;
+        if unstack {
+            self.world.0.lock().unwrap().clock_elapsed += std::time::Duration::from_secs(400);
+            self.unstacked
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+        Ok(body)
+    }
+}
+#[test]
+fn native_rebuild_keeps_confirmed_dissolution_when_renewal_exceeds_its_budget() {
+    with_github(|original, world| {
+        for pr in world.0.lock().unwrap().prs.values_mut() {
+            pr["stack"] = json!({"number":9});
+        }
+        world.http("GET stacks/9", vec![Reply::Output(200, json!({"number":9,"base":{"ref":"stale"},"pull_requests":[{"number":101},{"number":102}]}).to_string())]);
+        let transport = AfterDissolution {
+            world,
+            unstacked: false.into(),
+        };
+        let github = GitHub {
+            transport: &transport,
+            session: Session::default(),
+            ..*original
+        };
+        let mut commits = [commit(1), commit(2)];
+        commits[0].pr_number = 101;
+        commits[1].pr_number = 102;
+        let error = github.manage_stack(&commits, "main").unwrap_err();
+        assert!(
+            format!("{error:#}").contains("cumulative wait budget"),
+            "{error:#}"
+        );
+        let effect =
+            github.commands.outcomes.snapshot()[&crate::model::outcome::Operation::NativeStack];
+        assert!(effect.confirmed && !effect.unconfirmed);
+        assert!(
+            !world
+                .trace()
+                .iter()
+                .any(|event| event["path"] == "stacks" && event["method"] == "POST")
+        );
+    });
+}
+
+#[derive(Debug)]
+struct NativeOversleep<'a>(&'a World);
+impl crate::commands::Clock for NativeOversleep<'_> {
+    fn now(&self) -> std::time::Instant {
+        crate::commands::Clock::now(self.0)
+    }
+    fn sleep(&self, duration: std::time::Duration) {
+        crate::commands::Clock::sleep(self.0, duration + std::time::Duration::from_secs(901));
+    }
+}
+#[test]
+fn native_recovery_stops_without_a_clock_or_after_an_overlong_wait() {
+    for no_clock in [false, true] {
+        with_github(|original, world| {
+            let service = NativeBudget {
+                world: world.clone(),
+                mutations: 0.into(),
+                read_rejected: false.into(),
+                topology: false,
+                delay: 2,
+            };
+            let clock = NativeOversleep(world);
+            let github = GitHub {
+                transport: &service,
+                clock: if no_clock { None } else { Some(&clock) },
+                session: Session::default(),
+                ..*original
+            };
+            let mut commits = [commit(1), commit(2)];
+            commits[0].pr_number = 101;
+            commits[1].pr_number = 102;
+            let error = github.manage_stack(&commits, "main").unwrap_err();
+            assert!(format!("{error:#}").contains(if no_clock {
+                "no wait clock"
+            } else {
+                "cumulative wait budget"
+            }));
+            assert_eq!(
+                service.mutations.load(std::sync::atomic::Ordering::SeqCst),
+                1
+            );
+        });
+    }
+}
+
+#[derive(Debug)]
+struct ExpiringTopology<'a>(&'a World);
+impl Transport for ExpiringTopology<'_> {
+    fn request(&self, request: Request<'_>) -> anyhow::Result<Vec<u8>> {
+        let topology = request.url.ends_with("stacks/9");
+        let body = self.0.request(request)?;
+        if topology {
+            self.0.0.lock().unwrap().clock_elapsed += std::time::Duration::from_secs(901);
+        }
+        Ok(body)
+    }
+}
+#[test]
+fn native_topology_duration_cannot_escape_the_outer_budget() {
+    with_github(|original, world| {
+        for pr in world.0.lock().unwrap().prs.values_mut() {
+            pr["stack"] = json!({"number":9});
+        }
+        let transport = ExpiringTopology(world);
+        let github = GitHub {
+            transport: &transport,
+            session: Session::default(),
+            ..*original
+        };
+        let mut commits = [commit(1), commit(2)];
+        commits[0].pr_number = 101;
+        commits[1].pr_number = 102;
+        assert!(
+            github
+                .manage_stack(&commits, "main")
+                .unwrap_err()
+                .is::<super::limits::Exhausted>()
+        );
+        assert!(!world.trace().iter().any(|event| {
+            event["method"] == "POST"
+                && event["path"]
+                    .as_str()
+                    .is_some_and(|path| path.starts_with("stacks"))
+        }));
+    });
+}
+
+#[test]
+fn labels_refuse_missing_acquisition_or_unavailable_renewal_without_mutation() {
+    with_github(|github, world| {
+        let error = github
+            .label_request("POST", 101, "issues/101/labels", None, github.now())
+            .unwrap_err();
+        assert!(error.to_string().contains("acquisition time"));
+        let mut config = github.config.clone();
+        config.labels = vec!["required".into()];
+        let github = GitHub {
+            config: &config,
+            session: Session::default(),
+            ..*github
+        };
+        github.observe(&["topic/1".into()]).unwrap();
+        world.http(
+            "POST graphql",
+            vec![Reply::Failure("cannot renew labels".into())],
+        );
+        github
+            .session
+            .dispatch()
+            .throttle(github.now(), std::time::Duration::from_secs(60));
+        let mut commit = commit(1);
+        commit.pr_number = 101;
+        assert!(
+            format!(
+                "{:#}",
+                github.update_labels(&[(&commit, false)]).unwrap_err()
+            )
+            .contains("cannot renew labels")
+        );
+        assert!(
+            !world
+                .trace()
+                .iter()
+                .any(|event| event["path"] == "issues/101/labels")
+        );
+    });
 }

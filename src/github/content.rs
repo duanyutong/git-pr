@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 use std::{
     fmt::Write as _,
     sync::{Arc, atomic::Ordering},
+    time::Instant,
 };
 
 #[derive(Debug)]
@@ -49,6 +50,7 @@ impl GitHub<'_> {
             None,
         );
         let mut attempt = 0;
+        let started = self.now();
         loop {
             if let Some(status) = error.downcast_ref::<crate::github::http::HttpStatusError>()
                 && !matches!(status.status.as_u16(), 408 | 500..=599)
@@ -71,7 +73,12 @@ impl GitHub<'_> {
             }
             let deferred = error.downcast_ref::<limits::RefreshAfterWait>();
             if let Some(deferred) = deferred {
-                self.wait_for(deferred.delay, deferred.reason.label())?;
+                if attempt == limits::RETRIES {
+                    return Err(error.context(limits::Exhausted(
+                        "description recovery exhausted before another unsent deferral".into(),
+                    )));
+                }
+                self.wait_for_recovery(deferred.delay, deferred.reason.label(), started)?;
             }
             if let Some(throttled) = error.downcast_ref::<limits::Throttled>() {
                 let delay = if throttled.backoff {
@@ -81,7 +88,7 @@ impl GitHub<'_> {
                 };
                 self.session.dispatch().throttle(self.now(), delay);
             }
-            self.refresh_content(&mut changes, render).with_context(|| format!("could not establish the outcome of PR content updates for {numbers}; automatic recovery stopped"))?;
+            self.refresh_content(&mut changes, render, started).with_context(|| format!("could not establish the outcome of PR content updates for {numbers}; automatic recovery stopped"))?;
             if changes.is_empty() {
                 return Ok(());
             }
@@ -101,20 +108,26 @@ impl GitHub<'_> {
             };
             self.session.content_batch.store(batch, Ordering::Relaxed);
             if deferred.is_none() && !error.is::<limits::Throttled>() {
-                self.wait_for(
+                self.wait_for_recovery(
                     limits::backoff(attempt, false),
                     &format!(
                         "Recovering descriptions for {outstanding}; retry {}/{}",
                         attempt + 1,
                         limits::RETRIES
                     ),
+                    started,
                 )?;
             }
             let mut failure = None;
-            for chunk in changes.chunks_mut(batch) {
-                if let Err(cause) = self.send_recovery(chunk) {
-                    failure = Some(cause);
-                    break;
+            let mut pending = changes.as_mut_slice();
+            while !pending.is_empty() {
+                let count = pending.len().min(batch);
+                match self.send_recovery(&mut pending[..count], started) {
+                    Ok(sent) => pending = &mut pending[sent..],
+                    Err(cause) => {
+                        failure = Some(cause);
+                        break;
+                    }
                 }
             }
             match failure {
@@ -129,13 +142,14 @@ impl GitHub<'_> {
         &self,
         changes: &mut Vec<Change<'_>>,
         render: &mut dyn FnMut(&Commit, &PullRequest) -> Result<Option<String>>,
+        started: Instant,
     ) -> Result<()> {
         let heads = changes
             .iter()
             .map(|c| c.before.head.name.clone())
             .collect::<Vec<_>>();
         self.invalidate_heads(&heads);
-        self.observe(&heads)?;
+        self.observe_with_budget(&heads, started)?;
         for change in changes.iter_mut() {
             let current = self
                 .publication_pr(&change.before.head.name)?
@@ -184,7 +198,7 @@ impl GitHub<'_> {
         Ok(())
     }
 
-    fn send_recovery(&self, changes: &mut [Change<'_>]) -> Result<()> {
+    fn send_recovery(&self, changes: &mut [Change<'_>], started: Instant) -> Result<usize> {
         use std::fmt::Write as _;
         let mut declarations = Vec::new();
         let mut fields = String::new();
@@ -193,16 +207,17 @@ impl GitHub<'_> {
         for change in changes.iter() {
             let pr = &change.after;
             let alias = change.alias;
-            let input = json!({"pullRequestId":pr.node_id,"title":pr.title,"body":pr.body})
-                .to_string()
-                .into_bytes();
-            bytes += input.len() + 256;
-            if bytes > CONTENT_LIMIT {
-                return Err(limits::Exhausted(
-                    "recovered PR content exceeds the 1 MiB request budget".into(),
-                )
-                .into());
+            let (input, size) = Self::encode_content(&pr.node_id, &pr.title, &pr.body, None);
+            if bytes + size > CONTENT_LIMIT {
+                if variables.is_empty() {
+                    return Err(limits::Exhausted(
+                        "recovered PR content exceeds the 1 MiB request budget".into(),
+                    )
+                    .into());
+                }
+                break;
             }
+            bytes += size;
             declarations.push(format!("$p{alias}:UpdatePullRequestInput!"));
             let _ = write!(
                 fields,
@@ -210,7 +225,15 @@ impl GitHub<'_> {
             );
             variables.push((alias, input));
         }
-        self.dispatch_content(&declarations, &fields, variables, changes)
+        let count = variables.len();
+        self.dispatch_content(
+            &declarations,
+            &fields,
+            variables,
+            &mut changes[..count],
+            Some(started),
+        )
+        .map(|()| count)
     }
 }
 
@@ -324,7 +347,7 @@ impl GitHub<'_> {
             progress.targets(observations.iter().map(|change| change.before.number));
             let dispatched = observations.len();
             if let Err(error) =
-                self.dispatch_content(&declarations, &fields, variables, &mut observations)
+                self.dispatch_content(&declarations, &fields, variables, &mut observations, None)
             {
                 self.recover_content(observations, render, error)?;
             }
@@ -385,6 +408,7 @@ impl GitHub<'_> {
         #[cfg(test)]
         crate::tests::unit::support::CONTENT_ENCODINGS.update(|n| n + 1);
         ensure_content_size(&encoded)?;
+        let acquired = self.acquisition_time([before.number])?;
         let effect = crate::model::outcome::Operation::Description(before.number);
         self.commands.outcomes.start(effect.clone());
         let result = self.request_url_encoded(
@@ -392,13 +416,17 @@ impl GitHub<'_> {
             &self.repo_url(&format!("pulls/{}", before.number)),
             Some(&encoded),
             1,
-            true,
+            Some(acquired),
+            None,
         );
         let mut after = Arc::clone(&before);
         let metadata = Arc::make_mut(&mut after);
         metadata.title.clone_from(&commit.title);
         metadata.body = body;
         if let Err(error) = result {
+            if limits::rejected(&error) {
+                self.commands.outcomes.reject(effect);
+            }
             self.recover_content(
                 vec![Change {
                     alias: 0,
@@ -423,6 +451,7 @@ impl GitHub<'_> {
         fields: &str,
         variables: Vec<(usize, Vec<u8>)>,
         observations: &mut [Change<'_>],
+        recovery_started: Option<Instant>,
     ) -> Result<()> {
         let query = format!("mutation({}){{{fields}}}", declarations.join(","));
         let url = format!("https://api.{}/graphql", self.config.repo.host);
@@ -437,6 +466,8 @@ impl GitHub<'_> {
             payload.extend_from_slice(&input);
         }
         payload.extend_from_slice(b"}}");
+        let acquired =
+            self.acquisition_time(observations.iter().map(|change| change.before.number))?;
         for change in observations.iter() {
             self.commands
                 .outcomes
@@ -447,8 +478,22 @@ impl GitHub<'_> {
         // The initial 256-byte allowance and 256 bytes per alias exceed this
         // envelope's fixed ASCII overhead; input bytes were already bounded.
         let response = self
-            .request_url_encoded("POST", &url, Some(&payload), observations.len(), true)
+            .request_url_encoded(
+                "POST",
+                &url,
+                Some(&payload),
+                observations.len(),
+                Some(acquired),
+                recovery_started,
+            )
             .inspect_err(|error| {
+                if limits::rejected(error) {
+                    for change in observations.iter() {
+                        self.commands.outcomes.reject(
+                            crate::model::outcome::Operation::Description(change.before.number),
+                        );
+                    }
+                }
                 if let Some(partial) = error.downcast_ref::<super::dispatch::PartialGraphql>() {
                     self.acknowledge_content(&partial.data, observations);
                 }

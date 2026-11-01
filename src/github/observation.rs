@@ -1,11 +1,12 @@
 //! Complete, invocation-scoped observations of relevant pull requests.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
+use std::time::Instant;
 
 use super::{GitHub, Ordering, guard};
 use crate::model::PullRequest;
@@ -161,17 +162,51 @@ impl Cursor {
 
 #[derive(Debug)]
 struct Observation {
+    acquired: Instant,
     pr: PullRequest,
     labels: Cursor,
     stack_known: bool,
+    recovery: Option<crate::model::pull_request::RecoveryPullRequest>,
 }
 
 #[derive(Debug)]
 struct HeadObservation<'a> {
+    acquired: Instant,
     reference: &'a String,
     cursor: Cursor,
     prs: Vec<Observation>,
     seen: HashSet<u64>,
+}
+
+impl HeadObservation<'_> {
+    fn append(
+        &mut self,
+        connection: &mut Value,
+        repo: &str,
+        with_stack: bool,
+        recovery: Option<&HashSet<u64>>,
+        acquired: Instant,
+    ) -> Result<()> {
+        self.acquired = if self.cursor.after.is_none() {
+            acquired
+        } else {
+            self.acquired.min(acquired)
+        };
+        let Value::Array(nodes) = connection
+            .get_mut("nodes")
+            .context("incomplete PR observation")?
+            .take()
+        else {
+            bail!("incomplete PR observation");
+        };
+        // A concurrent update can move a PR between pages; keep its first observation.
+        self.prs.extend(
+            decode_nodes(nodes, repo, self.reference, with_stack, recovery, acquired)?
+                .into_iter()
+                .filter(|observation| self.seen.insert(observation.pr.number)),
+        );
+        self.cursor.advance(connection)
+    }
 }
 
 impl GitHub<'_> {
@@ -362,6 +397,15 @@ impl GitHub<'_> {
         references: &[String],
         selected: &std::collections::HashMap<u64, (&str, &str)>,
     ) -> Result<()> {
+        self.check_publication_dependants_with_budget(references, selected, None)
+    }
+
+    pub(crate) fn check_publication_dependants_with_budget(
+        &self,
+        references: &[String],
+        selected: &std::collections::HashMap<u64, (&str, &str)>,
+        started: Option<Instant>,
+    ) -> Result<()> {
         let (owner, name) = self
             .config
             .repo
@@ -392,10 +436,11 @@ impl GitHub<'_> {
                 );
                 let response: Value = serde_json::from_slice(
                     &self
-                        .request_url(
+                        .request_url_with_budget(
                             "POST",
                             &format!("https://api.{}/graphql", self.config.repo.host),
                             Some(&json!({"query":query,"variables":variables})),
+                            started,
                         )?
                         .body,
                 )
@@ -432,18 +477,79 @@ impl GitHub<'_> {
     }
 
     pub(crate) fn observe(&self, references: &[String]) -> Result<()> {
+        self.observe_mode(references, None, None).map(|_| ())
+    }
+
+    pub(super) fn observe_with_budget(
+        &self,
+        references: &[String],
+        started: Instant,
+    ) -> Result<()> {
+        self.observe_mode(references, None, Some(started))
+            .map(|_| ())
+    }
+
+    /// Refresh identity, content and selected recovery metadata in the same observation.
+    #[cfg(test)]
+    pub(crate) fn observe_recovery(
+        &self,
+        references: &[String],
+        numbers: &[u64],
+    ) -> Result<Vec<crate::model::pull_request::RecoveryPullRequest>> {
+        self.observe_recovery_with_budget(references, numbers, self.now())
+            .map(|(prs, _)| prs)
+    }
+
+    pub(crate) fn observe_recovery_with_budget(
+        &self,
+        references: &[String],
+        numbers: &[u64],
+        started: Instant,
+    ) -> Result<(
+        Vec<crate::model::pull_request::RecoveryPullRequest>,
+        Instant,
+    )> {
+        let selected = numbers.iter().copied().collect();
+        let mut attempt = 0;
+        loop {
+            self.invalidate_heads(references);
+            let (mut recovered, acquired) =
+                self.observe_mode(references, Some(&selected), Some(started))?;
+            let prs = numbers
+                .iter()
+                .map(|number| {
+                    recovered
+                        .remove(number)
+                        .with_context(|| format!("missing recovery observation for PR #{number}"))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            if self.fresh(&acquired) {
+                return Ok((prs, acquired));
+            }
+            if attempt == super::limits::RETRIES {
+                return Err(super::limits::Exhausted(
+                    "combined PR observation repeatedly expired during acquisition".into(),
+                )
+                .into());
+            }
+            attempt += 1;
+        }
+    }
+
+    fn observe_mode(
+        &self,
+        references: &[String],
+        recovery: Option<&HashSet<u64>>,
+        recovery_started: Option<Instant>,
+    ) -> Result<(
+        BTreeMap<u64, crate::model::pull_request::RecoveryPullRequest>,
+        Instant,
+    )> {
+        let mut recovered = BTreeMap::new();
+        let mut acquired = None;
         // Hold ownership while fetching: parallel consumers cannot start duplicate lookups.
         let mut heads = self.session.heads();
-        {
-            let mut times = guard(&self.session.head_times);
-            for reference in references {
-                if times.get(reference).is_some_and(|time| !self.fresh(time)) {
-                    times.remove(reference);
-                    heads.remove(reference);
-                }
-            }
-            drop(times);
-        }
+        self.expire_heads(&mut heads, references);
         let mut seen = HashSet::new();
         let missing: Vec<_> = references
             .iter()
@@ -459,6 +565,7 @@ impl GitHub<'_> {
             let mut observations: Vec<_> = chunk
                 .iter()
                 .map(|reference| HeadObservation {
+                    acquired: self.now(),
                     reference,
                     cursor: Cursor::default(),
                     prs: Vec::new(),
@@ -467,13 +574,15 @@ impl GitHub<'_> {
                 .collect();
             let mut pending: Vec<_> = (0..observations.len()).collect();
             while !pending.is_empty() {
-                let (mut response, with_stack) = self.observe_chunk(
+                let (mut response, with_stack, acquired) = self.observe_chunk(
                     &pending
                         .iter()
                         .map(|&i| &observations[i])
                         .collect::<Vec<_>>(),
                     owner,
                     name,
+                    recovery.is_some(),
+                    recovery_started,
                 )?;
                 for (alias, &index) in pending.iter().enumerate() {
                     let head = &mut observations[index];
@@ -482,20 +591,13 @@ impl GitHub<'_> {
                         .and_then(|data| data.get_mut("repository"))
                         .and_then(|repo| repo.get_mut(format!("p{alias}")))
                         .context("incomplete PR observation")?;
-                    let Value::Array(nodes) = connection
-                        .get_mut("nodes")
-                        .context("incomplete PR observation")?
-                        .take()
-                    else {
-                        bail!("incomplete PR observation");
-                    };
-                    // A concurrent update can move a PR between pages; keep its first observation.
-                    head.prs.extend(
-                        decode_nodes(nodes, &self.config.repo.name, head.reference, with_stack)?
-                            .into_iter()
-                            .filter(|observation| head.seen.insert(observation.pr.number)),
-                    );
-                    head.cursor.advance(connection)?;
+                    head.append(
+                        connection,
+                        &self.config.repo.name,
+                        with_stack,
+                        recovery,
+                        acquired,
+                    )?;
                 }
                 pending.retain(|&i| observations[i].cursor.after.is_some());
             }
@@ -506,23 +608,40 @@ impl GitHub<'_> {
                     .collect(),
                 owner,
                 name,
+                recovery_started,
             )?;
             for head in observations {
+                acquired =
+                    Some(acquired.map_or(head.acquired, |time: Instant| time.min(head.acquired)));
                 let mut numbers = Vec::new();
                 for observation in head.prs {
                     let number = observation.pr.number;
                     numbers.push(number);
-                    self.observed(observation.pr);
+                    if let Some(pr) = observation.recovery {
+                        recovered.insert(number, pr);
+                    }
+                    self.observed(observation.pr, observation.acquired);
                     if !observation.stack_known {
                         guard(&self.session.unknown_stacks).insert(number);
                     }
                 }
                 heads.insert(head.reference.clone(), numbers);
-                guard(&self.session.head_times).insert(head.reference.clone(), self.now());
+                guard(&self.session.head_times).insert(head.reference.clone(), head.acquired);
             }
         }
         drop(heads);
-        Ok(())
+        Ok((recovered, acquired.unwrap_or_else(|| self.now())))
+    }
+
+    fn expire_heads(&self, heads: &mut BTreeMap<String, Vec<u64>>, references: &[String]) {
+        let mut times = guard(&self.session.head_times);
+        for reference in references {
+            if times.get(reference).is_some_and(|time| !self.fresh(time)) {
+                times.remove(reference);
+                heads.remove(reference);
+            }
+        }
+        drop(times);
     }
 
     fn observe_chunk(
@@ -530,12 +649,19 @@ impl GitHub<'_> {
         chunk: &[&HeadObservation<'_>],
         owner: &str,
         name: &str,
-    ) -> Result<(Value, bool)> {
+        recovery: bool,
+        recovery_started: Option<Instant>,
+    ) -> Result<(Value, bool, Instant)> {
         let mut with_stack = !self.session.stack_field_unsupported.load(Ordering::Relaxed);
         loop {
             let mut declarations = String::from("$owner:String!,$name:String!");
             let mut fields = String::new();
             let mut variables = json!({"owner":owner,"name":name});
+            let recovery_fields = if recovery {
+                super::recovery::HEAD_RECOVERY_FIELDS
+            } else {
+                ""
+            };
             let stack = if with_stack { "stack{number}" } else { "" };
             for (i, head) in chunk.iter().enumerate() {
                 use std::fmt::Write as _;
@@ -551,25 +677,30 @@ impl GitHub<'_> {
                     });
                 let _ = write!(
                     fields,
-                    "p{i}:pullRequests(headRefName:$h{i},first:100{after},orderBy:{{field:UPDATED_AT,direction:DESC}}){{nodes{{id number title body state merged isDraft headRefName baseRefName headRepository{{nameWithOwner}} autoMergeRequest{{enabledAt}} labels(first:100){{nodes{{name}} pageInfo{{hasNextPage endCursor}}}} {stack}}} pageInfo{{hasNextPage endCursor}}}} "
+                    "p{i}:pullRequests(headRefName:$h{i},first:100{after},orderBy:{{field:UPDATED_AT,direction:DESC}}){{nodes{{id number title body state merged isDraft headRefName baseRefName headRepository{{nameWithOwner}} autoMergeRequest{{enabledAt}} labels(first:100){{nodes{{name}} pageInfo{{hasNextPage endCursor}}}} {stack} {recovery_fields}}} pageInfo{{hasNextPage endCursor}}}} "
                 );
                 variables[format!("h{i}")] = json!(head.reference);
             }
-            let query =
-                format!("query({declarations}){{repository(owner:$owner,name:$name){{{fields}}}}}");
+            let operation = if recovery {
+                "query RecoveryHeads"
+            } else {
+                "query"
+            };
+            let query = format!(
+                "{operation}({declarations}){{repository(owner:$owner,name:$name){{{fields}}}}}"
+            );
             let url = format!("https://api.{}/graphql", self.config.repo.host);
-            let response: Value = serde_json::from_slice(
-                &self
-                    .request_url(
-                        "POST",
-                        &url,
-                        Some(&json!({"query":query,"variables":variables})),
-                    )?
-                    .body,
-            )
-            .context("invalid GitHub GraphQL observation response")?;
+            let response = self.request_url_with_budget(
+                "POST",
+                &url,
+                Some(&json!({"query":query,"variables":variables})),
+                recovery_started,
+            )?;
+            let acquired = response.acquired;
+            let response: Value = serde_json::from_slice(&response.body)
+                .context("invalid GitHub GraphQL observation response")?;
             let Some(errors) = response.get("errors") else {
-                return Ok((response, with_stack));
+                return Ok((response, with_stack, acquired));
             };
             let unsupported = errors.as_array().is_some_and(|errors| {
                 !errors.is_empty()
@@ -597,6 +728,7 @@ impl GitHub<'_> {
         mut pending: Vec<&mut Observation>,
         owner: &str,
         name: &str,
+        recovery_started: Option<Instant>,
     ) -> Result<()> {
         pending.retain(|observation| observation.labels.after.is_some());
         while !pending.is_empty() {
@@ -620,20 +752,20 @@ impl GitHub<'_> {
                     "query({declarations}){{repository(owner:$owner,name:$name){{{fields}}}}}"
                 );
                 let url = format!("https://api.{}/graphql", self.config.repo.host);
-                let response: Value = serde_json::from_slice(
-                    &self
-                        .request_url(
-                            "POST",
-                            &url,
-                            Some(&json!({"query":query,"variables":variables})),
-                        )?
-                        .body,
-                )
-                .context("invalid GitHub label observation response")?;
+                let response = self.request_url_with_budget(
+                    "POST",
+                    &url,
+                    Some(&json!({"query":query,"variables":variables})),
+                    recovery_started,
+                )?;
+                let acquired = response.acquired;
+                let response: Value = serde_json::from_slice(&response.body)
+                    .context("invalid GitHub label observation response")?;
                 if let Some(errors) = response.get("errors") {
                     bail!("failed to observe PR labels: {errors}");
                 }
                 for (i, observation) in chunk.iter_mut().enumerate() {
+                    observation.acquired = observation.acquired.min(acquired);
                     let pr = &response["data"]["repository"][format!("p{i}")];
                     if pr["number"] != observation.pr.number {
                         bail!("unexpected PR identity in label page");
@@ -669,7 +801,8 @@ impl GitHub<'_> {
         {
             return Ok(Arc::clone(prs));
         }
-        let prs = match self.pages(&format!("commits/{hash}/pulls")) {
+        let started = self.now();
+        let (prs, acquired) = match self.pages(&format!("commits/{hash}/pulls")) {
             Err(error)
                 if error
                     .downcast_ref::<crate::github::http::HttpStatusError>()
@@ -682,25 +815,35 @@ impl GitHub<'_> {
                         ) && e.body.contains("No commit found")
                     }) =>
             {
-                Ok(Vec::new())
+                Ok((Vec::new(), started))
             }
             result => result,
         }?;
         let prs: Associations = prs.into();
-        cache.insert(hash.into(), (self.now(), Arc::clone(&prs)));
+        cache.insert(hash.into(), (acquired, Arc::clone(&prs)));
         drop(cache);
         Ok(prs)
     }
 
-    fn pages(&self, path: &str) -> Result<Vec<Association>> {
+    fn pages(&self, path: &str) -> Result<(Vec<Association>, Instant)> {
         let mut all = Vec::new();
         let mut seen = HashSet::new();
         let mut included = HashSet::new();
         let mut page = 1_u64;
+        let mut acquired = self.now();
         loop {
-            let bytes = self.request("GET", &format!("{path}?per_page=100&page={page}"), None)?;
-            let nodes: Vec<AssociationObservation> =
-                serde_json::from_slice(&bytes).with_context(|| {
+            let response = self.request_url(
+                "GET",
+                &self.repo_url(&format!("{path}?per_page=100&page={page}")),
+                None,
+            )?;
+            acquired = if page == 1 {
+                response.acquired
+            } else {
+                acquired.min(response.acquired)
+            };
+            let nodes: Vec<AssociationObservation> = serde_json::from_slice(&response.body)
+                .with_context(|| {
                     format!("invalid commit PR observation for {path}, page {page}")
                 })?;
             let complete = nodes.len() < 100;
@@ -731,7 +874,7 @@ impl GitHub<'_> {
                 }
             }
             if complete {
-                return Ok(all);
+                return Ok((all, acquired));
             }
             if !progress {
                 bail!(
@@ -751,6 +894,8 @@ fn decode_nodes(
     repo: &str,
     reference: &str,
     stack_known: bool,
+    recovery: Option<&HashSet<u64>>,
+    acquired: Instant,
 ) -> Result<Vec<Observation>> {
     let mut prs = Vec::new();
     for mut node in nodes {
@@ -764,6 +909,17 @@ fn decode_nodes(
         {
             bail!("incomplete PR identity or content observation");
         }
+        let recovery = if recovery.is_some_and(|selected| {
+            node["number"]
+                .as_u64()
+                .is_some_and(|number| selected.contains(&number))
+        }) {
+            let pr = super::recovery::decode_recovery(&node)?;
+            super::policy::validate_recovery_observation(&pr, pr.number, repo)?;
+            Some(pr)
+        } else {
+            None
+        };
         let mut labels = Cursor::default();
         labels.advance(&node["labels"])?;
         normalise_node(&mut node);
@@ -776,9 +932,11 @@ fn decode_nodes(
             bail!("incomplete PR identity or content observation");
         }
         prs.push(Observation {
+            acquired,
             pr,
             labels,
             stack_known,
+            recovery,
         });
     }
     Ok(prs)

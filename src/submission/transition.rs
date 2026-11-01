@@ -4,6 +4,7 @@ use anyhow::{Context, Result, bail};
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     sync::Arc,
+    time::Instant,
 };
 
 use super::{
@@ -39,7 +40,7 @@ pub(super) struct Transition {
     bases: Vec<String>,
     pub(super) plan: Arc<PublicationPlan>,
     temporary: BTreeMap<String, String>,
-    native: Option<u64>,
+    native: Option<(u64, Instant)>,
     anchor: String,
 }
 
@@ -136,8 +137,8 @@ impl Transition {
         );
         recovery.check_evidence(git)?;
         recovery.observe_temporary(git, &numbers, reserved)?;
-        recovery.check_dependants(github, false)?;
-        recovery.native = recovery.observe_native(github)?;
+        recovery.check_dependants(github, false, None)?;
+        recovery.native = recovery.observe_native(github, None)?;
         Ok(recovery)
     }
 
@@ -323,7 +324,12 @@ impl Transition {
         &self.temporary
     }
 
-    fn check_dependants(&self, github: &GitHub<'_>, prepared: bool) -> Result<()> {
+    fn check_dependants(
+        &self,
+        github: &GitHub<'_>,
+        prepared: bool,
+        started: Option<Instant>,
+    ) -> Result<()> {
         let selected: HashMap<_, _> = self
             .entries
             .iter()
@@ -338,7 +344,7 @@ impl Transition {
                 })
             })
             .collect();
-        github.check_publication_dependants(
+        github.check_publication_dependants_with_budget(
             &self
                 .refs
                 .keys()
@@ -346,10 +352,15 @@ impl Transition {
                 .cloned()
                 .collect::<Vec<_>>(),
             &selected,
+            started,
         )
     }
 
-    fn observe_native(&self, github: &GitHub<'_>) -> Result<Option<u64>> {
+    fn observe_native(
+        &self,
+        github: &GitHub<'_>,
+        started: Option<Instant>,
+    ) -> Result<Option<(u64, Instant)>> {
         let stacks: BTreeSet<_> = self
             .entries
             .iter()
@@ -367,9 +378,11 @@ impl Transition {
                 .filter(|pr| pr.stack.is_some())
                 .map(|pr| pr.number)
                 .collect();
-            github.check_transition_stack(number, &self.numbers(), &claimed)?;
+            return github
+                .check_transition_stack(number, &self.numbers(), &claimed, started)
+                .map(|acquired| Some((number, acquired)));
         }
-        Ok(number)
+        Ok(None)
     }
 
     fn numbers(&self) -> Vec<u64> {
@@ -422,36 +435,7 @@ impl Transition {
             &self.desired(&state.stack, self.plan.link_native),
             &self.observed(&git.repo.trunk),
         )?;
-        let mut current = self.fresh(github, &state.stack)?;
-        if self.changes_native() {
-            let base = state
-                .stack
-                .iter()
-                .enumerate()
-                .skip(state.start)
-                .find(|(_, commit)| !commit.skip)
-                .map_or(github.config.repo.trunk.as_str(), |(index, _)| {
-                    bases[index].as_str()
-                });
-            github.check_stack_eligibility(state.selected(), base, true)?;
-        }
-        if let Some(number) = current.native {
-            github.unstack_transition(number)?;
-            current = self.fresh(github, &state.stack)?;
-            if current
-                .entries
-                .iter()
-                .any(|e| e.pr.as_ref().is_some_and(|p| p.stack.is_some()))
-            {
-                bail!(
-                    "native stack transition is incomplete; publication stopped; retry from fresh remote observations"
-                );
-            }
-            github
-                .commands
-                .outcomes
-                .confirm(crate::model::outcome::Operation::NativeStack);
-        }
+        let current = self.prepare_native(github, state, bases)?;
         if let Some(reference) = self.staging() {
             let anchor = Commit {
                 hash: self.anchor.clone(),
@@ -470,7 +454,7 @@ impl Transition {
         }
         self.verify_heads(github, state, false)?;
         self.fresh_refs(git, &state.stack)?;
-        self.check_dependants(github, true)?;
+        self.check_dependants(github, true, None)?;
         github.invalidate_heads(
             &self
                 .entries
@@ -479,6 +463,66 @@ impl Transition {
                 .collect::<Vec<_>>(),
         );
         Ok(())
+    }
+
+    fn prepare_native(&self, github: &GitHub<'_>, state: &State, bases: &[String]) -> Result<Self> {
+        let started = github.now();
+        let mut attempt = 0;
+        loop {
+            let current = self.fresh(github, &state.stack, started)?;
+            if self.changes_native() {
+                let base = state
+                    .stack
+                    .iter()
+                    .enumerate()
+                    .skip(state.start)
+                    .find(|(_, commit)| !commit.skip)
+                    .map_or(github.config.repo.trunk.as_str(), |(index, _)| {
+                        bases[index].as_str()
+                    });
+                github.check_stack_eligibility_with_budget(
+                    state.selected(),
+                    base,
+                    true,
+                    Some(started),
+                )?;
+            }
+            let Some((number, acquired)) = current.native else {
+                return Ok(current);
+            };
+            match github.unstack_transition(number, acquired, started) {
+                Ok(()) => {
+                    let current = self.fresh(github, &state.stack, started)?;
+                    if current
+                        .entries
+                        .iter()
+                        .any(|entry| entry.pr.as_ref().is_some_and(|pr| pr.stack.is_some()))
+                    {
+                        bail!(
+                            "native stack transition is incomplete; publication stopped; retry from fresh remote observations"
+                        );
+                    }
+                    github
+                        .commands
+                        .outcomes
+                        .confirm(crate::model::outcome::Operation::NativeStack);
+                    return Ok(current);
+                }
+                Err(error) => {
+                    let Some((delay, reason)) = crate::github::limits::deferral(&error, attempt)
+                    else {
+                        return Err(error);
+                    };
+                    if attempt == crate::github::limits::RETRIES {
+                        return Err(
+                            error.context("native transition exhausted its automatic retries")
+                        );
+                    }
+                    github.wait_for_recovery(delay, reason.label(), started)?;
+                    attempt += 1;
+                }
+            }
+        }
     }
 
     fn fresh_refs(
@@ -516,45 +560,58 @@ impl Transition {
         Ok(refs)
     }
 
-    fn fresh(&self, github: &GitHub<'_>, stack: &[Commit]) -> Result<Self> {
+    fn fresh(&self, github: &GitHub<'_>, stack: &[Commit], started: Instant) -> Result<Self> {
         let git = Git {
             commands: github.commands,
             repo: &github.config.repo,
         };
-        let refs = self.fresh_refs(git, stack)?;
         let references = self
             .entries
             .iter()
             .map(|entry| entry.reference.clone())
             .collect::<Vec<_>>();
-        github.invalidate_heads(&references);
-        github.observe(&references)?;
+        let refs = self.fresh_refs(git, stack)?;
+        let (observed_recovery, acquired) =
+            github.observe_recovery_with_budget(&references, &self.numbers(), started)?;
         for parent in self.parents.values() {
-            if github.recovery_pr(parent.pr.number)? != parent.pr {
+            if github.recovery_pr_with_budget(parent.pr.number, Some(started))? != parent.pr {
                 bail!("merged downstack evidence changed before base recovery");
             }
         }
         let mut current = self.clone();
         current.refs = Arc::new(refs);
-        for entry in &mut current.entries {
+        for entry in &current.entries {
             let observed = github.publication_pr(&entry.reference)?;
             if observed.as_ref().map(|pr| (pr.number, &pr.node_id))
                 != entry.pr.as_ref().map(|pr| (pr.number, &pr.node_id))
             {
                 bail!("PR identity changed before base recovery");
             }
-            if let Some(expected) = &entry.pr {
-                let actual = github.recovery_pr(expected.number)?;
-                let mut expected = expected.clone();
-                if actual.stack.is_none() {
-                    expected.stack = None;
-                }
-                policy::same_recovery_head(&expected, &actual, &expected.base.name)?;
-                entry.pr = Some(actual);
-            }
         }
-        current.check_dependants(github, false)?;
-        current.native = current.observe_native(github)?;
+        for (expected, actual) in current
+            .entries
+            .iter_mut()
+            .filter_map(|entry| entry.pr.as_mut())
+            .zip(observed_recovery)
+        {
+            let mut before = expected.clone();
+            if actual.stack.is_none() {
+                before.stack = None;
+            }
+            policy::same_recovery_head(&before, &actual, &before.base.name)?;
+            *expected = actual;
+        }
+        current.check_dependants(github, false, Some(started))?;
+        current.native = current
+            .observe_native(github, Some(started))?
+            .map(|(number, topology_time)| (number, topology_time.min(acquired)));
+        crate::github::limits::check_window(
+            github.now(),
+            std::time::Duration::ZERO,
+            crate::github::limits::WaitReason::Mutation,
+            None,
+            Some(started),
+        )?;
         Ok(current)
     }
 

@@ -129,6 +129,48 @@ DEFECTS = (
             ),
         ),
     ),
+    Defect(
+        "acknowledged-rate-limit-cooldown",
+        "github::content::unit::fully_acknowledged_rate_limited_descriptions_preserve_the_next_request_deadline",
+        (
+            Change(
+                "src/github/dispatch.rs",
+                "            if let Err(error) = &response\n"
+                "                && let Some(throttled) = error.downcast_ref::<Throttled>()\n"
+                "            {\n"
+                "                schedule.throttle(self.now(), throttled.delay);\n"
+                "            }\n",
+                "",
+            ),
+        ),
+    ),
+    Defect(
+        "incomplete-response-quota-loss",
+        "github::dispatch::unit::incomplete_response_quotas_govern_read_retries_and_unknown_mutation_reconciliation",
+        (
+            Change(
+                "src/github/dispatch.rs",
+                "                .or_else(|| error.downcast_ref::<IncompleteResponse>().map(|e| &e.quota))\n",
+                "",
+            ),
+        ),
+    ),
+    Defect(
+        "native-nested-budget-renewal",
+        "github::unit::native_recovery_shares_its_budget_with_nested_head_and_topology_retries",
+        (
+            Change(
+                "src/github/native.rs",
+                "self.refresh_prs_with_budget(chunk, Some(started))?;",
+                "self.refresh_prs(chunk)?;",
+            ),
+        ),
+    ),
+    Defect(
+        "unguarded-label-wait",
+        "github::unit::label_policy_renews_after_dispatch_waits_without_repeating_satisfied_changes",
+        (Change("src/github/mod.rs", "            Some(acquired),", "            None,"),),
+    ),
 )
 
 

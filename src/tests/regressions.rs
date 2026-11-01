@@ -73,7 +73,7 @@ fn merged_downstack_recovery_uses_real_ancestry_and_preserves_the_open_pr() {
             let trace = f.trace();
             let patch = trace
                 .iter()
-                .position(|e| e["method"] == "PATCH" && e["body"]["base"] == "main")
+                .position(|e| e["body"]["variables"]["input"]["baseRefName"] == "main")
                 .unwrap();
             let push = trace.iter().position(|e| e["args"][0] == "push").unwrap();
             assert!(patch < push);
@@ -359,9 +359,10 @@ impl Transport for AdvanceTrunkAfterMutation {
             .transpose()?
             .unwrap_or_default();
         let trigger = match self.phase {
-            "retarget" => request.method == "PATCH" && body.get("base").is_some(),
+            "retarget" => body["variables"]["input"].get("baseRefName").is_some(),
             "description" => {
                 request.method == "POST"
+                    && body["variables"]["input"].get("baseRefName").is_none()
                     && body["query"]
                         .as_str()
                         .is_some_and(|query| query.contains("updatePullRequest"))

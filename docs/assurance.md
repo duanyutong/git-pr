@@ -69,10 +69,20 @@ The original source is restored between experiments, and the developer's source 
 | Duplicate trailer precedence reversal | Reverse parsed attribute order so that duplicate keys select a different effective value. | `duplicate_trailer_winners_survive_rewriting` |
 | Unbounded transient detail | Treat a workflow description as an unbounded operational label. | `workflow_details_leave_only_durable_output_on_the_terminal_screen` |
 | Permanent loading glyph | Restore a spinner to an ordinary fallback notice. | `oversized_operational_facts_never_leave_a_permanent_spinner` |
+| Acknowledged rate-limit cooldown loss | Omit the service cooldown when partial GraphQL data prevents automatic mutation replay. | `fully_acknowledged_rate_limited_descriptions_preserve_the_next_request_deadline` |
+| Incomplete response quota loss | Discard acquired quota metadata when response-body acquisition fails. | `incomplete_response_quotas_govern_read_retries_and_unknown_mutation_reconciliation` |
+
+The following submission cases additionally exercise nested dispatch boundaries.
+
+| Defect class | Deliberately restored decision | Required regression |
+| --- | --- | --- |
+| Native budget renewal | Omit the outer recovery budget from a renewed PR observation. | `native_recovery_shares_its_budget_with_nested_head_and_topology_retries` |
+| Stale label decision | Dispatch label mutations without the acquisition time supporting the policy decision. | `label_policy_renews_after_dispatch_waits_without_repeating_satisfied_changes` |
 
 The first five classes concern previously corrected defects; the sixth was independently detected by the new generated trailer assertions.
 The terminal cases require workflow detail to remain within the transient display budget and ordinary fallback notices to remain free of loading glyphs.
-A successful sensitivity run demonstrates that these eight exact defects are detected by the named assertions.
+The rate-limit cases require complete acknowledgements and incomplete responses to retain the service deadlines independently of mutation replay eligibility.
+A successful sensitivity run demonstrates that these twelve exact defects are detected by the named assertions.
 It does not establish that every conceivable variation of those defects has been enumerated.
 
 ## Mutation analysis

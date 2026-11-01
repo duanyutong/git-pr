@@ -25,6 +25,19 @@ impl GitHub<'_> {
         Ok(())
     }
 
+    pub(crate) fn wait_for_recovery(
+        &self,
+        delay: Duration,
+        reason: &str,
+        started: Instant,
+    ) -> Result<()> {
+        let remaining = limits::remaining(started, self.now());
+        if remaining.is_zero() || delay > remaining {
+            return Err(limits::Exhausted("automatic recovery exceeded its cumulative wait budget; no further request was sent".into()).into());
+        }
+        self.wait_for(delay, reason)
+    }
+
     fn wait_with_clock(&self, clock: &dyn crate::commands::Clock, delay: Duration, reason: &str) {
         let _activity = self.commands.activity(reason, Some(delay));
         let wait = self.commands.diagnostics.start("wait", || {
@@ -118,7 +131,8 @@ impl GitHub<'_> {
         url: &str,
         body: Option<&[u8]>,
         writes: usize,
-        reconcile: bool,
+        observed: Option<Instant>,
+        recovery_started: Option<Instant>,
     ) -> Result<Response> {
         let queue = self
             .commands
@@ -129,7 +143,7 @@ impl GitHub<'_> {
         let graphql = url.ends_with("/graphql");
         let _activity = if graphql && writes > 0 {
             self.commands
-                .activity(&format!("Updating {writes} PR description(s)"), None)
+                .activity(&format!("Updating {writes} PR(s)"), None)
         } else {
             self.commands.activity_with_detail(
                 &format!("GitHub {method}"),
@@ -139,18 +153,29 @@ impl GitHub<'_> {
         let mut waited = Duration::ZERO;
         let mut attempt = 0;
         let result = loop {
-            let (delay, reason) = schedule.ready(self.now(), graphql, writes);
+            let now = self.now();
+            let (delay, reason) = schedule.ready(now, graphql, writes);
+            if let Err(error) = limits::check_window(now, delay, reason, observed, recovery_started)
+            {
+                break Err(error);
+            }
             if let Some(clock) = self.clock.filter(|_| !delay.is_zero()) {
                 if reason.retry_budget() && delay > limits::WAIT_BUDGET.saturating_sub(waited) {
                     break Err(limits::Exhausted(format!("{reason}: required wait {}s exceeds the remaining automatic wait budget ({}s); no request was sent early. Retry after the indicated reset", delay.as_secs(), limits::WAIT_BUDGET.saturating_sub(waited).as_secs())).into());
-                }
-                if reconcile && delay >= Duration::from_secs(30) {
-                    break Err(limits::RefreshAfterWait { delay, reason }.into());
                 }
                 self.wait_with_clock(clock, delay, reason.label());
                 if reason.retry_budget() {
                     waited += delay;
                 }
+            }
+            if let Err(error) = limits::check_window(
+                self.now(),
+                Duration::ZERO,
+                reason,
+                observed,
+                recovery_started,
+            ) {
+                break Err(error);
             }
             schedule.reserve(self.now(), writes);
             let response = self.send_request(method, url, body, writes, attempt);
@@ -168,7 +193,8 @@ impl GitHub<'_> {
                 && let Some((delay, reason)) = retry(error, writes, attempt)
             {
                 let delay = delay.max(quota.delay().unwrap_or_default());
-                if reconcile {
+                schedule.throttle(self.now(), delay);
+                if observed.is_some() {
                     let backoff = error
                         .downcast_ref::<HttpStatusError>()
                         .is_some_and(|e| e.quota.delay().is_none())
@@ -177,19 +203,22 @@ impl GitHub<'_> {
                         let message = cause.to_string();
                         cause.context(Throttled {
                             delay,
-                            partial: true,
+                            partial: false,
                             backoff,
                             message,
                         })
                     });
                 }
-                schedule.throttle(self.now(), delay);
                 if attempt == limits::RETRIES || delay > limits::WAIT_BUDGET.saturating_sub(waited)
                 {
                     break response.with_context(|| limits::Exhausted(format!("GitHub retry exhausted after {} attempt(s) and {:.0}s waiting; next permitted retry requires {}s ({reason}). Inspect the operation before retrying", attempt + 1, waited.as_secs_f64(), delay.as_secs())));
                 }
                 let reason = format!("{reason}; retry {}/{}", attempt + 1, limits::RETRIES);
-                if let Err(wait_error) = self.wait_for(delay, &reason) {
+                let wait = recovery_started.map_or_else(
+                    || self.wait_for(delay, &reason),
+                    |started| self.wait_for_recovery(delay, &reason, started),
+                );
+                if let Err(wait_error) = wait {
                     break response.with_context(|| {
                         format!("automatic retry could not wait: {wait_error:#}")
                     });
@@ -202,24 +231,28 @@ impl GitHub<'_> {
         };
         drop(schedule);
         if let Ok(response) = &result {
-            if self.commands.verbose {
-                self.commands
-                    .debug(&String::from_utf8_lossy(&response.body));
-            }
-            if let Some(id) = response
-                .headers
-                .get("x-github-request-id")
-                .and_then(|v| v.to_str().ok())
-            {
-                self.commands.debug(&format!("GitHub request {id}"));
-            }
+            self.log_response(response);
         }
         result.with_context(|| format!("GitHub {method} {url} failed"))
+    }
+    fn log_response(&self, response: &Response) {
+        if self.commands.verbose {
+            self.commands
+                .debug(&String::from_utf8_lossy(&response.body));
+        }
+        if let Some(id) = response
+            .headers
+            .get("x-github-request-id")
+            .and_then(|v| v.to_str().ok())
+        {
+            self.commands.debug(&format!("GitHub request {id}"));
+        }
     }
 }
 
 pub(super) struct PartialGraphql {
     pub(super) data: Value,
+    pub(super) acquired: Instant,
 }
 
 impl std::fmt::Debug for PartialGraphql {
@@ -264,7 +297,10 @@ fn graphql_result(
         }
         .into();
         return Err(if partial {
-            error.context(PartialGraphql { data })
+            error.context(PartialGraphql {
+                data,
+                acquired: response.acquired,
+            })
         } else {
             error
         });

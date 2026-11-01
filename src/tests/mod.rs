@@ -9,6 +9,6 @@ mod support;
 pub(crate) mod unit;
 mod workflows;
 
-mod http_service;
+pub(crate) mod http_service;
 
 pub(crate) mod model_helpers;

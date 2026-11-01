@@ -5,8 +5,39 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub(super) const RETRIES: usize = 3;
+pub(crate) const RETRIES: usize = 3;
+pub(super) const FRESHNESS: Duration = Duration::from_secs(30);
 pub(super) const WAIT_BUDGET: Duration = Duration::from_mins(15);
+pub(super) fn remaining(started: Instant, now: Instant) -> Duration {
+    WAIT_BUDGET.saturating_sub(now.saturating_duration_since(started))
+}
+
+pub(crate) fn check_window(
+    now: Instant,
+    delay: Duration,
+    reason: WaitReason,
+    observed: Option<Instant>,
+    recovery_started: Option<Instant>,
+) -> anyhow::Result<()> {
+    if let Some(started) = recovery_started
+        && (remaining(started, now).is_zero() || delay > remaining(started, now))
+    {
+        return Err(Exhausted(
+            "automatic recovery exceeded its cumulative wait budget; no further request was sent"
+                .into(),
+        )
+        .into());
+    }
+    if observed.is_some_and(|acquired| {
+        now.saturating_duration_since(acquired)
+            .saturating_add(delay)
+            > FRESHNESS
+    }) {
+        return Err(RefreshAfterWait { delay, reason }.into());
+    }
+    Ok(())
+}
+
 pub(super) const CONTENT_BATCH: usize = 5;
 
 #[derive(Clone, Debug, Default)]
@@ -36,7 +67,7 @@ impl Quota {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum WaitReason {
+pub(crate) enum WaitReason {
     Mutation,
     Primary,
     Secondary,
@@ -44,7 +75,7 @@ pub(super) enum WaitReason {
     Hour,
 }
 impl WaitReason {
-    pub(super) const fn label(self) -> &'static str {
+    pub(crate) const fn label(self) -> &'static str {
         match self {
             Self::Mutation => "GitHub mutation spacing",
             Self::Primary => "GitHub primary quota reset",
@@ -181,6 +212,39 @@ pub(super) fn rate_message(message: &str) -> bool {
 
 pub(super) fn backoff(attempt: usize, throttled: bool) -> Duration {
     Duration::from_secs((if throttled { 60 } else { 1 }) << attempt.min(RETRIES))
+}
+
+/// Only definite rejection or an unsent request permits another mutation attempt.
+pub(crate) fn deferral(error: &anyhow::Error, attempt: usize) -> Option<(Duration, WaitReason)> {
+    if let Some(deferred) = error.downcast_ref::<RefreshAfterWait>() {
+        return Some((deferred.delay, deferred.reason));
+    }
+    error
+        .downcast_ref::<Throttled>()
+        .filter(|limit| !limit.partial)
+        .map(|limit| {
+            (
+                if limit.backoff {
+                    backoff(attempt, true)
+                } else {
+                    limit.delay
+                },
+                WaitReason::Secondary,
+            )
+        })
+}
+
+pub(super) fn rejected(error: &anyhow::Error) -> bool {
+    error.is::<RefreshAfterWait>()
+        || error.is::<Exhausted>()
+        || error
+            .downcast_ref::<Throttled>()
+            .is_some_and(|limit| !limit.partial)
+        || error
+            .downcast_ref::<super::http::HttpStatusError>()
+            .is_some_and(|status| {
+                matches!(status.status.as_u16(), 400..=499) && status.status.as_u16() != 408
+            })
 }
 
 /// A rate-limited GraphQL response may contain already completed mutations.

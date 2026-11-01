@@ -183,6 +183,8 @@ A full page containing no previously unseen identity is rejected as non-advancin
 
 Content and label changes are derived from observed differences.
 Label differences are calculated after description updates, immediately before applying each PR's label policy.
+Each label write carries its supporting observation time; a dispatch deferral or definite rate rejection renews the affected observation and outstanding policy differences within bounded recovery.
+Lost acknowledgements are checked against fresh labels, preserving confirmed effects and avoiding repeated satisfied changes.
 Label refresh preflight checks each target once; a fresh observation requires no scan of the remaining targets.
 An expired target triggers refresh of the remaining suffix of its current group of at most 25 PRs, permitting slow preceding mutations without retaining an expired plan.
 Successful additions and removals update the invocation cache individually, so a later failure does not cause a retry to repeat confirmed changes.
@@ -219,7 +221,10 @@ Confirmed successful responses are retained when another alias fails.
 GraphQL batches are not atomic.
 A newly created PR normally requires a subsequent body update because its final full-stack footer depends on server-assigned PR numbers.
 
-PR and head observations expire individually after 30 seconds from acquisition.
+PR and head observations expire individually after 30 seconds from dispatch of the contributing acquisition request.
+Transport, decoding and pagination consume that lifetime; unrelated quota waits before dispatch do not.
+Paginated observations retain the oldest contributing acquisition time.
+Under the dispatch lock, mutation preconditions shall remain valid through the scheduled wait and are checked again immediately before sending.
 Before description planning, only expired, previously observed heads are refreshed; fresh entries survive slow invocations.
 Before each content mutation batch, expired cached PRs are refreshed collectively through their observed heads, even where the head observation itself remains fresh.
 Native topology reconciliation uses the same refresh mechanism in groups of at most 25 selected PRs before reading their membership.
@@ -239,6 +244,10 @@ Native reconciliation distinguishes unchanged membership, a contiguous selected 
 Resolved native-stack enablement authorises routine creation and extension without an additional confirmation, including with redirected standard input.
 Unchanged topology requires no confirmation or mutation.
 Restructuring retains confirmation and refuses to remove unselected members or combine multiple observed stacks.
+Interactive acceptance is followed by fresh selected identity, base, eligibility and ordered topology checks before dissolution.
+Transition-driven dissolution likewise carries the oldest required PR and topology acquisition time into guarded dispatch; a deferred or definitely rate-rejected request requires renewed transition evidence before retrying.
+Changed scope stops rebuilding; immediate automatic acceptance may retain valid evidence.
+An unsent native mutation with expired evidence permits at most three refreshes within the existing automatic recovery budget.
 Only a complete unstack response authorises rebuilding; retained members stop the workflow.
 After unstacking, PR observations are invalidated and refreshed before verifying that the original identities remain open with the intended bases.
 Changed bases are rejected rather than repaired through an additional PATCH request.
@@ -270,13 +279,20 @@ Explicit rate-limit rejection may be retried at most three times, subject to a f
 Retry-After and exhausted primary-reset metadata are honoured, including GraphQL errors conveyed by HTTP 200.
 Without a supplied secondary deadline, backoff begins at sixty seconds and increases exponentially.
 Primary quotas are observed separately for REST and GraphQL without additional polling.
+Native reconciliation carries one elapsed recovery budget through nested PR observations, topology reads, eligibility checks, mutations and post-dissolution verification.
+A renewed request does not renew that budget, and completed native effects remain confirmed when later recovery cannot finish.
 Quota observations retain the elapsed interval since header receipt, so body acquisition does not restart an absolute reset deadline; clock-skew handling and the reset safety margin remain applicable.
 Valid quota headers remain authoritative when body acquisition fails or exceeds its size limit, without treating an incomplete mutation response as an acknowledgement or a definite rejection.
 Rate-limit errors retain their cooldown for subsequent requests even when every requested mutation is acknowledged and no reconciliation read is required.
+Guarded base and native mutations recover definite rate rejections by renewing preconditions within the existing limits; partial or lost acknowledgements require observation rather than automatic replay.
 Conservative rolling content budgets count individual aliases, with sixty writes per minute and 450 per hour.
 Transient reads may be retried; uncertain content mutations instead trigger forced observation and bounded reconciliation of outstanding fields.
 Long pre-dispatch waits invalidate prepared content and require re-rendering from fresh observations.
 Confirmed writes are omitted from recovery, and the write-batch limit decreases following uncertain failure.
+Description recovery additionally shares one fifteen-minute elapsed budget across deferred writes, observation retries, backoff and local content-window waits, rather than renewing it for each request.
+Exhausted unsent deferrals stop before another wait or acquisition.
+Recovery descriptions retain the alias and encoded-byte bounds after renewed human content changes their sizes, splitting admissible updates into further requests as required.
+Definite no-send or rejection outcomes clear uncertainty for that attempt whilst preserving earlier confirmed effects and unresolved mutation outcomes.
 Ambiguous creation failure triggers an identity observation before any later attempt can create a duplicate.
 Ordinary transport failures and failed mutations are not blindly replayed.
 No transaction spans Git, Jujutsu and GitHub; a failure can leave completed effects in place.

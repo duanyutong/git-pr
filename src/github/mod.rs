@@ -17,7 +17,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 #[derive(Debug, Default)]
@@ -77,7 +77,18 @@ pub(crate) struct GitHub<'a> {
 
 impl GitHub<'_> {
     fn fresh(&self, observed: &Instant) -> bool {
-        self.now().saturating_duration_since(*observed) <= Duration::from_secs(30)
+        self.now().saturating_duration_since(*observed) <= limits::FRESHNESS
+    }
+
+    fn acquisition_time(&self, numbers: impl IntoIterator<Item = u64>) -> Result<Instant> {
+        let times = guard(&self.session.pr_times);
+        let mut oldest = None;
+        for number in numbers {
+            let acquired = *times.get(&number).context("missing PR acquisition time")?;
+            oldest = Some(oldest.map_or(acquired, |time: Instant| time.min(acquired)));
+        }
+        drop(times);
+        oldest.context("missing mutation observation")
     }
 
     pub(crate) fn was_updated(&self, number: u64) -> bool {
@@ -88,6 +99,7 @@ impl GitHub<'_> {
         guard(&self.session.updated).insert(pr.number);
         self.remember(pr);
     }
+    #[cfg(test)]
     pub(crate) fn request(
         &self,
         method: &str,
@@ -107,6 +119,16 @@ impl GitHub<'_> {
     }
 
     fn request_url(&self, method: &str, url: &str, body: Option<&Value>) -> Result<Response> {
+        self.request_url_with_budget(method, url, body, None)
+    }
+
+    fn request_url_with_budget(
+        &self,
+        method: &str,
+        url: &str,
+        body: Option<&Value>,
+        recovery_started: Option<Instant>,
+    ) -> Result<Response> {
         let mutation = method != "GET"
             && (!url.ends_with("/graphql")
                 || body
@@ -118,7 +140,8 @@ impl GitHub<'_> {
             url,
             encoded.as_deref(),
             usize::from(mutation),
-            false,
+            None,
+            recovery_started,
         )
     }
 
@@ -178,6 +201,10 @@ impl GitHub<'_> {
     }
 
     pub(crate) fn get(&self, number: u64) -> Result<Arc<PullRequest>> {
+        self.get_with_budget(number, None)
+    }
+
+    fn get_with_budget(&self, number: u64, started: Option<Instant>) -> Result<Arc<PullRequest>> {
         let mut prs = self.session.prs();
         if let Some(pr) = prs.get(&number)
             && guard(&self.session.pr_times)
@@ -186,18 +213,20 @@ impl GitHub<'_> {
         {
             return Ok(Arc::clone(pr));
         }
-        let pr = observation::decode_rest(
-            &self.request("GET", &format!("pulls/{number}"), None)?,
-            &self.config.repo.name,
+        let response = self.request_url_with_budget(
+            "GET",
+            &self.repo_url(&format!("pulls/{number}")),
             None,
-        )
-        .with_context(|| format!("invalid GitHub response for PR #{number}"))?;
+            started,
+        )?;
+        let pr = observation::decode_rest(&response.body, &self.config.repo.name, None)
+            .with_context(|| format!("invalid GitHub response for PR #{number}"))?;
         if pr.number != number {
             bail!("PR observation returned an unexpected identity");
         }
         let pr = Arc::new(pr);
         prs.insert(number, Arc::clone(&pr));
-        guard(&self.session.pr_times).insert(number, self.now());
+        guard(&self.session.pr_times).insert(number, response.acquired);
         guard(&self.session.unknown_stacks).remove(&number);
         drop(prs);
         Ok(pr)
@@ -212,18 +241,18 @@ impl GitHub<'_> {
             .or_insert_with(|| self.now());
     }
 
-    fn observed(&self, pr: PullRequest) {
+    fn observed(&self, pr: PullRequest, acquired: Instant) {
         let number = pr.number;
         self.remember(Arc::new(pr));
-        guard(&self.session.pr_times).insert(number, self.now());
+        guard(&self.session.pr_times).insert(number, acquired);
         guard(&self.session.unknown_stacks).remove(&number);
     }
 
-    fn get_with_stack(&self, number: u64) -> Result<Arc<PullRequest>> {
+    fn get_with_stack(&self, number: u64, started: Option<Instant>) -> Result<Arc<PullRequest>> {
         if guard(&self.session.unknown_stacks).contains(&number) {
             guard(&self.session.pr_times).remove(&number);
         }
-        self.get(number)
+        self.get_with_budget(number, started)
     }
 
     pub(crate) fn find_head(&self, reference: &str, state: &str) -> Result<u64> {
@@ -353,9 +382,9 @@ impl GitHub<'_> {
             commit.remote_ref()
         ));
         self.commands.outcomes.start(effect.clone());
-        let response = self.request("POST", "pulls", Some(&payload));
-        let bytes = match response {
-            Ok(bytes) => bytes,
+        let response = self.request_url("POST", &self.repo_url("pulls"), Some(&payload));
+        let response = match response {
+            Ok(response) => response,
             Err(error) => {
                 // Creation can have completed before a response was lost. Observe before retrying.
                 self.session.heads().remove(commit.remote_ref());
@@ -371,7 +400,7 @@ impl GitHub<'_> {
             }
         };
         let pr = observation::decode_rest(
-            &bytes,
+            &response.body,
             &self.config.repo.name,
             Some((commit.remote_ref(), base)),
         )
@@ -384,12 +413,16 @@ impl GitHub<'_> {
             .entry(commit.remote_ref().into())
             .or_default()
             .push(pr.number);
-        self.observed(pr);
-        guard(&self.session.head_times).insert(commit.remote_ref().into(), self.now());
+        self.observed(pr, response.acquired);
+        guard(&self.session.head_times).insert(commit.remote_ref().into(), response.acquired);
         Ok(())
     }
 
     pub(crate) fn refresh_prs(&self, numbers: &[u64]) -> Result<()> {
+        self.refresh_prs_with_budget(numbers, None)
+    }
+
+    fn refresh_prs_with_budget(&self, numbers: &[u64], started: Option<Instant>) -> Result<()> {
         #[cfg(test)]
         crate::tests::unit::support::PR_REFRESH_PROBES.update(|n| n + numbers.len());
         let references: Vec<_> = {
@@ -413,7 +446,10 @@ impl GitHub<'_> {
                 heads.remove(reference);
             }
         }
-        self.observe(&references)
+        started.map_or_else(
+            || self.observe(&references),
+            |started| self.observe_with_budget(&references, started),
+        )
     }
 
     pub(crate) fn update_labels(&self, changes: &[(&Commit, bool)]) -> Result<()> {
@@ -448,57 +484,132 @@ impl GitHub<'_> {
                             .collect::<Vec<_>>(),
                     )?;
                 }
-                let mut pr = self.get(number)?;
-                let observed: std::collections::HashMap<_, _> = pr
-                    .labels
-                    .iter()
-                    .map(|label| (label.name().to_ascii_lowercase(), label.name()))
-                    .collect();
-                let additions: Vec<_> = required
-                    .into_iter()
-                    .filter(|label| !observed.contains_key(&label.to_ascii_lowercase()))
-                    .collect();
-                let removals: Vec<_> = removed
-                    .into_iter()
-                    .filter_map(|label| {
-                        observed
-                            .get(&label.to_ascii_lowercase())
-                            .map(|name| (*name).to_owned())
-                    })
-                    .collect();
-                if !additions.is_empty() {
-                    let effect = crate::model::outcome::Operation::Labels(number);
-                    self.commands.outcomes.start(effect.clone());
-                    self.request(
-                        "POST",
-                        &format!("issues/{number}/labels"),
-                        Some(&json!({"labels":additions})),
-                    )?;
-                    self.commands.outcomes.confirm(effect);
-                    Arc::make_mut(&mut pr).labels.extend(
-                        additions
-                            .into_iter()
-                            .map(crate::model::pull_request::Label::Name),
-                    );
-                    self.remember_update(pr.clone());
-                }
-                for label in removals {
-                    let encoded = percent_encoding::utf8_percent_encode(
-                        &label,
-                        percent_encoding::NON_ALPHANUMERIC,
-                    );
-                    let effect = crate::model::outcome::Operation::Labels(number);
-                    self.commands.outcomes.start(effect.clone());
-                    self.request("DELETE", &format!("issues/{number}/labels/{encoded}"), None)?;
-                    self.commands.outcomes.confirm(effect);
-                    Arc::make_mut(&mut pr)
-                        .labels
-                        .retain(|value| !value.name().eq_ignore_ascii_case(&label));
-                    self.remember_update(pr.clone());
-                }
+                self.reconcile_labels(number, &required, &removed)?;
                 progress.advance(1);
             }
         }
+        Ok(())
+    }
+
+    fn reconcile_labels(&self, number: u64, required: &[String], removed: &[String]) -> Result<()> {
+        let started = self.now();
+        let mut uncertain = None;
+        let mut attempt = 0;
+        loop {
+            let mut pr = self.get_with_budget(number, Some(started))?;
+            let observed: std::collections::HashMap<_, _> = pr
+                .labels
+                .iter()
+                .map(|label| (label.name().to_ascii_lowercase(), label.name()))
+                .collect();
+            let additions: Vec<_> = required
+                .iter()
+                .filter(|label| !observed.contains_key(&label.to_ascii_lowercase()))
+                .cloned()
+                .collect();
+            let removals: Vec<_> = removed
+                .iter()
+                .filter_map(|label| {
+                    observed
+                        .get(&label.to_ascii_lowercase())
+                        .map(|name| (*name).to_owned())
+                })
+                .collect();
+            if let Some(error) = uncertain {
+                if !additions.is_empty() || !removals.is_empty() {
+                    return Err(error);
+                }
+                self.commands
+                    .outcomes
+                    .confirm(crate::model::outcome::Operation::Labels(number));
+                self.remember_update(pr);
+                return Ok(());
+            }
+            let result = self.apply_labels(&mut pr, additions, removals, started);
+            let Err(error) = result else { return Ok(()) };
+            let deferred = limits::deferral(&error, attempt);
+            if deferred.is_none() && limits::rejected(&error) || attempt == limits::RETRIES {
+                return Err(error);
+            }
+            if let Some((delay, reason)) = deferred {
+                self.wait_for_recovery(delay, reason.label(), started)?;
+            } else {
+                uncertain = Some(error);
+            }
+            let heads = [pr.head.name.clone()];
+            self.invalidate_heads(&heads);
+            self.observe_with_budget(&heads, started)?;
+            attempt += 1;
+        }
+    }
+
+    fn apply_labels(
+        &self,
+        pr: &mut Arc<PullRequest>,
+        additions: Vec<String>,
+        removals: Vec<String>,
+        started: Instant,
+    ) -> Result<()> {
+        let number = pr.number;
+        if !additions.is_empty() {
+            self.label_request(
+                "POST",
+                number,
+                &format!("issues/{number}/labels"),
+                Some(&json!({"labels":additions})),
+                started,
+            )?;
+            Arc::make_mut(pr).labels.extend(
+                additions
+                    .into_iter()
+                    .map(crate::model::pull_request::Label::Name),
+            );
+            self.remember_update(Arc::clone(pr));
+        }
+        for label in removals {
+            let encoded =
+                percent_encoding::utf8_percent_encode(&label, percent_encoding::NON_ALPHANUMERIC);
+            self.label_request(
+                "DELETE",
+                number,
+                &format!("issues/{number}/labels/{encoded}"),
+                None,
+                started,
+            )?;
+            Arc::make_mut(pr)
+                .labels
+                .retain(|value| !value.name().eq_ignore_ascii_case(&label));
+            self.remember_update(Arc::clone(pr));
+        }
+        Ok(())
+    }
+
+    fn label_request(
+        &self,
+        method: &str,
+        number: u64,
+        path: &str,
+        body: Option<&Value>,
+        started: Instant,
+    ) -> Result<()> {
+        let acquired = self.acquisition_time([number])?;
+        let effect = crate::model::outcome::Operation::Labels(number);
+        let encoded = body.map(Value::to_string);
+        self.commands.outcomes.start(effect.clone());
+        self.request_url_encoded(
+            method,
+            &self.repo_url(path),
+            encoded.as_deref().map(str::as_bytes),
+            1,
+            Some(acquired),
+            Some(started),
+        )
+        .inspect_err(|error| {
+            if limits::rejected(error) {
+                self.commands.outcomes.reject(effect.clone());
+            }
+        })?;
+        self.commands.outcomes.confirm(effect);
         Ok(())
     }
 

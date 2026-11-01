@@ -4,6 +4,7 @@ Submission records publication identity in repository-local Git configuration an
 New changes require a maintained local branch or Jujutsu bookmark.
 Existing `Remote-Ref` trailers remain supported, including legacy commits without a local anchor, but submission never inserts, removes or normalises a trailer.
 Plain Git, git-branchless and Jujutsu use the same identity rules.
+Retain repository-local Git associations and existing invocation-local observations; additional caching requires new measurements demonstrating a material benefit over simpler alternatives.
 
 ## Stored association
 
@@ -28,6 +29,7 @@ Policy preferences retain ordinary Git scope precedence.
 
 ## Authority and reconciliation
 
+The current local stack determines the intended publication; repository-local associations preserve its identities, and remote observations constrain safe execution.
 Local associations constrain intended identity.
 An existing trailer constrains the head ref and must agree with any stored head association.
 Fresh GitHub observations establish the review's current identity, lifecycle and relationships; they cannot silently substitute a different review for a recorded PR.

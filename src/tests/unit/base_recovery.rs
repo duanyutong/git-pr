@@ -81,9 +81,16 @@ fn mock_ancestry(w: &World, parents: &BTreeMap<u64, Vec<u64>>) {
     }
 }
 
+fn is_retarget(event: &Value) -> bool {
+    event["body"]["variables"]["input"]
+        .get("baseRefName")
+        .is_some()
+}
+
 fn effect(event: &Value) -> bool {
     event["args"][0] == "push"
         || event["method"] == "PATCH"
+        || is_retarget(event)
         || event["method"] == "DELETE"
         || (event["method"] == "POST" && event["path"] != "graphql")
 }
@@ -152,7 +159,9 @@ fn merged_downstack_recovery_preserves_identity_and_retargets_before_leased_publ
                 let trace = w.trace();
                 let patch = trace
                     .iter()
-                    .position(|e| e["method"] == "PATCH" && e["body"]["base"] == "main")
+                    .position(|e| {
+                        is_retarget(e) && e["body"]["variables"]["input"]["baseRefName"] == "main"
+                    })
                     .unwrap();
                 let push = trace.iter().position(|e| e["args"][0] == "push").unwrap();
                 assert!(patch < push);
@@ -176,11 +185,7 @@ fn merged_downstack_recovery_preserves_identity_and_retargets_before_leased_publ
                 drop(m);
                 w.0.lock().unwrap().trace.clear();
                 w.run(&["--no-stack"]).unwrap();
-                assert!(
-                    !w.trace()
-                        .iter()
-                        .any(|e| e["method"] == "PATCH" && e["body"].get("base").is_some())
-                );
+                assert!(!w.trace().iter().any(is_retarget));
             }
         }
     }
@@ -329,30 +334,63 @@ fn recovery_can_create_an_unpublished_upper_pr_with_an_absence_lease() {
     assert_eq!(w.0.lock().unwrap().prs[&102]["base"]["ref"], "topic/1");
 }
 
+#[derive(Debug)]
+struct ChangeIdentity {
+    world: Arc<World>,
+    remaining: std::sync::atomic::AtomicUsize,
+}
+
+impl crate::github::http::Transport for ChangeIdentity {
+    fn request(&self, request: crate::github::http::Request<'_>) -> Result<Vec<u8>> {
+        let payload: Value = request
+            .body
+            .map(serde_json::from_slice)
+            .transpose()?
+            .unwrap_or_default();
+        let recovery = (payload["query"]
+            .as_str()
+            .is_some_and(|query| query.starts_with("query RecoveryHeads"))
+            && payload["variables"]["h0"] == "topic/1")
+            || payload["variables"]["r0"] == 101
+            || payload["variables"]["input"]["pullRequestId"] == "PR_101"
+            || (request.method == "GET" && request.url.ends_with("/pulls/101"));
+        if recovery
+            && self
+                .remaining
+                .fetch_sub(1, std::sync::atomic::Ordering::SeqCst)
+                == 1
+        {
+            self.world.0.lock().unwrap().prs.get_mut(&101).unwrap()["node_id"] = json!("CHANGED");
+        }
+        crate::github::http::Transport::request(self.world.as_ref(), request)
+    }
+}
+
 #[test]
 fn recovery_revalidates_metadata_before_mutation_and_after_publication() {
-    for call in [2, 3, 4, 5, 6] {
+    for call in 2..=7 {
         let w = world(1);
-        let original = w.0.lock().unwrap().prs[&101].clone();
-        let mut replies = Vec::new();
-        for index in 1..=call {
-            let mut value = original.clone();
-            if index >= 4 {
-                value["base"]["ref"] = json!("main");
-            }
-            if index >= 6 {
-                value["head"]["sha"] = json!(oid(1));
-            }
-            if index == call {
-                value["node_id"] = json!("CHANGED");
-            }
-            replies.push(Response::Output(200, value.to_string()));
-        }
-        w.http("GET pulls/101", replies);
-        let error = format!("{:#}", w.run(&["--no-stack"]).unwrap_err());
+        let mut app = w.app();
+        app.transport = Arc::new(ChangeIdentity {
+            world: w.clone(),
+            remaining: call.into(),
+        });
+        let flags = crate::cli::Flags::parse(vec!["--no-stack".into()]).unwrap();
+        let error = format!(
+            "{:#}",
+            app.execute(
+                &flags,
+                &BTreeMap::from([("HOME".into(), "/unit/home".into())])
+            )
+            .unwrap_err()
+        );
         assert!(error.contains("changed"), "{call}: {error}");
-        assert_eq!(w.trace().iter().any(|e| e["args"][0] == "push"), call == 6);
-        assert_eq!(w.trace().iter().any(|e| e["method"] == "PATCH"), call >= 4);
+        assert_eq!(
+            w.trace().iter().any(|e| e["args"][0] == "push"),
+            call >= 6,
+            "{call}"
+        );
+        assert_eq!(w.trace().iter().any(is_retarget), call >= 4, "{call}");
     }
 }
 
@@ -361,7 +399,7 @@ fn unconfirmed_retarget_stops_and_lost_acknowledgement_is_observed_without_repla
     for applied in [false, true] {
         let w = world(1);
         w.http(
-            "PATCH pulls/101",
+            "POST retarget",
             vec![Response::Failure("lost acknowledgement".into())],
         );
         let original = w.0.lock().unwrap().prs[&101].clone();
@@ -370,20 +408,17 @@ fn unconfirmed_retarget_stops_and_lost_acknowledgement_is_observed_without_repla
             after["base"]["ref"] = json!("main");
         }
         w.http(
-            "GET pulls/101",
+            "POST recovery",
             vec![
-                Response::Output(200, original.to_string()),
-                Response::Output(200, after.to_string()),
+                recovery_reply(std::slice::from_ref(&original)),
+                recovery_reply(&[after]),
             ],
         );
         with_github(&w, |github| {
             let expected = serde_json::from_value(original).unwrap();
             assert_eq!(github.retarget_recovery(&expected, "main").is_ok(), applied);
         });
-        assert_eq!(
-            w.trace().iter().filter(|e| e["method"] == "PATCH").count(),
-            1
-        );
+        assert_eq!(w.trace().iter().filter(|e| is_retarget(e)).count(), 1);
     }
 }
 
@@ -650,7 +685,8 @@ fn recovery_stages_an_unsafe_partial_push_state_for_an_upper_pr() {
     assert!(
         w.trace()
             .iter()
-            .any(|event| event["body"]["base"] == "git-pr/transition/101")
+            .any(|event| event["body"]["variables"]["input"]["baseRefName"]
+                == "git-pr/transition/101")
     );
     assert_eq!(w.0.lock().unwrap().prs[&102]["state"], "open");
 }
@@ -719,7 +755,7 @@ fn recovery_adapter_rechecks_native_membership_and_read_availability() {
             w.0.lock().unwrap().prs.get_mut(&101).unwrap()["stack"] = json!({"number":9});
         } else {
             w.http(
-                "GET pulls/101",
+                "POST recovery",
                 vec![Response::Failure("unavailable".into())],
             );
         }
@@ -838,7 +874,12 @@ struct AfterRetarget {
 
 impl crate::github::http::Transport for AfterRetarget {
     fn request(&self, request: crate::github::http::Request<'_>) -> Result<Vec<u8>> {
-        let patch = request.method == "PATCH";
+        let payload: Value = request
+            .body
+            .map(serde_json::from_slice)
+            .transpose()?
+            .unwrap_or_default();
+        let patch = payload["variables"]["input"].get("baseRefName").is_some();
         let result = crate::github::http::Transport::request(self.world.as_ref(), request)?;
         if patch {
             match self.failure {
@@ -846,8 +887,7 @@ impl crate::github::http::Transport for AfterRetarget {
                 "refs" => self.world.fail("git ls-remote --refs -- https://github.com/org/repo.git refs/heads/git-pr/transition/101 refs/heads/obsolete refs/heads/topic/1"),
                 "dependants" => { self.world.0.lock().unwrap().prs.insert(200, pr(200, "outside", 12, "topic/1")); },
                 "head" => {
-                    let current = self.world.0.lock().unwrap().prs[&101].clone();
-                    self.world.http("GET pulls/101", vec![Response::Output(200, current.to_string()), Response::Failure("read unavailable".into())]);
+                    self.world.http("GET pulls/101", vec![Response::Failure("read unavailable".into())]);
                 },
                 _ => unreachable!(),
             }
@@ -1113,7 +1153,7 @@ fn splitting_published_history_uses_a_direct_transition() {
     }
     w.run(&["--no-stack"]).unwrap();
     assert!(!w.trace().iter().any(|e| {
-        e["body"]["base"]
+        e["body"]["variables"]["input"]["baseRefName"]
             .as_str()
             .is_some_and(|base| base.starts_with("git-pr/transition/"))
     }));
@@ -1275,8 +1315,14 @@ impl crate::github::http::Transport for Interruption {
         if self.all_operations {
             self.applied(true)?;
         }
-        let mutation = matches!(request.method, "POST" | "PATCH" | "DELETE")
-            && !request.url.ends_with("/graphql");
+        let payload: Value = request
+            .body
+            .map(serde_json::from_slice)
+            .transpose()?
+            .unwrap_or_default();
+        let mutation = (matches!(request.method, "POST" | "PATCH" | "DELETE")
+            && !request.url.ends_with("/graphql"))
+            || payload["variables"]["input"].get("baseRefName").is_some();
         let result = self.world.request(request)?;
         self.applied(!self.all_operations && mutation)?;
         Ok(result)
@@ -1312,6 +1358,7 @@ fn transitions_resume_after_interruption_at_every_mutation_boundary() {
                         )
                     }) || matches!(event["method"].as_str(), Some("POST" | "PATCH" | "DELETE"))
                         && event["path"] != "graphql"
+                        || is_retarget(event)
                 })
                 .count();
             for (boundary, rewritten) in (1..=count)
@@ -1411,7 +1458,7 @@ fn native_transitions_require_complete_membership_and_confirm_dissolution() {
         assert!(
             !w.trace()
                 .iter()
-                .any(|e| e["args"][0] == "push" || e["method"] == "PATCH"),
+                .any(|e| e["args"][0] == "push" || is_retarget(e)),
             "{case}"
         );
     }
@@ -1429,6 +1476,34 @@ fn native_transitions_require_complete_membership_and_confirm_dissolution() {
     );
 }
 
+fn arrange_transition_failure(w: &World, case: &str) {
+    if case == "native-change" {
+        for pr in w.0.lock().unwrap().prs.values_mut() {
+            pr["stack"] = json!({"number":9});
+        }
+    }
+    if case == "collision" {
+        w.0.lock()
+            .unwrap()
+            .remote_refs
+            .insert("refs/heads/git-pr/transition/101".into(), oid(11));
+    }
+    if case == "staging-read" {
+        w.fail("git ls-remote --refs -- https://github.com/org/repo.git refs/heads/git-pr/transition/101");
+    }
+    if case == "observation" {
+        let mut values = {
+            let memory = w.0.lock().unwrap();
+            [102, 101, 103].map(|number| memory.prs[&number].clone())
+        };
+        values[0]["node_id"] = json!("OTHER");
+        w.http(
+            "GET pulls/102",
+            vec![Response::Output(200, values[0].to_string())],
+        );
+    }
+}
+
 #[test]
 fn transition_preparation_rejects_collisions_and_changing_evidence() {
     for case in [
@@ -1442,28 +1517,7 @@ fn transition_preparation_rejects_collisions_and_changing_evidence() {
         "native-change",
     ] {
         let w = transition_world(&[2, 1, 3], &[1, 2, 3]);
-        if case == "native-change" {
-            for pr in w.0.lock().unwrap().prs.values_mut() {
-                pr["stack"] = json!({"number":9});
-            }
-        }
-        if case == "collision" {
-            w.0.lock()
-                .unwrap()
-                .remote_refs
-                .insert("refs/heads/git-pr/transition/101".into(), oid(11));
-        }
-        if case == "staging-read" {
-            w.fail("git ls-remote --refs -- https://github.com/org/repo.git refs/heads/git-pr/transition/101");
-        }
-        if case == "observation" {
-            let mut changed = w.0.lock().unwrap().prs[&102].clone();
-            changed["node_id"] = json!("OTHER");
-            w.http(
-                "GET pulls/102",
-                vec![Response::Output(200, changed.to_string())],
-            );
-        }
+        arrange_transition_failure(&w, case);
         with_github(&w, |github| {
             let state = state(&w);
             let bases = crate::stack::selection::resolve_bases(&state.stack, 0, "main");
@@ -1527,6 +1581,23 @@ fn transition_preparation_rejects_collisions_and_changing_evidence() {
             assert!(plan.apply(github, &state, &bases).is_err(), "{case}");
             assert!(!w.trace().iter().any(effect), "{case}");
         });
+    }
+    for invalid in ["membership", "identity"] {
+        let w = world(1);
+        let mut value = pr(101, "topic/1", 11, "main");
+        if invalid == "membership" {
+            value["stack"] = json!("unknown");
+        } else {
+            value["head"]["sha"] = json!("invalid");
+        }
+        w.http(
+            "GET pulls/101",
+            vec![Response::Output(200, value.to_string())],
+        );
+        with_github(&w, |github| {
+            assert!(github.recovery_pr(101).is_err());
+        });
+        assert!(!w.trace().iter().any(effect));
     }
 }
 
@@ -1623,7 +1694,13 @@ fn unpublished_stacks_need_no_transition_and_unstable_preparation_is_refused() {
 
 #[test]
 fn transition_barriers_reject_unavailable_or_changed_evidence() {
-    for case in ["parent-read", "ambiguous", "unpublished", "final-identity"] {
+    for case in [
+        "parent-read",
+        "ambiguous",
+        "changed-head",
+        "unpublished",
+        "final-identity",
+    ] {
         let w = world(1);
         with_github(&w, |github| {
             let state = state(&w);
@@ -1640,7 +1717,10 @@ fn transition_barriers_reject_unavailable_or_changed_evidence() {
                     .prs
                     .insert(102, pr(102, "topic/1", 11, "obsolete"));
             }
-            if ["parent-read", "ambiguous"].contains(&case) {
+            if case == "changed-head" {
+                w.0.lock().unwrap().prs.get_mut(&101).unwrap()["head"]["sha"] = json!(oid(99));
+            }
+            if ["parent-read", "ambiguous", "changed-head"].contains(&case) {
                 assert!(plan.apply(github, &state, &bases).is_err());
                 assert!(!w.trace().iter().any(effect));
                 return;
@@ -1813,5 +1893,930 @@ fn resolve_undispatched_creation(w: &Arc<World>, flags: &[&str]) {
         assert!(format!("{:#}", w.run(flags).unwrap_err()).contains("unknown outcome"));
         // The prefix oracle knows that no creation request reached the service.
         w.0.lock().unwrap().config.remove("git-pr.pendingCreate");
+    }
+}
+
+fn recovery_reply(prs: &[Value]) -> Response {
+    let nodes: serde_json::Map<String, Value> = prs
+        .iter()
+        .enumerate()
+        .map(|(i, pr)| {
+            (
+                format!("p{i}"),
+                crate::tests::http_service::recovery_node(pr),
+            )
+        })
+        .collect();
+    Response::Output(200, json!({"data":{"repository":nodes}}).to_string())
+}
+
+#[test]
+fn combined_recovery_observations_refresh_cached_content_and_selected_metadata() {
+    let w = world(1);
+    with_github(&w, |github| {
+        let references = ["topic/1".into()];
+        github.observe(&references).unwrap();
+        w.0.lock().unwrap().trace.clear();
+        {
+            let mut memory = w.0.lock().unwrap();
+            let pr = memory.prs.get_mut(&101).unwrap();
+            pr["node_id"] = json!("FRESH");
+            pr["body"] = json!("Updated discussion");
+            pr["labels"] = json!(["reviewed"]);
+            let mut historical = pr.clone();
+            historical["number"] = json!(99);
+            historical["state"] = json!("closed");
+            historical["head"]["sha"] = Value::Null;
+            memory.prs.insert(99, historical);
+        }
+        let recovery = github.observe_recovery(&references, &[101]).unwrap();
+        assert_eq!(recovery[0].node_id, "FRESH");
+        let content = github.get(101).unwrap();
+        assert_eq!(content.body.as_ref(), "Updated discussion");
+        assert_eq!(content.labels[0].name(), "reviewed");
+        assert_eq!(w.trace().len(), 1);
+        assert!(
+            w.trace()[0]["body"]["query"]
+                .as_str()
+                .unwrap()
+                .contains("baseRefOid")
+        );
+        assert!(github.observe_recovery(&references, &[999]).is_err());
+        assert_eq!(github.observe_recovery(&[], &[]).unwrap(), Vec::new());
+    });
+}
+
+fn recovery_head_node(pr: &Value) -> Value {
+    let mut node = crate::tests::http_service::recovery_node(pr);
+    node["title"] = pr["title"].clone();
+    node["body"] = pr["body"].clone();
+    node["labels"] = json!({"nodes":[],"pageInfo":{"hasNextPage":false}});
+    node
+}
+
+#[test]
+fn combined_recovery_observations_preserve_pr_and_label_pagination() {
+    let w = world(1);
+    let mut node = recovery_head_node(&w.0.lock().unwrap().prs[&101]);
+    node["labels"] =
+        json!({"nodes":[{"name":"one"}],"pageInfo":{"hasNextPage":true,"endCursor":"labels"}});
+    let mut duplicate = node.clone();
+    duplicate["body"] = json!("Later duplicate");
+    let page = |nodes: Value, more: bool| {
+        Response::Output(200, json!({"data":{"repository":{"p0":{"nodes":nodes,"pageInfo":{"hasNextPage":more,"endCursor":"prs"}}}}}).to_string())
+    };
+    w.http("POST graphql", vec![
+        page(json!([node]), true),
+        page(json!([duplicate]), false),
+        Response::Output(200, json!({"data":{"repository":{"p0":{"number":101,"labels":{"nodes":[{"name":"two"}],"pageInfo":{"hasNextPage":false}}}}}}).to_string()),
+    ]);
+    with_github(&w, |github| {
+        let recovery = github
+            .observe_recovery(&["topic/1".into()], &[101])
+            .unwrap();
+        assert_eq!(recovery[0].number, 101);
+        let content = github.get(101).unwrap();
+        assert_eq!(content.body.as_ref(), "Human discussion");
+        assert_eq!(
+            content
+                .labels
+                .iter()
+                .map(crate::model::pull_request::Label::name)
+                .collect::<Vec<_>>(),
+            ["one", "two"]
+        );
+        assert_eq!(
+            w.trace()
+                .iter()
+                .filter(|event| event["kind"] == "http")
+                .count(),
+            3
+        );
+    });
+}
+
+#[test]
+fn combined_recovery_observations_require_complete_selected_evidence() {
+    let valid = recovery_head_node(&pr(101, "topic/1", 11, "main"));
+    for field in ["stack", "headRefOid", "mergedAt", "baseRepository"] {
+        let w = world(1);
+        let mut node = valid.clone();
+        node.as_object_mut().unwrap().remove(field);
+        w.http("POST graphql", vec![Response::Output(200, json!({"data":{"repository":{"p0":{"nodes":[node],"pageInfo":{"hasNextPage":false}}}}}).to_string())]);
+        with_github(&w, |github| {
+            assert!(
+                github
+                    .observe_recovery(&["topic/1".into()], &[101])
+                    .is_err(),
+                "{field}"
+            );
+        });
+    }
+    let w = world(1);
+    let mut node = valid;
+    node["headRefOid"] = json!("invalid");
+    w.http(
+        "POST graphql",
+        vec![Response::Output(
+            200,
+            json!({"data":{"repository":{"p0":{"nodes":[node],"pageInfo":{"hasNextPage":false}}}}})
+                .to_string(),
+        )],
+    );
+    with_github(&w, |github| {
+        assert!(
+            github
+                .observe_recovery(&["topic/1".into()], &[101])
+                .is_err()
+        );
+    });
+}
+
+#[test]
+fn recovery_observations_are_bounded_deduplicated_and_fresh() {
+    let w = transition_world(&(1..=10).collect::<Vec<_>>(), &(1..=10).collect::<Vec<_>>());
+    with_github(&w, |github| {
+        let numbers: Vec<_> = (101..=110).chain(101..=110).collect();
+        w.0.lock().unwrap().trace.clear();
+        let first = github.recovery_prs(&numbers).unwrap();
+        assert_eq!(first.len(), 10);
+        assert_eq!(w.trace().iter().filter(|e| e["kind"] == "http").count(), 1);
+        w.0.lock().unwrap().prs.get_mut(&110).unwrap()["node_id"] = json!("NEW");
+        let second = github.recovery_prs(&numbers).unwrap();
+        assert_ne!(first[9].node_id, second[9].node_id);
+        assert_eq!(w.trace().iter().filter(|e| e["kind"] == "http").count(), 2);
+        assert_eq!(github.recovery_prs(&[]).unwrap(), Vec::new());
+    });
+    let w = World::new(0);
+    for number in 1..=26 {
+        w.0.lock().unwrap().prs.insert(
+            number,
+            pr(number, &format!("topic/{number}"), number, "main"),
+        );
+    }
+    with_github(&w, |github| {
+        w.0.lock().unwrap().trace.clear();
+        assert_eq!(
+            github
+                .recovery_prs(&(1..=26).collect::<Vec<_>>())
+                .unwrap()
+                .len(),
+            26
+        );
+        let trace = w.trace();
+        assert_eq!(trace.len(), 2);
+        assert_eq!(trace[0]["body"]["variables"].as_object().unwrap().len(), 27);
+        assert_eq!(trace[1]["body"]["variables"].as_object().unwrap().len(), 3);
+    });
+}
+
+#[test]
+fn batched_recovery_rejects_incomplete_or_inconsistent_evidence() {
+    let valid = crate::tests::http_service::recovery_node(&pr(101, "topic/1", 11, "main"));
+    let mut cases = vec![Value::Null];
+    for key in valid.as_object().unwrap().keys() {
+        let mut node = valid.clone();
+        node.as_object_mut().unwrap().remove(key);
+        cases.push(node);
+    }
+    for (key, value) in [
+        ("state", json!("UNKNOWN")),
+        ("number", json!(102)),
+        ("headRefOid", json!("bad")),
+        ("headRepository", json!({"nameWithOwner":"foreign/repo"})),
+        ("stack", json!("unknown")),
+    ] {
+        let mut node = valid.clone();
+        node[key] = value;
+        cases.push(node);
+    }
+    for node in cases {
+        let w = world(1);
+        w.http(
+            "POST recovery",
+            vec![Response::Output(
+                200,
+                json!({"data":{"repository":{"p0":node}}}).to_string(),
+            )],
+        );
+        with_github(&w, |github| assert!(github.recovery_prs(&[101]).is_err()));
+        assert!(!w.trace().iter().any(effect));
+    }
+    for response in [
+        "{",
+        "[]",
+        "null",
+        r#"{"data":0}"#,
+        r#"{"data":{"repository":{}}}"#,
+        r#"{"errors":[{"message":"unavailable"}]}"#,
+    ] {
+        let w = world(1);
+        w.http(
+            "POST recovery",
+            vec![Response::Output(200, response.into())],
+        );
+        with_github(&w, |github| assert!(github.recovery_prs(&[101]).is_err()));
+    }
+    for state in ["closed", "merged"] {
+        let w = world(1);
+        let mut value = pr(101, "topic/1", 11, "main");
+        value["state"] = json!(state);
+        value["merged"] = json!(true);
+        value["merged_at"] = json!("2026-10-30T00:00:00Z");
+        value["merge_commit_sha"] = json!(oid(20));
+        w.http("POST recovery", vec![recovery_reply(&[value])]);
+        with_github(&w, |github| {
+            let observed = github.recovery_prs(&[101]).unwrap();
+            assert_eq!(observed[0].state, "closed");
+            assert_eq!(observed[0].merge_commit_sha, Some(oid(20)));
+        });
+    }
+    let w = world(1);
+    let mut config = w.config();
+    config.repo.name = "invalid".into();
+    with_github(&w, |original| {
+        let github = GitHub {
+            config: &config,
+            session: crate::github::Session::default(),
+            ..*original
+        };
+        assert!(github.recovery_prs(&[101]).is_err());
+    });
+    let w = world(1);
+    with_github(&w, |github| {
+        assert!(github.recovery_prs(&[u64::MAX]).is_err());
+    });
+}
+
+#[derive(Debug)]
+struct RetargetFault {
+    world: Arc<World>,
+    fault: &'static str,
+    mutations: std::sync::atomic::AtomicUsize,
+}
+
+impl RetargetFault {
+    fn apply_concurrent_edit(&self) {
+        match self.fault {
+            "human-base" => {
+                self.world.0.lock().unwrap().prs.get_mut(&102).unwrap()["base"]["ref"] =
+                    json!("human-base");
+            }
+            "human-node" => {
+                self.world.0.lock().unwrap().prs.get_mut(&102).unwrap()["node_id"] =
+                    json!("CHANGED");
+            }
+            "human-head" => {
+                self.world.0.lock().unwrap().prs.get_mut(&102).unwrap()["head"]["sha"] =
+                    json!(oid(99));
+            }
+            "human-state" => {
+                self.world.0.lock().unwrap().prs.get_mut(&102).unwrap()["state"] = json!("closed");
+            }
+            "human-membership" => {
+                self.world.0.lock().unwrap().prs.get_mut(&102).unwrap()["stack"] =
+                    json!({"number":9});
+            }
+            "changed-current" => {
+                self.world.0.lock().unwrap().prs.get_mut(&101).unwrap()["head"]["sha"] =
+                    json!(oid(99));
+            }
+            _ => {}
+        }
+    }
+}
+
+impl crate::github::http::Transport for RetargetFault {
+    fn request(&self, request: crate::github::http::Request<'_>) -> Result<Vec<u8>> {
+        let body: Value = request
+            .body
+            .map(serde_json::from_slice)
+            .transpose()?
+            .unwrap_or_default();
+        let retarget = body["variables"]["input"].get("baseRefName").is_some();
+        if !retarget
+            || self
+                .mutations
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                != 0
+        {
+            return crate::github::http::Transport::request(self.world.as_ref(), request);
+        }
+        if self.fault.starts_with("rejected") {
+            if self.fault == "rejected-unavailable" {
+                self.world.http(
+                    "POST recovery",
+                    vec![Response::Failure("renewed evidence unavailable".into())],
+                );
+            }
+            return Err(crate::github::http::HttpStatusError {
+                url: request.url.into(),
+                status: reqwest::StatusCode::TOO_MANY_REQUESTS,
+                body: "rate limited".into(),
+                quota: crate::github::limits::Quota {
+                    retry_after: Some(std::time::Duration::from_secs(2)),
+                    ..Default::default()
+                },
+            }
+            .into());
+        }
+        self.apply_concurrent_edit();
+        let bytes = crate::github::http::Transport::request(self.world.as_ref(), request)?;
+        let mut value: Value = serde_json::from_slice(&bytes)?;
+        match self.fault {
+            "lost" => bail!("lost acknowledgement"),
+            "malformed" => return Ok(b"{".to_vec()),
+            "missing-current" => value = json!({"data":{}}),
+            "malformed-current" => {
+                value["data"]["retarget"]["pullRequest"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("id");
+            }
+            "wrong-current" => value["data"]["retarget"]["pullRequest"]["number"] = json!(999),
+            "partial"
+            | "partial-unavailable"
+            | "partial-wrong-current"
+            | "partial-throttled"
+            | "partial-throttled-invalid" => {
+                value["errors"] = json!([{"message":if self.fault.starts_with("partial-throttled") {"rate limit exceeded"} else {"lookahead unavailable"}}]);
+                value["data"]["retarget"]["pullRequest"]["repository"] = Value::Null;
+                if ["partial-wrong-current", "partial-throttled-invalid"].contains(&self.fault) {
+                    value["data"]["retarget"]["pullRequest"]["number"] = json!(999);
+                }
+            }
+            "throttled" => {
+                return Err(crate::github::http::HttpStatusError {
+                    url: "https://api.github.com/graphql".into(),
+                    status: reqwest::StatusCode::TOO_MANY_REQUESTS,
+                    body: "rate limited".into(),
+                    quota: crate::github::limits::Quota {
+                        retry_after: Some(std::time::Duration::from_secs(2)),
+                        ..Default::default()
+                    },
+                }
+                .into());
+            }
+            "missing-next" | "next-unavailable" => {
+                value["data"]["retarget"]["pullRequest"]["repository"] = Value::Null;
+            }
+            "wrong-next" => {
+                value["data"]["retarget"]["pullRequest"]["repository"]["next"]["number"] =
+                    json!(999);
+            }
+            "stale" | "stale-human-base" => {
+                let mut memory = self.world.0.lock().unwrap();
+                memory.clock_elapsed += std::time::Duration::from_secs(31);
+                if self.fault == "stale-human-base" {
+                    memory.prs.get_mut(&102).unwrap()["base"]["ref"] = json!("human-base");
+                }
+            }
+            _ => {}
+        }
+        if self.fault == "next-unavailable" || self.fault == "partial-unavailable" {
+            self.world.http(
+                "POST recovery",
+                vec![Response::Failure("next unavailable".into())],
+            );
+        }
+        Ok(serde_json::to_vec(&value)?)
+    }
+}
+
+fn retarget_changes(w: &World) -> Vec<(RecoveryPullRequest, String)> {
+    let memory = w.0.lock().unwrap();
+    [101, 102]
+        .map(|number| {
+            (
+                serde_json::from_value(memory.prs[&number].clone()).unwrap(),
+                "main".into(),
+            )
+        })
+        .to_vec()
+}
+
+#[test]
+fn retarget_pipeline_recovers_uncertain_acknowledgements_without_replaying_writes() {
+    for fault in [
+        "lost",
+        "rejected",
+        "malformed",
+        "missing-current",
+        "malformed-current",
+        "wrong-current",
+        "partial",
+        "partial-wrong-current",
+        "partial-throttled",
+        "partial-throttled-invalid",
+        "throttled",
+        "missing-next",
+        "wrong-next",
+        "stale",
+    ] {
+        let w = world(2);
+        let transport = RetargetFault {
+            world: w.clone(),
+            fault,
+            mutations: 0.into(),
+        };
+        with_github(&w, |original| {
+            let github = GitHub {
+                session: crate::github::Session::default(),
+                transport: &transport,
+                ..*original
+            };
+            github.retarget_recoveries(&retarget_changes(&w)).unwrap();
+            assert!(github.was_updated(101));
+            assert!(github.was_updated(102));
+        });
+        assert_eq!(
+            transport
+                .mutations
+                .load(std::sync::atomic::Ordering::SeqCst),
+            if fault == "rejected" { 3 } else { 2 },
+            "{fault}"
+        );
+        let memory = w.0.lock().unwrap();
+        assert_eq!(memory.prs[&101]["base"]["ref"], "main");
+        assert_eq!(memory.prs[&102]["base"]["ref"], "main");
+        drop(memory);
+        if fault == "throttled" {
+            assert!(w.trace().iter().any(|event| event["kind"] == "wait"));
+        }
+        if matches!(fault, "stale" | "partial" | "partial-throttled") {
+            assert_eq!(
+                w.trace()
+                    .iter()
+                    .filter(|event| event["body"]["variables"].get("r0").is_some())
+                    .count(),
+                2
+            );
+        }
+    }
+}
+
+#[test]
+fn retarget_pipeline_checks_the_next_identity_and_stops_after_a_failed_precondition() {
+    for fault in [
+        "human-base",
+        "human-node",
+        "human-head",
+        "human-state",
+        "human-membership",
+        "changed-current",
+        "stale-human-base",
+        "next-unavailable",
+        "partial-unavailable",
+    ] {
+        let w = world(2);
+        let transport = RetargetFault {
+            world: w.clone(),
+            fault,
+            mutations: 0.into(),
+        };
+        with_github(&w, |original| {
+            let github = GitHub {
+                session: crate::github::Session::default(),
+                transport: &transport,
+                ..*original
+            };
+            assert!(
+                github.retarget_recoveries(&retarget_changes(&w)).is_err(),
+                "{fault}"
+            );
+            assert_eq!(
+                github.was_updated(101),
+                fault != "changed-current",
+                "{fault}"
+            );
+            assert!(!github.was_updated(102));
+        });
+        assert_eq!(
+            transport
+                .mutations
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "{fault}"
+        );
+        assert_ne!(w.0.lock().unwrap().prs[&102]["base"]["ref"], "main");
+    }
+}
+
+#[test]
+fn retarget_pipeline_rejects_an_unrepresentable_next_identity_before_dispatch() {
+    let w = world(2);
+    let mut changes = retarget_changes(&w);
+    changes[1].0.number = u64::MAX;
+    with_github(&w, |github| {
+        assert!(github.retarget_recoveries(&changes).is_err());
+    });
+    assert!(!w.trace().iter().any(effect));
+}
+
+#[test]
+fn combined_head_recovery_observations_cross_the_25_head_boundary() {
+    let world = world(26);
+    with_github(&world, |github| {
+        let references: Vec<_> = (1..=26).map(|n| format!("topic/{n}")).collect();
+        let numbers: Vec<_> = (101..=126).collect();
+        let observed = github.observe_recovery(&references, &numbers).unwrap();
+        assert_eq!(
+            observed.iter().map(|pr| pr.number).collect::<Vec<_>>(),
+            numbers
+        );
+        assert_eq!(
+            world
+                .trace()
+                .iter()
+                .filter(|event| event["kind"] == "http")
+                .count(),
+            2
+        );
+        for (reference, number) in references.iter().zip(numbers) {
+            assert_eq!(
+                github.publication_pr(reference).unwrap().unwrap().number,
+                number
+            );
+        }
+    });
+}
+
+#[derive(Debug)]
+struct NativeRate {
+    world: Arc<World>,
+    mode: &'static str,
+    mutations: std::sync::atomic::AtomicUsize,
+    topology: std::sync::atomic::AtomicUsize,
+}
+impl crate::github::http::Transport for NativeRate {
+    fn response(
+        &self,
+        request: crate::github::http::Request<'_>,
+    ) -> Result<crate::github::http::Response> {
+        let topology = request.url.ends_with("stacks/9");
+        let body = self.request(request)?;
+        let limited = self.mode == "quota"
+            && topology
+            && self
+                .topology
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                == 0;
+        Ok(crate::github::http::Response {
+            acquired: Instant::now(),
+            status: if body.is_empty() { 204 } else { 200 },
+            headers: reqwest::header::HeaderMap::default(),
+            quota: crate::github::limits::Quota {
+                remaining: limited.then_some(0),
+                reset: limited.then_some(std::time::Duration::from_secs(59)),
+                ..Default::default()
+            },
+            body,
+        })
+    }
+    fn request(&self, request: crate::github::http::Request<'_>) -> Result<Vec<u8>> {
+        if request.url.ends_with("/unstack")
+            || (self.mode == "create"
+                && request.method == "POST"
+                && request.url.ends_with("/stacks"))
+            || (self.mode == "append" && request.url.ends_with("/add"))
+        {
+            let attempt = self
+                .mutations
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if self.mode != "quota" && (attempt == 0 || self.mode == "repeat") {
+                return Err(crate::github::http::HttpStatusError {
+                    url: request.url.into(),
+                    status: if self.mode == "permission" {
+                        reqwest::StatusCode::FORBIDDEN
+                    } else {
+                        reqwest::StatusCode::TOO_MANY_REQUESTS
+                    },
+                    body: "rejected".into(),
+                    quota: crate::github::limits::Quota {
+                        retry_after: (!["permission", "backoff"].contains(&self.mode)).then_some(
+                            std::time::Duration::from_secs(if self.mode == "long" {
+                                3600
+                            } else {
+                                2
+                            }),
+                        ),
+                        ..Default::default()
+                    },
+                }
+                .into());
+            }
+        }
+        crate::github::http::Transport::request(self.world.as_ref(), request)
+    }
+}
+#[derive(Debug)]
+struct ChangeDuringWait<'a> {
+    world: &'a World,
+    mode: &'static str,
+}
+impl crate::commands::Clock for ChangeDuringWait<'_> {
+    fn now(&self) -> Instant {
+        crate::commands::Clock::now(self.world)
+    }
+    fn sleep(&self, duration: std::time::Duration) {
+        crate::commands::Clock::sleep(self.world, duration);
+        if duration.as_secs() >= 2 {
+            let mut memory = self.world.0.lock().unwrap();
+            if self.mode == "member" {
+                let mut outside = pr(999, "outside", 99, "main");
+                outside["stack"] = json!({"number":9});
+                memory.prs.insert(999, outside);
+            } else if self.mode == "head" {
+                memory.prs.get_mut(&101).unwrap()["head"]["sha"] = json!(oid(99));
+            }
+        }
+    }
+}
+#[test]
+fn native_transition_renews_scope_after_quota_and_rate_waits() {
+    for mode in ["quota", "rate", "backoff", "repeat", "permission", "long"] {
+        for changed in [false, true] {
+            let world = transition_world(&[2, 1], &[1, 2]);
+            for pr in world.0.lock().unwrap().prs.values_mut() {
+                pr["stack"] = json!({"number":9});
+            }
+            with_github(&world, |original| {
+                let state = state(&world);
+                let (plan, bases) = observe(&world, original, &state);
+                let transport = NativeRate {
+                    world: world.clone(),
+                    mode,
+                    mutations: 0.into(),
+                    topology: 0.into(),
+                };
+                let clock = ChangeDuringWait {
+                    world: &world,
+                    mode: if changed { "member" } else { "none" },
+                };
+                let github = GitHub {
+                    transport: &transport,
+                    clock: Some(&clock),
+                    session: crate::github::Session::default(),
+                    ..*original
+                };
+                let result = plan.apply(&github, &state, &bases);
+                let expected = !changed && ["quota", "rate", "backoff"].contains(&mode);
+                assert_eq!(result.is_ok(), expected, "{mode}/{changed}: {result:?}");
+                let mutations = transport
+                    .mutations
+                    .load(std::sync::atomic::Ordering::SeqCst);
+                assert_eq!(
+                    mutations,
+                    if mode == "quota" {
+                        usize::from(!changed)
+                    } else if changed || ["permission", "long"].contains(&mode) {
+                        1
+                    } else if mode == "repeat" {
+                        4
+                    } else {
+                        2
+                    }
+                );
+                let outcome = github.commands.outcomes.snapshot()
+                    [&crate::model::outcome::Operation::NativeStack];
+                assert_eq!(outcome.confirmed, expected);
+                assert!(!outcome.unconfirmed);
+                if !expected {
+                    assert!(!world.trace().iter().any(effect));
+                }
+            });
+        }
+    }
+}
+#[test]
+fn rate_rejected_base_updates_recheck_concurrent_head_changes_before_retrying() {
+    for unavailable in [false, true] {
+        let world = world(2);
+        with_github(&world, |original| {
+            let transport = RetargetFault {
+                world: world.clone(),
+                fault: if unavailable {
+                    "rejected-unavailable"
+                } else {
+                    "rejected"
+                },
+                mutations: 0.into(),
+            };
+            let clock = ChangeDuringWait {
+                world: &world,
+                mode: if unavailable { "none" } else { "head" },
+            };
+            let github = GitHub {
+                transport: &transport,
+                clock: Some(&clock),
+                session: crate::github::Session::default(),
+                ..*original
+            };
+            assert!(
+                github
+                    .retarget_recoveries(&retarget_changes(&world))
+                    .is_err()
+            );
+            assert_eq!(
+                transport
+                    .mutations
+                    .load(std::sync::atomic::Ordering::SeqCst),
+                1
+            );
+            let outcome =
+                github.commands.outcomes.snapshot()[&crate::model::outcome::Operation::Base(101)];
+            assert!(!outcome.unconfirmed && !outcome.confirmed);
+            assert!(!world.trace().iter().any(is_retarget));
+        });
+    }
+}
+
+#[test]
+fn native_creation_and_append_recover_definite_rate_rejections() {
+    for mode in ["create", "append"] {
+        let world = World::new(2);
+        world.run(&["--no-stack"]).unwrap();
+        if mode == "append" {
+            world.0.lock().unwrap().prs.get_mut(&101).unwrap()["stack"] = json!({"number":9});
+        }
+        with_github(&world, |original| {
+            let mut state = state(&world);
+            for (index, commit) in state.stack.iter_mut().enumerate() {
+                commit.pr_number = 101 + index as u64;
+            }
+            let transport = NativeRate {
+                world: world.clone(),
+                mode,
+                mutations: 0.into(),
+                topology: 0.into(),
+            };
+            let github = GitHub {
+                transport: &transport,
+                session: crate::github::Session::default(),
+                ..*original
+            };
+            github.manage_stack(&state.stack, "main").unwrap();
+            assert_eq!(
+                transport
+                    .mutations
+                    .load(std::sync::atomic::Ordering::SeqCst),
+                2
+            );
+            let outcome =
+                github.commands.outcomes.snapshot()[&crate::model::outcome::Operation::NativeStack];
+            assert!(outcome.confirmed && !outcome.unconfirmed);
+        });
+    }
+}
+
+#[derive(Debug)]
+struct TransitionTopologyDelay<'a> {
+    world: &'a World,
+    armed: std::sync::atomic::AtomicBool,
+}
+impl crate::github::http::Transport for TransitionTopologyDelay<'_> {
+    fn request(&self, request: crate::github::http::Request<'_>) -> Result<Vec<u8>> {
+        let topology = request.url.ends_with("stacks/9");
+        let body = crate::github::http::Transport::request(self.world, request)?;
+        if topology && self.armed.load(std::sync::atomic::Ordering::SeqCst) {
+            self.world.0.lock().unwrap().clock_elapsed += std::time::Duration::from_secs(901);
+        }
+        Ok(body)
+    }
+}
+#[test]
+fn transition_native_budget_includes_the_final_topology_observation() {
+    let world = transition_world(&[2, 1], &[1, 2]);
+    for pr in world.0.lock().unwrap().prs.values_mut() {
+        pr["stack"] = json!({"number":9});
+    }
+    with_github(&world, |original| {
+        let transport = TransitionTopologyDelay {
+            world: &world,
+            armed: false.into(),
+        };
+        let github = GitHub {
+            transport: &transport,
+            session: crate::github::Session::default(),
+            ..*original
+        };
+        let state = state(&world);
+        let (plan, bases) = observe(&world, &github, &state);
+        transport
+            .armed
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        assert!(
+            format!("{:#}", plan.apply(&github, &state, &bases).unwrap_err())
+                .contains("cumulative wait budget")
+        );
+        assert!(!world.trace().iter().any(effect));
+    });
+}
+#[test]
+fn budgeted_recovery_membership_fallback_keeps_the_outer_request_context() {
+    let world = world(1);
+    world
+        .0
+        .lock()
+        .unwrap()
+        .prs
+        .get_mut(&101)
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .remove("stack");
+    with_github(&world, |github| {
+        assert_eq!(
+            github
+                .recovery_pr_with_budget(101, Some(github.now()))
+                .unwrap()
+                .number,
+            101
+        );
+    });
+}
+
+#[derive(Debug)]
+struct SlowCombined {
+    world: Arc<World>,
+    mode: &'static str,
+    reads: std::sync::atomic::AtomicUsize,
+}
+impl crate::github::http::Transport for SlowCombined {
+    fn request(&self, request: crate::github::http::Request<'_>) -> Result<Vec<u8>> {
+        let body: Value = request
+            .body
+            .map_or(Value::Null, |body| serde_json::from_slice(body).unwrap());
+        let combined = body["query"]
+            .as_str()
+            .is_some_and(|query| query.starts_with("query RecoveryHeads"));
+        let slow = combined
+            && (self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0
+                || self.mode == "always");
+        let bytes = crate::github::http::Transport::request(self.world.as_ref(), request)?;
+        if slow {
+            let mut memory = self.world.0.lock().unwrap();
+            memory.clock_elapsed += std::time::Duration::from_secs(31);
+            if self.mode == "head" {
+                memory.prs.get_mut(&101).unwrap()["head"]["sha"] = json!(oid(99));
+            }
+            if self.mode == "membership" {
+                memory.prs.get_mut(&101).unwrap()["stack"] = json!({"number":9});
+            }
+        }
+        Ok(bytes)
+    }
+}
+#[test]
+fn postpublication_renewal_keeps_recovery_and_ordinary_evidence_together() {
+    for mode in ["same", "head", "membership", "always"] {
+        let world = world(1);
+        with_github(&world, |original| {
+            let state = state(&world);
+            let mut memory = world.0.lock().unwrap();
+            memory.prs.get_mut(&101).unwrap()["base"]["ref"] = json!("main");
+            memory.prs.get_mut(&101).unwrap()["head"]["sha"] = json!(state.stack[0].hash);
+            memory.trace.clear();
+            drop(memory);
+            let transport = SlowCombined {
+                world: world.clone(),
+                mode,
+                reads: 0.into(),
+            };
+            let github = GitHub {
+                transport: &transport,
+                session: crate::github::Session::default(),
+                ..*original
+            };
+            let result = github.observe_recovery(&["topic/1".into()], &[101]);
+            assert_eq!(result.is_ok(), mode != "always", "{mode}: {result:?}");
+            if let Ok(observed) = result {
+                let ordinary = github.get(101).unwrap();
+                assert_eq!(ordinary.stack, observed[0].stack);
+                assert_eq!(ordinary.head.name, observed[0].head.name);
+                assert_eq!(
+                    observed[0].head.sha,
+                    if mode == "head" {
+                        oid(99)
+                    } else {
+                        state.stack[0].hash.clone()
+                    }
+                );
+            }
+            assert_eq!(
+                transport.reads.load(std::sync::atomic::Ordering::SeqCst),
+                if mode == "always" { 4 } else { 2 }
+            );
+            assert!(!world.trace().iter().any(effect));
+            assert!(
+                world
+                    .trace()
+                    .iter()
+                    .filter(|event| event["kind"] == "http")
+                    .all(|event| event["body"]["query"]
+                        .as_str()
+                        .is_some_and(|query| query.starts_with("query RecoveryHeads")))
+            );
+        });
     }
 }

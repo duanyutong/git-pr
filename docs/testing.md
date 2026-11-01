@@ -253,7 +253,12 @@ Title reversions and unrelated human title edits following acknowledgement shall
 Unrelated observation errors shall fail without disabling subsequent stack-schema checks.
 A separate wait-boundary regression edits human text whilst the clock advances and verifies that content is freshly rendered before the delayed write.
 These tests shall perform no repeated Git publication or PR creation.
-Truncated and oversized response regressions retain valid quota headers and body-drain age, enforce deadlines, preserve uncertain mutation classification and verify independently available primary API quotas.
+Nested native recovery cases compose owner-level and read-level delays against one cumulative budget, including retention of confirmed dissolution after later exhaustion.
+Label cases change policy-relevant labels during dispatch waits, confirm lost acknowledgements without duplicate writes and preserve unrelated labels and earlier effects.
+Retargeting regressions require each acknowledgement to confirm the exact intended PR before the following mutation is dispatched.
+Complete description acknowledgements accompanied by rate-limit errors require the next REST or GraphQL request to honour the cooldown, without replay or unnecessary outcome acquisition.
+Truncated and oversized response regressions retain valid quota headers and body-drain age, enforce deadlines and cumulative recovery budgets, preserve uncertain mutation classification and verify independently available primary API quotas.
+Lost, malformed, partial and throttled responses shall preserve confirmed changes without replaying the base mutation.
 
 Terminal tests cover a single animation worker, named stage outcomes, bounded selection previews, separated result blocks, complete wrapped titles, aligned timings, narrow displays, Unicode grapheme widths, elapsed and remaining timers, confirmation suspension and durable redirected wait notices.
 Within-stage counters cover PR creation, base checks, descriptions and label reconciliation; current PR identities precede ancillary request and quota details.

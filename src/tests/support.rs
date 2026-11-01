@@ -365,8 +365,11 @@ impl Transport for Service {
             body.as_ref(),
         )?;
         drop(prs);
-        if request.method == "PATCH"
-            && body.as_ref().is_some_and(|body| body.get("base").is_some())
+        if ((request.method == "PATCH"
+            && body.as_ref().is_some_and(|body| body.get("base").is_some()))
+            || body
+                .as_ref()
+                .is_some_and(|body| body["variables"]["input"].get("baseRefName").is_some()))
             && let Some(delete) = self.indirect_merges
         {
             let (cwd, env) = self.git_context.lock().unwrap().clone().unwrap();

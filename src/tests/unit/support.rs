@@ -387,6 +387,7 @@ impl CommandRunner for World {
             ("git", ["rev-parse", "--show-toplevel"]) | ("jj", ["workspace", "root"]) => {
                 "/unit/repo".into()
             }
+            ("git", ["rev-parse", "--is-shallow-repository"]) => "false".into(),
             ("git", ["remote", "-v"]) => "origin https://github.com/org/repo.git (push)".into(),
             ("git", ["remote", "get-url", "--push", "--all", "--", _]) => {
                 "https://github.com/org/repo.git".into()
@@ -756,8 +757,21 @@ impl Transport for World {
             .unwrap_or_else(|| url.path().trim_start_matches('/'));
         assert_eq!(request.token, "unit-token");
         m.trace.push(json!({"kind":"http","method":request.method,"path":path,"body":body,"query":url.query()}));
-        if let Some(response) =
-            response(&mut m.http_responses, &format!("{} {path}", request.method))
+        let recovery = body
+            .as_ref()
+            .is_some_and(|b| b["variables"].get("r0").is_some());
+        let retarget = body
+            .as_ref()
+            .is_some_and(|b| b["variables"]["input"].get("baseRefName").is_some());
+        let specialised = if recovery {
+            response(&mut m.http_responses, "POST recovery")
+        } else if retarget {
+            response(&mut m.http_responses, "POST retarget")
+        } else {
+            None
+        };
+        if let Some(response) = specialised
+            .or_else(|| response(&mut m.http_responses, &format!("{} {path}", request.method)))
         {
             match response {
                 Response::Failure(error) => bail!("{error}"),

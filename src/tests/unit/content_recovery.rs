@@ -19,6 +19,21 @@ struct Fault {
 }
 
 impl Transport for Fault {
+    fn response(&self, request: Request<'_>) -> Result<crate::github::http::Response> {
+        let body = self.request(request)?;
+        Ok(crate::github::http::Response {
+            acquired: std::time::Instant::now(),
+            status: if body.is_empty() { 204 } else { 200 },
+            headers: reqwest::header::HeaderMap::default(),
+            quota: limits::Quota {
+                retry_after: (self.mode == "throttle-long"
+                    && body.windows(12).any(|bytes| bytes == b"RATE_LIMITED"))
+                .then_some(std::time::Duration::from_secs(600)),
+                ..Default::default()
+            },
+            body,
+        })
+    }
     fn request(&self, request: Request<'_>) -> Result<Vec<u8>> {
         let payload: Value = request
             .body
@@ -103,7 +118,7 @@ impl Fault {
             "throttle_reject" => Ok(serde_json::to_vec(
                 &json!({"errors":[{"type":"RATE_LIMITED"}]}),
             )?),
-            "throttle" => Ok(serde_json::to_vec(
+            "throttle" | "throttle-long" => Ok(serde_json::to_vec(
                 &json!({"data":data,"errors":[{"type":"RATE_LIMITED"}]}),
             )?),
             "stale_ack" => Ok(serde_json::to_vec(
@@ -114,16 +129,32 @@ impl Fault {
             )?),
             "malformed" => Ok(b"incomplete response".to_vec()),
             "lost" => bail!("connection reset after dispatch"),
+            "truncated" | "oversized" => {
+                let error = anyhow::Error::new(crate::github::http::IncompleteResponse {
+                    quota: limits::Quota {
+                        retry_after: Some(std::time::Duration::from_secs(2)),
+                        ..Default::default()
+                    },
+                });
+                Err(if self.mode == "truncated" {
+                    error.context(crate::github::http::TransientRead)
+                } else {
+                    error
+                })
+            }
             _ => Err(crate::github::http::HttpStatusError {
                 url: url.into(),
                 status: reqwest::StatusCode::from_u16(
-                    self.mode.trim_end_matches("-hint").parse().unwrap(),
+                    self.mode.split('-').next().unwrap().parse().unwrap(),
                 )
                 .unwrap(),
                 body: "injected failure".into(),
                 quota: limits::Quota {
-                    retry_after: (self.mode == "429-hint")
-                        .then_some(std::time::Duration::from_secs(2)),
+                    retry_after: match self.mode {
+                        "429-hint" => Some(std::time::Duration::from_secs(2)),
+                        "429-long-hint" => Some(std::time::Duration::from_secs(600)),
+                        _ => None,
+                    },
                     ..limits::Quota::default()
                 },
             }
@@ -305,13 +336,33 @@ fn description_progress_counts_recovered_batches_once_and_never_completes_reject
 #[test]
 fn every_partial_prefix_recovers_without_repeating_completed_writes_or_publication() {
     for prefix in 0..=5 {
-        for mode in ["502", "504", "partial", "malformed", "lost", "throttle"] {
+        for mode in [
+            "502",
+            "504",
+            "partial",
+            "malformed",
+            "lost",
+            "throttle",
+            "truncated",
+            "oversized",
+        ] {
             fixture(20, prefix, 1, mode, None, |g, service, commits| {
                 update(g, commits).unwrap();
                 assert!((101..=120).all(|number| g.was_updated(number)));
                 let mut applied = service.applied.lock().unwrap().clone();
                 applied.sort_unstable();
                 assert_eq!(applied, (101..=120).collect::<Vec<_>>(), "{prefix}/{mode}");
+                if matches!(mode, "truncated" | "oversized") {
+                    assert_eq!(
+                        service
+                            .world
+                            .trace()
+                            .iter()
+                            .filter(|event| event["kind"] == "wait" && event["millis"] == 2000)
+                            .count(),
+                        1
+                    );
+                }
                 assert!(
                     service
                         .attempted
@@ -572,4 +623,213 @@ fn deferred_recovery_without_a_clock_stops_before_observing_or_writing() {
         assert!(error.to_string().contains("no wait clock"));
         assert!(service.attempted.lock().unwrap().is_empty());
     });
+}
+
+#[test]
+fn description_recovery_has_one_budget_and_retains_completed_effects() {
+    fixture(
+        3,
+        1,
+        999,
+        "throttle-long",
+        None,
+        |github, service, commits| {
+            let started = github.now();
+            let error = update(github, commits).unwrap_err();
+            assert!(
+                format!("{error:#}").contains("cumulative wait budget"),
+                "{error:#}"
+            );
+            assert_eq!(github.now().duration_since(started).as_secs(), 600);
+            assert_eq!(
+                *service.attempted.lock().unwrap(),
+                [vec![101, 102, 103], vec![102, 103]]
+            );
+            assert_eq!(*service.applied.lock().unwrap(), [101, 102]);
+        },
+    );
+}
+
+#[derive(Debug)]
+struct RepeatedContentDeferral<'a> {
+    world: &'a World,
+    session: &'a Session,
+}
+impl crate::commands::Clock for RepeatedContentDeferral<'_> {
+    fn now(&self) -> std::time::Instant {
+        crate::commands::Clock::now(self.world)
+    }
+    fn sleep(&self, duration: std::time::Duration) {
+        crate::commands::Clock::sleep(self.world, duration);
+        self.session.dispatch().reserve(self.now(), 60);
+    }
+}
+#[test]
+fn exhausted_unsent_description_deferrals_do_not_wait_again() {
+    fixture(1, 0, 0, "502", None, |original, service, commits| {
+        let mut github = GitHub {
+            clock: None,
+            session: Session::default(),
+            ..*original
+        };
+        let clock = RepeatedContentDeferral {
+            world: &service.world,
+            session: &github.session,
+        };
+        github.clock = Some(&clock);
+        github.get(101).unwrap();
+        github.session.dispatch().reserve(github.now(), 60);
+        let error = update(&github, commits).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("unsent deferral"),
+            "{error:#}"
+        );
+        let waits = service
+            .world
+            .trace()
+            .iter()
+            .filter(|event| event["kind"] == "wait")
+            .count();
+        assert_eq!(waits, 3);
+        assert!(service.attempted.lock().unwrap().is_empty());
+        assert!(
+            !github.commands.outcomes.snapshot()
+                [&crate::model::outcome::Operation::Description(101)]
+                .unconfirmed
+        );
+    });
+}
+
+#[test]
+fn missing_acquisition_evidence_refuses_rest_and_graphql_content_mutations() {
+    fixture(1, 0, 0, "502", None, |github, service, commits| {
+        let before = github.get(101).unwrap();
+        super::super::guard(&github.session.pr_times).clear();
+        assert!(
+            github
+                .update_rest_content(
+                    &commits[0],
+                    before.clone(),
+                    Arc::from("updated"),
+                    &mut |_, _| Ok(None)
+                )
+                .is_err()
+        );
+        let mut changes = [Change {
+            alias: 0,
+            commit: &commits[0],
+            before: before.clone(),
+            after: before,
+            acknowledged: false,
+        }];
+        assert!(github.send_recovery(&mut changes, github.now()).is_err());
+        assert!(service.attempted.lock().unwrap().is_empty());
+    });
+}
+
+#[test]
+fn recovery_splits_growing_human_descriptions_by_encoded_bytes() {
+    fixture(5, 0, 0, "502", None, |github, service, commits| {
+        let human = "𐀀".repeat(60_000);
+        for number in 101..=105 {
+            service
+                .world
+                .0
+                .lock()
+                .unwrap()
+                .changes_on_wait
+                .insert(number, human.clone());
+        }
+        github.session.dispatch().reserve(github.now(), 60);
+        update(github, commits).unwrap();
+        assert_eq!(
+            *service.attempted.lock().unwrap(),
+            [vec![101, 102, 103, 104], vec![105]]
+        );
+        assert_eq!(*service.applied.lock().unwrap(), [101, 102, 103, 104, 105]);
+        for pr in service.world.0.lock().unwrap().prs.values() {
+            assert!(pr["body"].as_str().unwrap().starts_with(&human));
+        }
+    });
+}
+#[test]
+fn unsent_description_failures_preserve_confirmed_work_without_claiming_uncertainty() {
+    for rest in [false, true] {
+        for confirmed in [false, true] {
+            fixture(1, 0, 0, "502", None, |github, service, commits| {
+                let mut before = github.get(101).unwrap();
+                if rest {
+                    Arc::make_mut(&mut before).node_id.clear();
+                    github.session.prs().insert(101, before);
+                }
+                let operation = crate::model::outcome::Operation::Description(101);
+                if confirmed {
+                    github.commands.outcomes.confirm(operation.clone());
+                }
+                github.session.dispatch().reserve(github.now(), 450);
+                assert!(update(github, commits).is_err());
+                let effect = github.commands.outcomes.snapshot()[&operation];
+                assert_eq!(effect.confirmed, confirmed);
+                assert!(!effect.unconfirmed);
+                assert!(service.attempted.lock().unwrap().is_empty());
+                assert!(
+                    !service
+                        .world
+                        .trace()
+                        .iter()
+                        .any(|event| event["method"] == "PATCH")
+                );
+            });
+        }
+    }
+}
+
+#[test]
+fn fully_acknowledged_rate_limited_descriptions_preserve_the_next_request_deadline() {
+    for count in [5, 20] {
+        fixture(count, 5, 1, "throttle", None, |github, service, commits| {
+            update(github, commits).unwrap();
+            assert_eq!(
+                service.attempted.lock().unwrap().len(),
+                usize::try_from(count).unwrap() / 5
+            );
+            let mut applied = service.applied.lock().unwrap().clone();
+            applied.sort_unstable();
+            assert_eq!(applied, (101..101 + count).collect::<Vec<_>>());
+            if count == 5 {
+                assert!(
+                    !service
+                        .world
+                        .trace()
+                        .iter()
+                        .any(|event| event["kind"] == "wait")
+                );
+                // Every alias was acknowledged, so no outcome read is necessary.
+                assert_eq!(
+                    service
+                        .world
+                        .trace()
+                        .iter()
+                        .filter(|event| event["kind"] == "http")
+                        .count(),
+                    5
+                );
+                github.request("GET", "pulls/101", None).unwrap();
+            }
+            let waits: Vec<_> = service
+                .world
+                .trace()
+                .iter()
+                .filter(|event| event["kind"] == "wait")
+                .map(|event| event["millis"].as_u64().unwrap())
+                .collect();
+            assert_eq!(waits.iter().filter(|&&millis| millis == 60_000).count(), 1);
+            assert!(waits.iter().all(|&millis| matches!(millis, 1000 | 60_000)));
+            update(github, commits).unwrap();
+            assert_eq!(
+                *service.applied.lock().unwrap(),
+                (101..101 + count).collect::<Vec<_>>()
+            );
+        });
+    }
 }
