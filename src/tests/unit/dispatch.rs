@@ -8,6 +8,14 @@ struct Reply {
     status: u16,
     headers: reqwest::header::HeaderMap,
     body: String,
+    elapsed: Duration,
+    failure: Option<BodyFailure>,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum BodyFailure {
+    Truncated,
+    Oversized,
 }
 
 impl Reply {
@@ -15,6 +23,8 @@ impl Reply {
         Self {
             status,
             body: body.into(),
+            elapsed: Duration::ZERO,
+            failure: None,
             headers: reqwest::header::HeaderMap::new(),
         }
     }
@@ -28,6 +38,7 @@ impl Reply {
 struct Service {
     replies: Mutex<VecDeque<Reply>>,
     calls: Mutex<usize>,
+    world: std::sync::Arc<World>,
 }
 
 impl Transport for Service {
@@ -42,17 +53,30 @@ impl Transport for Service {
         } else {
             replies.front().unwrap().clone()
         };
+        self.world.0.lock().unwrap().clock_elapsed += reply.elapsed;
+        let mut quota = crate::github::http::quota(&reply.headers);
+        quota.elapsed = reply.elapsed;
+        if let Some(failure) = reply.failure {
+            let error = anyhow::anyhow!("incomplete fixture response");
+            let error = match failure {
+                BodyFailure::Truncated => error.context(crate::github::http::TransientRead),
+                BodyFailure::Oversized => error,
+            };
+            return Err(error.context(IncompleteResponse { quota }));
+        }
         if reply.status >= 400 {
             return Err(HttpStatusError {
                 url: request.url.into(),
                 status: reqwest::StatusCode::from_u16(reply.status).unwrap(),
-                quota: crate::github::http::quota(&reply.headers),
+                quota,
                 body: reply.body,
             }
             .into());
         }
         Ok(Response {
+            acquired: Instant::now(),
             status: reply.status,
+            quota,
             headers: reply.headers,
             body: reply.body.into_bytes(),
         })
@@ -66,6 +90,7 @@ fn run(replies: Vec<Reply>, action: impl FnOnce(&GitHub<'_>, &World, &Service)) 
     let service = Service {
         replies: Mutex::new(replies.into()),
         calls: Mutex::new(0),
+        world: world.clone(),
     };
     let github = GitHub {
         config: &config,
@@ -267,4 +292,165 @@ fn connection_failures_are_retryable_only_for_reads_and_graphql_quotas_are_repor
         )
         .unwrap();
     });
+}
+
+#[test]
+fn slow_response_bodies_do_not_restart_absolute_quota_deadlines() {
+    for (elapsed, remaining) in [(40, 21_000), (70, 0)] {
+        let mut limited = Reply::new(200, "{}")
+            .header("date", "Thu, 15 Oct 2026 12:00:00 GMT")
+            .header("x-ratelimit-remaining", "0")
+            .header("x-ratelimit-limit", "5000")
+            .header("x-ratelimit-reset", "1792065660");
+        limited.elapsed = Duration::from_secs(elapsed);
+        run(
+            vec![limited, Reply::new(200, "{}")],
+            |github, world, service| {
+                github.request("GET", "pulls/101", None).unwrap();
+                github.request("GET", "pulls/102", None).unwrap();
+                assert_eq!(*service.calls.lock().unwrap(), 2);
+                assert_eq!(
+                    waits(world),
+                    if remaining == 0 {
+                        vec![]
+                    } else {
+                        vec![remaining]
+                    }
+                );
+            },
+        );
+    }
+    let mut rejected = Reply::new(429, "limited").header("retry-after", "60");
+    rejected.elapsed = Duration::from_secs(40);
+    run(vec![rejected, Reply::new(200, "{}")], |github, world, _| {
+        github.request("GET", "pulls/101", None).unwrap();
+        assert_eq!(waits(world), [20_000]);
+    });
+}
+
+#[test]
+fn partial_mutation_acknowledgements_delay_later_rest_and_graphql_requests_without_replay() {
+    for following in [
+        "https://api.github.com/graphql",
+        "https://api.github.com/repos/org/repo/pulls/101",
+    ] {
+        for writes in [0, 1] {
+            for hint in [None, Some("2"), Some("3600")] {
+                let mut limited = Reply::new(
+                    200,
+                    r#"{"data":{"p0":{"pullRequest":{"number":101}}},"errors":[{"type":"RATE_LIMITED"}]}"#,
+                );
+                if let Some(hint) = hint {
+                    limited = limited.header("retry-after", hint);
+                }
+                run(
+                    vec![limited, Reply::new(200, "{}")],
+                    |github, world, service| {
+                        let error = github
+                            .request_url_encoded(
+                                "POST",
+                                "https://api.github.com/graphql",
+                                None,
+                                1,
+                                true,
+                            )
+                            .unwrap_err();
+                        assert!(error.downcast_ref::<Throttled>().unwrap().partial);
+                        assert!(error.is::<PartialGraphql>());
+                        assert_eq!(*service.calls.lock().unwrap(), 1);
+                        assert_eq!(waits(world), [] as [u64; 0]);
+                        let result =
+                            github.request_url_encoded("POST", following, None, writes, false);
+                        if hint == Some("3600") {
+                            assert!(result.unwrap_err().is::<limits::Exhausted>());
+                            assert_eq!(*service.calls.lock().unwrap(), 1);
+                            assert_eq!(waits(world), [] as [u64; 0]);
+                        } else {
+                            result.unwrap();
+                            assert_eq!(*service.calls.lock().unwrap(), 2);
+                            assert_eq!(waits(world), [if hint.is_some() { 2000 } else { 60_000 }]);
+                        }
+                    },
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn incomplete_response_quotas_govern_read_retries_and_unknown_mutation_reconciliation() {
+    for failure in [BodyFailure::Truncated, BodyFailure::Oversized] {
+        for primary in [false, true] {
+            for mutation in [false, true] {
+                let mut limited = Reply::new(429, "unusable body");
+                limited.failure = Some(failure);
+                limited.elapsed = Duration::from_secs(40);
+                limited = if primary {
+                    limited
+                        .header("date", "Thu, 15 Oct 2026 12:00:00 GMT")
+                        .header("x-ratelimit-remaining", "0")
+                        .header("x-ratelimit-limit", "5000")
+                        .header("x-ratelimit-reset", "1792065660")
+                } else {
+                    limited.header("retry-after", "60")
+                };
+                run(
+                    vec![limited, Reply::new(200, "{}")],
+                    |github, world, service| {
+                        let result = github.request(
+                            if mutation { "POST" } else { "GET" },
+                            "pulls/101",
+                            None,
+                        );
+                        if mutation || matches!(failure, BodyFailure::Oversized) {
+                            let error = result.unwrap_err();
+                            assert!(error.is::<IncompleteResponse>());
+                            assert!(!error.is::<HttpStatusError>());
+                            assert!(!error.is::<Throttled>());
+                            assert_eq!(*service.calls.lock().unwrap(), 1);
+                            assert_eq!(waits(world), [] as [u64; 0]);
+                            github.request("GET", "pulls/101", None).unwrap();
+                        } else {
+                            result.unwrap();
+                        }
+                        assert_eq!(*service.calls.lock().unwrap(), 2);
+                        assert_eq!(waits(world), [if primary { 21_000 } else { 20_000 }]);
+                    },
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn primary_exhaustion_does_not_block_the_other_api_quota() {
+    for graphql in [false, true] {
+        let limited = Reply::new(200, "{}")
+            .header("date", "Thu, 15 Oct 2026 12:00:00 GMT")
+            .header("x-ratelimit-remaining", "0")
+            .header("x-ratelimit-reset", "1792065660");
+        run(
+            vec![limited, Reply::new(200, "{}")],
+            |github, world, service| {
+                let urls = [
+                    "https://api.github.com/repos/org/repo/pulls/101",
+                    "https://api.github.com/graphql",
+                ];
+                let limited = urls[usize::from(graphql)];
+                let other = urls[usize::from(!graphql)];
+                github
+                    .request_url_encoded("GET", limited, None, 0, false)
+                    .unwrap();
+                github
+                    .request_url_encoded("GET", other, None, 0, false)
+                    .unwrap();
+                assert_eq!(waits(world), [] as [u64; 0]);
+                github
+                    .request_url_encoded("GET", limited, None, 0, false)
+                    .unwrap();
+                assert_eq!(waits(world), [61_000]);
+                assert_eq!(*service.calls.lock().unwrap(), 3);
+            },
+        );
+    }
 }

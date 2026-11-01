@@ -9,7 +9,7 @@ use super::{
     GitHub,
     limits::{self, Quota, Throttled},
 };
-use crate::github::http::{HttpStatusError, Request, Response};
+use crate::github::http::{HttpStatusError, IncompleteResponse, Request, Response};
 
 impl GitHub<'_> {
     pub(crate) fn now(&self) -> Instant {
@@ -57,13 +57,20 @@ impl GitHub<'_> {
                 attempt + 1
             )
         });
-        let response = self.transport.response(Request {
-            method,
-            url,
-            token: &self.config.token.0,
-            body,
-            timeout: self.config.timeout,
-        });
+        let acquired = self.now();
+        let response = self
+            .transport
+            .response(Request {
+                method,
+                url,
+                token: &self.config.token.0,
+                body,
+                timeout: self.config.timeout,
+            })
+            .map(|mut response| {
+                response.acquired = acquired;
+                response
+            });
         span.finish(|| match &response {
             Ok(response) => format!("HTTP {}", response.status),
             Err(error) => error
@@ -80,10 +87,13 @@ impl GitHub<'_> {
         graphql: bool,
     ) -> Quota {
         let quota = match response {
-            Ok(response) => crate::github::http::quota(&response.headers),
+            Ok(response) => response.quota.clone(),
             Err(error) => error
                 .downcast_ref::<HttpStatusError>()
-                .map_or_else(Quota::default, |e| e.quota.clone()),
+                .map(|e| &e.quota)
+                .or_else(|| error.downcast_ref::<IncompleteResponse>().map(|e| &e.quota))
+                .cloned()
+                .unwrap_or_default(),
         };
         if let (Some(remaining), Some(limit), Some(reset)) =
             (quota.remaining, quota.limit, quota.reset)
@@ -92,10 +102,13 @@ impl GitHub<'_> {
                 if graphql { "GraphQL" } else { "REST" },
                 remaining,
                 limit,
-                reset,
+                reset.saturating_sub(quota.elapsed),
             );
         }
         schedule.observe(self.now(), graphql, quota.clone());
+        if let Some(delay) = quota.retry_after {
+            schedule.throttle(self.now(), delay.saturating_sub(quota.elapsed));
+        }
         quota
     }
 
@@ -145,9 +158,16 @@ impl GitHub<'_> {
             let quota = self.observe_quota(&mut schedule, &response, graphql);
             let response =
                 response.and_then(|response| graphql_result(response, graphql, &quota, attempt));
+            // A partial acknowledgement prevents replay, but still constrains later requests.
+            if let Err(error) = &response
+                && let Some(throttled) = error.downcast_ref::<Throttled>()
+            {
+                schedule.throttle(self.now(), throttled.delay);
+            }
             if let Err(error) = &response
                 && let Some((delay, reason)) = retry(error, writes, attempt)
             {
+                let delay = delay.max(quota.delay().unwrap_or_default());
                 if reconcile {
                     let backoff = error
                         .downcast_ref::<HttpStatusError>()

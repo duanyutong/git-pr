@@ -1,7 +1,7 @@
 use std::{
     fmt::{self, Debug},
     io::Read as _,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result, bail};
@@ -76,9 +76,22 @@ impl fmt::Display for TransientRead {
 impl std::error::Error for TransientRead {}
 
 #[derive(Debug)]
+pub(crate) struct IncompleteResponse {
+    pub quota: crate::github::limits::Quota,
+}
+impl fmt::Display for IncompleteResponse {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("HTTP response headers were received, but the body was incomplete")
+    }
+}
+impl std::error::Error for IncompleteResponse {}
+
+#[derive(Debug)]
 pub(crate) struct Response {
+    pub acquired: Instant,
     pub status: u16,
     pub headers: reqwest::header::HeaderMap,
+    pub quota: crate::github::limits::Quota,
     pub body: Vec<u8>,
 }
 
@@ -86,8 +99,10 @@ pub(crate) trait Transport: Debug + Send + Sync {
     fn response(&self, request: Request<'_>) -> Result<Response> {
         let body = self.request(request)?;
         Ok(Response {
+            acquired: Instant::now(),
             status: if body.is_empty() { 204 } else { 200 },
             headers: reqwest::header::HeaderMap::new(),
+            quota: crate::github::limits::Quota::default(),
             body,
         })
     }
@@ -139,29 +154,36 @@ impl Transport for HttpTransport {
         }).context("HTTP transport failed; check network access, proxy/TLS configuration and the request timeout. A mutation may have completed even if its response was lost")?;
         let status = response.status();
         let headers = response.headers().clone();
+        let received = Instant::now();
+        let mut quota = quota(&headers);
         let mut body = Vec::new();
-        response
-            .take(LIMIT + 1)
-            .read_to_end(&mut body)
-            .context(TransientRead)
+        let read = response.take(LIMIT + 1).read_to_end(&mut body);
+        quota.elapsed = received.elapsed();
+        read.context(TransientRead)
+            .with_context(|| IncompleteResponse {
+                quota: quota.clone(),
+            })
             .context(
                 "could not read the complete HTTP response; the remote result is unconfirmed",
             )?;
         if body.len() as u64 > LIMIT {
-            bail!("HTTP response exceeded 64 MiB; refusing an incomplete observation");
+            return Err(anyhow::Error::new(IncompleteResponse { quota })
+                .context("HTTP response exceeded 64 MiB; refusing an incomplete observation"));
         }
         if !status.is_success() {
             return Err(HttpStatusError {
                 url: request.url.into(),
                 status,
                 body: String::from_utf8_lossy(&body).into_owned(),
-                quota: quota(&headers),
+                quota,
             }
             .into());
         }
         Ok(Response {
+            acquired: Instant::now(),
             status: status.as_u16(),
             headers,
+            quota,
             body,
         })
     }
@@ -183,6 +205,7 @@ pub(crate) fn quota(headers: &reqwest::header::HeaderMap) -> crate::github::limi
             .as_secs()
     });
     crate::github::limits::Quota {
+        elapsed: Duration::ZERO,
         remaining: number("x-ratelimit-remaining"),
         limit: number("x-ratelimit-limit"),
         reset: number("x-ratelimit-reset")

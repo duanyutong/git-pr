@@ -270,6 +270,9 @@ Explicit rate-limit rejection may be retried at most three times, subject to a f
 Retry-After and exhausted primary-reset metadata are honoured, including GraphQL errors conveyed by HTTP 200.
 Without a supplied secondary deadline, backoff begins at sixty seconds and increases exponentially.
 Primary quotas are observed separately for REST and GraphQL without additional polling.
+Quota observations retain the elapsed interval since header receipt, so body acquisition does not restart an absolute reset deadline; clock-skew handling and the reset safety margin remain applicable.
+Valid quota headers remain authoritative when body acquisition fails or exceeds its size limit, without treating an incomplete mutation response as an acknowledgement or a definite rejection.
+Rate-limit errors retain their cooldown for subsequent requests even when every requested mutation is acknowledged and no reconciliation read is required.
 Conservative rolling content budgets count individual aliases, with sixty writes per minute and 450 per hour.
 Transient reads may be retried; uncertain content mutations instead trigger forced observation and bounded reconciliation of outstanding fields.
 Long pre-dispatch waits invalidate prepared content and require re-rendering from fresh observations.

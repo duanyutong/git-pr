@@ -1116,7 +1116,9 @@ impl Transport for RateLimit {
             reqwest::header::HeaderValue::from_static("fixture"),
         );
         Ok(Response {
+            acquired: std::time::Instant::now(),
             status: 200,
+            quota: crate::github::limits::Quota::default(),
             headers,
             body: b"{}".to_vec(),
         })

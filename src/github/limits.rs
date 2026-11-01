@@ -15,16 +15,23 @@ pub(crate) struct Quota {
     pub limit: Option<u64>,
     pub reset: Option<Duration>,
     pub retry_after: Option<Duration>,
+    pub elapsed: Duration,
 }
 
 impl Quota {
     pub(super) fn delay(&self) -> Option<Duration> {
-        self.retry_after.max(
-            (self.remaining == Some(0))
-                .then_some(self.reset)
-                .flatten()
-                .map(|delay| delay.saturating_add(Duration::from_secs(1))),
-        )
+        self.retry_after
+            .map(|delay| delay.saturating_sub(self.elapsed))
+            .max(
+                (self.remaining == Some(0))
+                    .then_some(self.reset)
+                    .flatten()
+                    .map(|delay| {
+                        delay
+                            .saturating_add(Duration::from_secs(1))
+                            .saturating_sub(self.elapsed)
+                    }),
+            )
     }
 }
 
@@ -100,6 +107,7 @@ impl Schedule {
             consider(
                 reset
                     .saturating_add(Duration::from_secs(1))
+                    .saturating_sub(quota.elapsed)
                     .saturating_sub(now.saturating_duration_since(*observed)),
                 WaitReason::Primary,
             );

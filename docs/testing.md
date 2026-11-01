@@ -253,6 +253,7 @@ Title reversions and unrelated human title edits following acknowledgement shall
 Unrelated observation errors shall fail without disabling subsequent stack-schema checks.
 A separate wait-boundary regression edits human text whilst the clock advances and verifies that content is freshly rendered before the delayed write.
 These tests shall perform no repeated Git publication or PR creation.
+Truncated and oversized response regressions retain valid quota headers and body-drain age, enforce deadlines, preserve uncertain mutation classification and verify independently available primary API quotas.
 
 Terminal tests cover a single animation worker, named stage outcomes, bounded selection previews, separated result blocks, complete wrapped titles, aligned timings, narrow displays, Unicode grapheme widths, elapsed and remaining timers, confirmation suspension and durable redirected wait notices.
 Within-stage counters cover PR creation, base checks, descriptions and label reconciliation; current PR identities precede ancillary request and quota details.

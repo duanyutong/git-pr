@@ -134,18 +134,21 @@ impl Transport for Replies {
 }
 
 fn response(status: u16, body: &str, headers: &[(&'static str, &str)]) -> Response {
+    let headers = headers
+        .iter()
+        .map(|(name, value)| {
+            (
+                reqwest::header::HeaderName::from_static(name),
+                value.parse().unwrap(),
+            )
+        })
+        .collect();
     Response {
+        quota: crate::github::http::quota(&headers),
+        acquired: std::time::Instant::now(),
         status,
         body: body.as_bytes().to_vec(),
-        headers: headers
-            .iter()
-            .map(|(name, value)| {
-                (
-                    reqwest::header::HeaderName::from_static(name),
-                    value.parse().unwrap(),
-                )
-            })
-            .collect(),
+        headers,
     }
 }
 

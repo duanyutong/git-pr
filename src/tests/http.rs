@@ -55,7 +55,7 @@ fn oversized_http_observations_are_refused_after_the_bounded_read() {
         let length = LIMIT + 1;
         write!(
             stream,
-            "HTTP/1.1 200 OK\r\nContent-Length: {length}\r\nConnection: close\r\n\r\n"
+            "HTTP/1.1 200 OK\r\nRetry-After: 60\r\nContent-Length: {length}\r\nConnection: close\r\n\r\n"
         )
         .unwrap();
         let block = [b'x'; 8192];
@@ -75,40 +75,52 @@ fn oversized_http_observations_are_refused_after_the_bounded_read() {
     );
     assert!(error.downcast_ref::<TransientRead>().is_none());
     assert!(error.downcast_ref::<HttpStatusError>().is_none());
+    assert_eq!(
+        error
+            .downcast_ref::<IncompleteResponse>()
+            .unwrap()
+            .quota
+            .retry_after,
+        Some(Duration::from_secs(60))
+    );
     worker.join().unwrap();
 }
 
 #[test]
 fn truncated_http_observations_are_retryable_reads_with_an_unconfirmed_remote_result() {
-    let server = TcpListener::bind("127.0.0.1:0").unwrap();
-    let address = server.local_addr().unwrap();
-    let worker = std::thread::spawn(move || {
-        let (mut stream, _) = server.accept().unwrap();
-        stream
-            .set_read_timeout(Some(Duration::from_secs(15)))
-            .unwrap();
-        let mut header = Vec::new();
-        let mut byte = [0];
-        while !header.ends_with(b"\r\n\r\n") {
-            stream.read_exact(&mut byte).unwrap();
-            header.push(byte[0]);
-        }
-        stream
-            .write_all(
-                b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\nConnection: close\r\n\r\npartial",
-            )
-            .unwrap();
-    });
-    let error = HttpTransport::default()
-        .response(request(&format!("http://{address}/truncated")))
-        .unwrap_err();
-    assert_eq!(
-        error.to_string(),
-        "could not read the complete HTTP response; the remote result is unconfirmed"
-    );
-    assert!(error.downcast_ref::<TransientRead>().is_some());
-    assert!(error.downcast_ref::<HttpStatusError>().is_none());
-    worker.join().unwrap();
+    for status in [200, 429] {
+        let server = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = server.local_addr().unwrap();
+        let worker = std::thread::spawn(move || {
+            let (mut stream, _) = server.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(15)))
+                .unwrap();
+            let mut header = Vec::new();
+            let mut byte = [0];
+            while !header.ends_with(b"\r\n\r\n") {
+                stream.read_exact(&mut byte).unwrap();
+                header.push(byte[0]);
+            }
+            write!(stream, "HTTP/1.1 {status} Fixture\r\nDate: Thu, 15 Oct 2026 12:00:00 GMT\r\nRetry-After: 60\r\nX-RateLimit-Remaining: 0\r\nX-RateLimit-Limit: 5000\r\nX-RateLimit-Reset: 1792065660\r\nContent-Length: 100\r\nConnection: close\r\n\r\npartial").unwrap();
+        });
+        let error = HttpTransport::default()
+            .response(request(&format!("http://{address}/truncated")))
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "could not read the complete HTTP response; the remote result is unconfirmed"
+        );
+        assert!(error.downcast_ref::<TransientRead>().is_some());
+        assert!(error.downcast_ref::<HttpStatusError>().is_none());
+        let quota = &error.downcast_ref::<IncompleteResponse>().unwrap().quota;
+        assert_eq!(quota.retry_after, Some(Duration::from_secs(60)));
+        assert_eq!(quota.remaining, Some(0));
+        assert_eq!(quota.limit, Some(5000));
+        assert_eq!(quota.reset, Some(Duration::from_secs(60)));
+        assert!(format!("{error:#}").contains("HTTP response headers were received"));
+        worker.join().unwrap();
+    }
 }
 
 #[test]
