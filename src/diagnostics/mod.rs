@@ -1,6 +1,7 @@
-//! Opt-in timing at execution boundaries; no submission decisions belong here.
+//! Timing at execution boundaries; no submission decisions belong here.
 
 pub(crate) mod errors;
+pub(crate) mod logs;
 
 use std::{
     collections::BTreeMap,
@@ -72,7 +73,7 @@ impl Diagnostics {
             counters.next_id += 1;
             let id = counters.next_id;
             drop(counters);
-            session.terminal.err(&format!(
+            session.terminal.diagnostic(&format!(
                 "[+{:8.3}s #{id}] start {kind}: {label}\n",
                 session.start.elapsed().as_secs_f64()
             ));
@@ -118,7 +119,7 @@ impl Diagnostics {
         }
         drop(counters);
         text.push_str("  Durations overlap across phases and concurrent operations; do not add them to obtain elapsed time.\n");
-        session.terminal.err(&text);
+        session.terminal.diagnostic(&text);
     }
 }
 
@@ -135,7 +136,7 @@ impl Span<'_> {
         *count += 1;
         *total += elapsed;
         drop(counters);
-        active.session.terminal.err(&format!(
+        active.session.terminal.diagnostic(&format!(
             "[+{:8.3}s #{}] end {}: {} ({:.3}s; {})\n",
             active.session.start.elapsed().as_secs_f64(),
             active.id,

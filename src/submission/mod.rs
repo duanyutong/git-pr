@@ -10,7 +10,7 @@ mod runtime;
 mod state;
 mod transition;
 
-pub use runtime::run;
+pub use runtime::{run, run_os};
 
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -40,7 +40,8 @@ pub(crate) struct Application {
 
 impl Application {
     pub(crate) fn execute(mut self, flags: &Flags, env: &BTreeMap<String, String>) -> Result<()> {
-        self.commands.explain = flags.verbosity() > 0;
+        self.commands.explain =
+            flags.verbosity() > 0 || self.commands.terminal.records_diagnostics();
         self.commands.outcomes = crate::model::outcome::Outcomes::default();
         // Publication transfers stored objects, so every observation
         // must use those same objects rather than a local replacement view.
@@ -49,7 +50,7 @@ impl Application {
             .entry("GIT_NO_REPLACE_OBJECTS".into())
             .or_insert_with(|| "1".into());
         self.commands.env.insert("GIT_GRAFT_FILE".into(), "".into());
-        if flags.verbosity() > 0 {
+        if self.commands.explain {
             self.commands.diagnostics =
                 crate::diagnostics::Diagnostics::new(Arc::clone(&self.commands.terminal));
             self.commands.runner = Arc::new(crate::diagnostics::TimedRunner {
@@ -75,6 +76,9 @@ impl Application {
         let Loaded::Ready(mut config) = self.load_configuration(flags, env)? else {
             return Ok(());
         };
+        self.commands
+            .terminal
+            .invocation_context(&config.repo.name, None);
         let git = Git {
             commands: &self.commands,
             repo: &config.repo,
@@ -100,10 +104,12 @@ impl Application {
         })?;
         self.commands.terminal.finish(true);
         self.present_selection(&config, &mut state);
+        self.record_selection(&config, &state);
         if self.checkpoint(&config, Checkpoint::GetCommits) {
             return Ok(());
         }
         self.filter_authors(&config, &mut state);
+        self.record_selection(&config, &state);
         validate_duplicates(state.selected(), &self.commands)?;
         let template = if config.dry_run || config.stop_after == Some(Checkpoint::Rewrite) {
             String::new()
@@ -166,6 +172,17 @@ impl Application {
         diagnostics.phase("native stack links", || Self::native_stack(&github, &state, &publication.bases, publication.links_native()))
             .context("native stack reconciliation failed after publication; pushed refs and completed PR changes are retained")?;
         self.finish_submission(&github, &mut state, &publication, &associations, &numbers)
+    }
+
+    fn record_selection(&self, config: &Config, state: &State) {
+        let count = state
+            .selected()
+            .iter()
+            .filter(|commit| !commit.skip)
+            .count();
+        self.commands
+            .terminal
+            .invocation_context(&config.repo.name, Some(count));
     }
 
     fn load_configuration(

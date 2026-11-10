@@ -65,6 +65,9 @@ pub(super) fn candidate(
             commands.out(&commit.to_string());
         }
     }
+    commands
+        .terminal
+        .invocation_context(&config.repo.name, Some(history.len()));
     Ok(Some(branch))
 }
 

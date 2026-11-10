@@ -13,7 +13,7 @@ pub(crate) mod model;
 pub(crate) mod stack;
 pub(crate) mod submission;
 
-pub use submission::run;
+pub use submission::{run, run_os};
 
 #[cfg(test)]
 pub(crate) mod tests;

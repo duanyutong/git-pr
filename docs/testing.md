@@ -114,6 +114,8 @@ Isolated Jujutsu command fixtures verify the corresponding workspace and backing
 Standalone application JSON/YAML files are explicitly verified to have no effect.
 
 Verbosity regressions require identical external operations, standard output and PR state with timing disabled, enabled and combined with detailed diagnostics, in both native-stack modes.
+Default-recording regressions additionally require identical ordinary terminal output and submission effects whilst retaining the level-one timing and decision records through a separate diagnostic sink.
+Native CLI fixtures require unique private log files for ordinary, help, version and failed invocations; selected-commit catalogue labels; concurrent completion; newest-first listing; a twenty-entry default limit; read-only listing; and non-fatal storage failures.
 The timing adapter covers ordinary commands, structured reads and bulk editing exactly once per boundary invocation.
 Additional cases verify checkpoints, discovery failure, bounded verbosity, concurrent event identifiers, disabled-formatting avoidance and explicit retry and mutation-spacing diagnostics.
 Native CLI fixtures verify failure summaries in disposable non-repository directories.

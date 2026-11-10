@@ -182,10 +182,24 @@ PR creation and topology mutations are not blindly replayed after an uncertain t
 ## Submission timing
 
 Default output explains submission outcomes, failures and recovery actions without diagnostic flags.
+Each invocation also records the decision explanations and operation timings available with `-v` in a separate diagnostic file, without displaying those records by default.
+Help, version, preview, checkpoint and failed invocations receive their own files; log-listing invocations remain read-only.
+Use `git pr --logs` to list the newest twenty invocations, or `git pr --logs=all` to list every retained invocation, in descending timestamp order.
+The listing includes the UTC start time, repository, selected commit count, outcome, elapsed duration and complete log path.
+Repository and commit-count fields are populated from existing discovery results; early failures retain an unknown commit count, and invocations stopped before normal completion remain marked incomplete.
+No additional Git or GitHub queries are required to obtain these labels.
+
+Logs reside under `$XDG_STATE_HOME/git-pr/logs` when `XDG_STATE_HOME` is absolute, otherwise under `~/Library/Logs/git-pr` on macOS or `~/.local/state/git-pr/logs` on Linux.
+Each invocation receives a unique file and an accompanying JSON catalogue record; concurrent invocations do not share either file.
+New log directories have mode `0700`, and diagnostic and catalogue files have mode `0600`.
+The catalogue is updated atomically, whilst diagnostic records are written as they occur without synchronising each record to physical storage.
+Files remain available until removed by the user; removing a retained invocation requires removing both its `.log` and `.json` files.
+Unavailable or unwritable log storage produces a warning and does not prevent the requested submission.
+
 Use `git pr -v` or `git pr --verbose` for application decision explanations and detailed elapsed-time records.
 Decision explanations include selected bases, required updates and unchanged PR content.
 Place verbosity switches before positional revisions, for example `git pr -v base..tip`.
-To retain diagnostics whilst preserving the ordinary PR list on standard output:
+To obtain an additional diagnostic copy whilst preserving the ordinary PR list on standard output:
 
 ```sh
 git pr -v 2>git-pr-timing.log
@@ -209,6 +223,7 @@ The instrumentation adds no discovery queries, subprocesses, service requests or
 Use `git pr --debug`, `git pr -vv` or `git pr -v -v` when detailed command arguments, command results and HTTP payloads are also required.
 The debug level includes verbose output; aliases share the same level rather than enabling independent logging controls.
 Timing records at level one omit arbitrary command arguments, command results, URL queries and request or response bodies.
+Default saved diagnostics retain this level-one detail; explicitly selecting debug output also retains the additional visible debug records in that invocation's file.
 Existing warnings and failure diagnostics remain visible.
 Endpoint paths may identify private repositories or resources; level two additionally includes repository content and should be reviewed before sharing.
 Existing URL-credential redaction remains applicable at level two.

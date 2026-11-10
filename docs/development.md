@@ -101,7 +101,7 @@ src/
 | `src/commands/` | Injected command contracts and coordination in `mod.rs`, native process execution, cancellation and the editor helper. |
 | `src/config/` | Configuration assembly in `mod.rs`, precedence in `settings.rs`, batched discovery, checkpoints, files and paths. |
 | `src/credentials/` | Credential-document interpretation in `mod.rs`, native credential decoding and platform access. |
-| `src/diagnostics/` | Timing instrumentation in `mod.rs` and contextual failure classification in `errors.rs`. |
+| `src/diagnostics/` | Timing instrumentation in `mod.rs`, per-invocation file storage and catalogue access in `logs.rs`, and contextual failure classification in `errors.rs`. |
 | `src/git/`, `src/github/`, `src/jj/` | Backend adapters in `mod.rs`, backend-specific policy and protocol interpretation; GitHub owns its HTTP adapter in `http.rs`. |
 | `src/model/` | Shared commit, pull-request and repository values in `commit.rs`, `pull_request.rs` and `repository.rs`, with commit-trailer interpretation in `trailers.rs`; `mod.rs` declares the children. |
 | `src/stack/` | Selection and ancestry policy in `selection.rs` and managed description rendering in `description.rs`; `mod.rs` declares the children. |

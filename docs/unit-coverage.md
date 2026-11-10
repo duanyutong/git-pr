@@ -67,6 +67,8 @@ These modules retain separate behavioural integration acceptance.
 `diagnostics/mod.rs` samples the monotonic system clock and writes timing records through the terminal boundary; it contains no submission policy.
 Its event pairing, disabled behaviour, forwarding and payload-omission contracts are tested with in-memory adapters, whilst native CLI acceptance verifies runtime integration.
 It is classified as a boundary and retains those behavioural obligations.
+`diagnostics/logs.rs` performs filesystem storage, atomic catalogue replacement and native clock observation, and is likewise classified as a boundary.
+Disposable native CLI fixtures verify quiet default capture, selected-commit labels, distinct concurrent files, chronological listing, private permissions and non-fatal storage failures.
 
 The review identified contracts which percentages alone do not establish: refusal to move refs after failed worktree discovery; preservation of history after failed reads; retention of draft filtering after rewriting; refusal to interpret a failed PR lookup as absence; explicit handling of non-Unicode process input; and joining every worker before returning an error.
 These defects have been corrected, together with truncated remote names, overlapping label removal and compilation without Git metadata.

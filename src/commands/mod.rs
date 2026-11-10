@@ -99,6 +99,13 @@ pub(crate) trait Terminal: Debug + Send + Sync {
     }
     fn out(&self, text: &str);
     fn err(&self, text: &str);
+    fn diagnostic(&self, text: &str) {
+        self.err(text);
+    }
+    fn records_diagnostics(&self) -> bool {
+        false
+    }
+    fn invocation_context(&self, _repository: &str, _commits: Option<usize>) {}
     fn confirm(&self, prompt: &str) -> bool;
     fn section(&self, _label: &str) {}
     fn stage(&self, _label: &str) {}
@@ -313,7 +320,7 @@ impl Commands {
     }
     pub(crate) fn explain(&self, text: &str) {
         if self.explain {
-            self.terminal.err(&format!(
+            self.terminal.diagnostic(&format!(
                 "{}\n",
                 crate::diagnostics::errors::redact_url_credentials(text)
             ));

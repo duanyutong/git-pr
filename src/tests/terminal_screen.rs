@@ -80,6 +80,8 @@ fn controlled(screen: &Arc<ScreenTerminal>, colour: bool) -> ProgressTerminal {
             colour,
         }),
         worker: Mutex::new(None),
+        log: None,
+        show_diagnostics: true,
     }
 }
 

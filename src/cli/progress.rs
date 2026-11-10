@@ -79,9 +79,28 @@ pub(crate) fn colour_enabled() -> bool {
 pub(crate) struct ProgressTerminal {
     shared: Arc<Shared>,
     worker: Mutex<Option<JoinHandle<()>>>,
+    log: Option<Arc<crate::diagnostics::logs::InvocationLog>>,
+    show_diagnostics: bool,
 }
 
 impl ProgressTerminal {
+    pub(crate) fn with_log(
+        terminal: Arc<dyn Terminal>,
+        log: Option<Arc<crate::diagnostics::logs::InvocationLog>>,
+        show_diagnostics: bool,
+    ) -> Self {
+        let mut progress = Self::new(terminal);
+        progress.log = log;
+        progress.show_diagnostics = show_diagnostics;
+        progress
+    }
+
+    fn record(&self, text: &str) {
+        if let Some(log) = &self.log {
+            log.record(text);
+        }
+    }
+
     pub(crate) fn new(terminal: Arc<dyn Terminal>) -> Self {
         let animated = std::io::stderr().is_terminal()
             && std::env::var_os("CI").is_none()
@@ -142,6 +161,8 @@ impl ProgressTerminal {
         Self {
             shared,
             worker: Mutex::new(worker),
+            log: None,
+            show_diagnostics: true,
         }
     }
 
@@ -205,6 +226,7 @@ impl Terminal for ProgressTerminal {
     }
 
     fn out(&self, text: &str) {
+        self.record(text);
         let mut state = lock(&self.shared.state);
         self.clear(&mut state);
         if self.shared.rich {
@@ -215,9 +237,28 @@ impl Terminal for ProgressTerminal {
     }
 
     fn err(&self, text: &str) {
+        self.record(text);
         let mut state = lock(&self.shared.state);
         self.clear(&mut state);
         self.shared.terminal.err(&clean(text, self.shared.colour));
+    }
+
+    fn diagnostic(&self, text: &str) {
+        if self.show_diagnostics {
+            self.err(text);
+        } else {
+            self.record(text);
+        }
+    }
+
+    fn records_diagnostics(&self) -> bool {
+        self.log.is_some()
+    }
+
+    fn invocation_context(&self, repository: &str, commits: Option<usize>) {
+        if let Some(log) = &self.log {
+            log.context(repository, commits);
+        }
     }
 
     fn confirm(&self, prompt: &str) -> bool {
@@ -261,6 +302,7 @@ impl Terminal for ProgressTerminal {
     }
 
     fn outcome(&self, completed: &str) {
+        self.record(completed);
         if self.shared.animated {
             let mut state = lock(&self.shared.state);
             state.completed_stage = Some(single_line(completed));
@@ -274,6 +316,7 @@ impl Terminal for ProgressTerminal {
 
     fn detail(&self, text: &str) {
         if self.shared.rich {
+            self.record(text);
             let mut state = lock(&self.shared.state);
             state.detail = single_line(text.trim());
             state.fallback_reported = false;
@@ -732,12 +775,12 @@ pub(super) fn paint(text: &str, code: &str, colour: bool) -> String {
     }
 }
 
-pub(super) fn single_line(text: &str) -> String {
+pub(crate) fn single_line(text: &str) -> String {
     clean(text, false).replace(['\n', '\t'], " ")
 }
 
 /// Retain generated SGR styling only where enabled; make other terminal controls inert.
-fn clean(text: &str, colour: bool) -> String {
+pub(crate) fn clean(text: &str, colour: bool) -> String {
     let mut rest = text;
     let mut output = String::with_capacity(text.len());
     while let Some(c) = rest.chars().next() {

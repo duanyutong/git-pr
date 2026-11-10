@@ -1,7 +1,7 @@
 // Subprocess fixture failures shall fail the test immediately.
 #![allow(clippy::unwrap_used)]
 
-use std::process::Command;
+use std::{os::unix::fs::PermissionsExt as _, process::Command};
 
 fn run(args: &[&str]) -> std::process::Output {
     let temp = tempfile::tempdir().unwrap();
@@ -27,11 +27,185 @@ fn command(temp: &tempfile::TempDir) -> Command {
             )
         }))
         .env("HOME", temp.path())
+        .env("XDG_STATE_HOME", temp.path().join("state"))
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_PR_STOP_AFTER", "")
         .env("GIT_PR_OUTPUT", "");
     command
+}
+
+fn invocation_metadata(temp: &tempfile::TempDir) -> Vec<(std::path::PathBuf, serde_json::Value)> {
+    let directory = temp.path().join("state/git-pr/logs");
+    let mut paths: Vec<_> = std::fs::read_dir(directory)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        })
+        .collect();
+    paths.sort();
+    paths
+        .into_iter()
+        .map(|path| {
+            let metadata = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            (path.with_extension("log"), metadata)
+        })
+        .collect()
+}
+
+#[test]
+fn ordinary_failures_save_verbose_diagnostics_without_printing_them() {
+    let temp = tempfile::tempdir().unwrap();
+    let result = command(&temp).output().unwrap();
+    assert_eq!(result.status.code(), Some(1));
+    let stderr = String::from_utf8(result.stderr).unwrap();
+    assert!(!stderr.contains("Timing summary") && !stderr.contains("start command:"));
+    let logs = invocation_metadata(&temp);
+    assert_eq!(logs.len(), 1);
+    let (path, metadata) = &logs[0];
+    assert_eq!(metadata["outcome"], "exit 1");
+    assert!(metadata["commits"].is_null());
+    assert!(metadata["seconds"].as_f64().unwrap() > 0.0);
+    let log = std::fs::read_to_string(path).unwrap();
+    assert!(log.contains("start phase: configuration and repository discovery"));
+    assert!(log.contains("start command: git rev-parse"));
+    assert!(log.contains("Timing summary: failed"));
+    assert!(log.contains("You need to run it in a git repository"));
+    let result = command(&temp).arg("--logs").output().unwrap();
+    assert!(result.status.success());
+    let listing = String::from_utf8(result.stdout).unwrap();
+    assert!(listing.contains("TIMESTAMP (UTC)") && listing.contains("REPOSITORY"));
+    assert!(listing.contains(path.to_str().unwrap()));
+    assert_eq!(invocation_metadata(&temp).len(), 1);
+    assert_eq!(
+        std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert_eq!(
+        std::fs::metadata(path.parent().unwrap())
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o700
+    );
+}
+
+#[test]
+fn logs_list_recent_invocations_newest_first_and_all_when_requested() {
+    let temp = tempfile::tempdir().unwrap();
+    let empty = command(&temp).arg("--logs").output().unwrap();
+    assert!(empty.status.success());
+    assert_eq!(empty.stdout, b"No invocation logs recorded.\n");
+    assert!(!temp.path().join("state").exists());
+    for index in 0..23 {
+        let result = command(&temp)
+            .arg(if index == 0 {
+                "--help"
+            } else if index == 1 {
+                "--unknown"
+            } else {
+                "--version"
+            })
+            .output()
+            .unwrap();
+        assert_eq!(result.status.code(), Some(if index == 1 { 2 } else { 0 }));
+    }
+    let logs = invocation_metadata(&temp);
+    assert_eq!(logs.len(), 23);
+    assert_eq!(logs[1].1["outcome"], "exit 2");
+    let recent = command(&temp).arg("--logs").output().unwrap();
+    let recent = String::from_utf8(recent.stdout).unwrap();
+    assert!(!recent.contains(logs[2].0.to_str().unwrap()));
+    assert!(recent.contains(logs[22].0.to_str().unwrap()));
+    assert!(recent.contains("--logs=all"));
+    let all = command(&temp).arg("--logs=all").output().unwrap();
+    assert!(all.status.success());
+    let all = String::from_utf8(all.stdout).unwrap();
+    let positions: Vec<_> = logs
+        .iter()
+        .map(|(path, _)| all.find(path.to_str().unwrap()).unwrap())
+        .collect();
+    assert!(positions.windows(2).all(|pair| pair[0] > pair[1]));
+    assert_eq!(invocation_metadata(&temp).len(), 23);
+}
+
+#[test]
+fn concurrent_invocations_keep_distinct_complete_logs() {
+    let temp = tempfile::tempdir().unwrap();
+    let children: Vec<_> = (0..8)
+        .map(|_| {
+            command(&temp)
+                .arg("--version")
+                .stdout(std::process::Stdio::null())
+                .spawn()
+                .unwrap()
+        })
+        .collect();
+    for mut child in children {
+        assert!(child.wait().unwrap().success());
+    }
+    let logs = invocation_metadata(&temp);
+    assert_eq!(logs.len(), 8);
+    for (path, metadata) in logs {
+        assert_eq!(metadata["outcome"], "ok");
+        let log = std::fs::read_to_string(path).unwrap();
+        assert_eq!(log.matches("Invocation finished: ok").count(), 1);
+    }
+}
+
+#[test]
+fn default_log_location_is_available_without_an_xdg_override() {
+    let temp = tempfile::tempdir().unwrap();
+    let result = command(&temp)
+        .env_remove("XDG_STATE_HOME")
+        .arg("--version")
+        .output()
+        .unwrap();
+    assert!(result.status.success());
+    let expected = temp.path().join(if cfg!(target_os = "macos") {
+        "Library/Logs/git-pr"
+    } else {
+        ".local/state/git-pr/logs"
+    });
+    assert_eq!(std::fs::read_dir(&expected).unwrap().count(), 2);
+    let result = command(&temp)
+        .env("XDG_STATE_HOME", "relative-state")
+        .arg("--logs")
+        .output()
+        .unwrap();
+    assert!(result.status.success());
+    assert!(
+        String::from_utf8(result.stdout)
+            .unwrap()
+            .contains(expected.to_str().unwrap())
+    );
+    assert!(!temp.path().join("relative-state").exists());
+}
+
+#[test]
+fn unavailable_log_storage_warns_without_preventing_the_invocation() {
+    let temp = tempfile::tempdir().unwrap();
+    let blocked = temp.path().join("blocked");
+    std::fs::write(&blocked, "not a directory").unwrap();
+    let result = command(&temp)
+        .env("XDG_STATE_HOME", &blocked)
+        .arg("--version")
+        .output()
+        .unwrap();
+    assert!(result.status.success());
+    assert!(
+        String::from_utf8(result.stdout)
+            .unwrap()
+            .starts_with("git-pr ")
+    );
+    assert!(
+        String::from_utf8(result.stderr)
+            .unwrap()
+            .contains("invocation diagnostics could not be saved")
+    );
 }
 
 #[test]
@@ -121,9 +295,11 @@ fn unavailable_commands_and_directories_retain_actionable_os_errors() {
     assert!(!error.contains("exit code 199") && !error.contains("panicked"));
 
     // Delete only this disposable directory after the shell has entered it.
+    let deleted = temp.path().join("deleted");
+    std::fs::create_dir(&deleted).unwrap();
     let configuration = command(&temp);
     let mut shell = Command::new("/bin/sh");
-    shell.current_dir(temp.path()).env_clear().envs(
+    shell.current_dir(&deleted).env_clear().envs(
         configuration
             .get_envs()
             .filter_map(|(key, value)| value.map(|value| (key, value))),
@@ -230,6 +406,11 @@ fn native_literal_draft_matching_exercises_fallback_and_stops_before_submission(
             .unwrap()
             .contains("skip draft \"aaaaaaaaac\"")
     );
+    let logs = invocation_metadata(&temp);
+    assert_eq!(logs.len(), 1);
+    assert_eq!(logs[0].1["repository"], "org/repo");
+    assert_eq!(logs[0].1["commits"], 0);
+    assert_eq!(logs[0].1["outcome"], "ok");
 }
 
 #[test]

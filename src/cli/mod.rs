@@ -61,6 +61,7 @@ pub(crate) struct Flags {
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum ParseError {
     Help,
+    NonUnicode,
     Invalid(String),
 }
 
@@ -119,7 +120,9 @@ impl Flags {
             if matches!(key, "h" | "help") {
                 return Err(ParseError::Help);
             }
-            if BOOLEAN.contains(&key) {
+            if key == "logs" {
+                flags.set_logs(inline)?;
+            } else if BOOLEAN.contains(&key) {
                 let value = inline.unwrap_or("true");
                 let boolean = parse_bool(value).ok_or_else(|| {
                     ParseError::Invalid(format!(
@@ -166,6 +169,12 @@ impl Flags {
             }
             flags.supplied.insert(key.into());
         }
+        if flags.supplied.contains("logs") && (flags.supplied.len() != 1 || !flags.args.is_empty())
+        {
+            return Err(ParseError::Invalid(
+                "--logs cannot be combined with submission options or revisions".into(),
+            ));
+        }
         if flags.supplied.contains("stack-up")
             && flags.supplied.contains("reverse")
             && flags.boolean("stack-up") != flags.boolean("reverse")
@@ -182,6 +191,17 @@ impl Flags {
             );
         }
         Ok(flags)
+    }
+
+    fn set_logs(&mut self, value: Option<&str>) -> Result<(), ParseError> {
+        let value = value.unwrap_or("recent");
+        if !matches!(value, "recent" | "all") {
+            return Err(ParseError::Invalid(
+                "--logs accepts only recent or all".into(),
+            ));
+        }
+        self.strings.insert("logs".into(), value.into());
+        Ok(())
     }
 }
 

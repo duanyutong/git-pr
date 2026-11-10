@@ -42,6 +42,8 @@
   -timeout int
     	API call timeout in seconds (default 20)
   -v, --verbose	Decision explanations and operation timings
+  --logs[=recent|all]
+    	List saved invocation logs, newest first (default: newest 20)
   -version
     	Show version information
   -y	Assume "yes" to prompts (shorthand for --yes)

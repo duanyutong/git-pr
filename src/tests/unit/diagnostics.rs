@@ -6,6 +6,82 @@ use crate::{
 };
 use std::{collections::BTreeMap, ffi::OsString, path::Path, sync::Arc, time::Duration};
 
+#[derive(Debug)]
+struct RecordingTerminal {
+    world: Arc<World>,
+    diagnostics: std::sync::Mutex<String>,
+}
+
+impl crate::commands::Terminal for RecordingTerminal {
+    fn out(&self, text: &str) {
+        self.world.out(text);
+    }
+    fn err(&self, text: &str) {
+        self.world.err(text);
+    }
+    fn confirm(&self, _prompt: &str) -> bool {
+        false
+    }
+    fn records_diagnostics(&self) -> bool {
+        true
+    }
+    fn diagnostic(&self, text: &str) {
+        self.diagnostics.lock().unwrap().push_str(text);
+    }
+}
+
+#[test]
+fn default_recording_preserves_effects_and_quiet_terminal_output() {
+    let plain = World::new(2);
+    plain.run(&["--no-stack"]).unwrap();
+    let world = World::new(2);
+    let terminal = Arc::new(RecordingTerminal {
+        world: world.clone(),
+        diagnostics: std::sync::Mutex::default(),
+    });
+    let mut app = world.app();
+    app.commands.terminal = terminal.clone();
+    app.execute(
+        &Flags::parse(vec!["--no-stack".into()]).unwrap(),
+        &BTreeMap::from([("HOME".into(), "/unit/home".into())]),
+    )
+    .unwrap();
+    assert_eq!(effects(&world), effects(&plain));
+    let measured = world.0.lock().unwrap();
+    let ordinary = plain.0.lock().unwrap();
+    assert_eq!(measured.stdout, ordinary.stdout);
+    assert_eq!(measured.stderr, ordinary.stderr);
+    drop(ordinary);
+    drop(measured);
+    let log = terminal.diagnostics.lock().unwrap();
+    assert!(log.contains("start command: git push"));
+    assert!(log.contains("Timing summary: completed"));
+    assert!(log.contains("selected base"));
+    assert!(!log.contains("unit-token"));
+    drop(log);
+}
+
+#[test]
+fn log_listing_is_explicit_and_cannot_trigger_submission() {
+    for (args, expected) in [
+        (vec!["--logs"], "recent"),
+        (vec!["--logs=recent"], "recent"),
+        (vec!["--logs=all"], "all"),
+    ] {
+        let flags = Flags::parse(args.into_iter().map(str::to_owned).collect()).unwrap();
+        assert_eq!(flags.string("logs"), expected);
+        assert!(flags.supplied.contains("logs"));
+    }
+    for args in [
+        vec!["--logs="],
+        vec!["--logs=wrong"],
+        vec!["--logs", "HEAD"],
+        vec!["--logs", "-v"],
+    ] {
+        assert!(Flags::parse(args.into_iter().map(str::to_owned).collect()).is_err());
+    }
+}
+
 #[test]
 fn verbosity_is_bounded_and_explicit_false_resets_it() {
     for (args, expected) in [

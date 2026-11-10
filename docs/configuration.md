@@ -38,6 +38,7 @@ Valid revision expressions continue to resolve after the initial Jujutsu snapsho
 | `--branch-from-title` | Accepted configuration switch; it does not currently alter branch selection. |
 | `-v`, `--verbose` | Application decision explanations and phase, command, HTTP and wait timings on standard error, followed by an elapsed-time summary. |
 | `-vv`, `-v -v`, `--debug` | Verbose output plus detailed subprocess and HTTP diagnostics. |
+| `--logs`, `--logs=all` | Lists the newest twenty or every retained invocation log, with timestamps, repository names, selected commit counts, outcomes and paths; performs no submission. |
 | `--version`, `--help`, `-h` | Display version or usage and exit. |
 
 Environment switches `GIT_PR_DRY_RUN`, `GIT_PR_YES`, `GIT_PR_NO_STACK`, `GIT_PR_SKIP_DRAFT` and `GIT_PR_INCLUDE_DRAFT` enable their corresponding behaviour only when equal to `1`; an explicit false CLI value does not cancel such an enabling environment switch.

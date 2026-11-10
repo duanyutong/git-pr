@@ -2,20 +2,7 @@ use std::{io::Write as _, process::ExitCode};
 
 fn main() -> ExitCode {
     install_panic_hook();
-    let arguments = std::env::args_os()
-        .skip(1)
-        .map(std::ffi::OsString::into_string)
-        .collect::<Result<Vec<_>, _>>();
-    arguments.map_or_else(
-        |_| {
-            let _ = writeln!(
-                std::io::stderr().lock(),
-                "ERROR: command-line arguments must be valid UTF-8"
-            );
-            ExitCode::from(2)
-        },
-        |arguments| ExitCode::from(git_pr::run(arguments)),
-    )
+    ExitCode::from(git_pr::run_os(std::env::args_os().skip(1).collect()))
 }
 
 fn install_panic_hook() {

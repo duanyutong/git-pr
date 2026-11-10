@@ -55,6 +55,6 @@ unit = [
   "src/submission/state.rs",
 ]
 mixed = []
-boundary = ["src/diagnostics/mod.rs", "src/commands/cancellation.rs", "src/commands/system.rs", "src/config/files.rs", "src/credentials/system.rs", "src/github/http.rs", "src/main.rs", "src/cli/progress.rs", "src/submission/runtime.rs"]
+boundary = ["src/diagnostics/mod.rs", "src/diagnostics/logs.rs", "src/commands/cancellation.rs", "src/commands/system.rs", "src/config/files.rs", "src/credentials/system.rs", "src/github/http.rs", "src/main.rs", "src/cli/progress.rs", "src/submission/runtime.rs"]
 declarations = ["src/lib.rs", "src/model/mod.rs", "src/model/repository.rs", "src/stack/mod.rs", "src/identity/types.rs"]
 generated = []
