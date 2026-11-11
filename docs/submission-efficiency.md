@@ -112,13 +112,22 @@ The 51-PR expiry regressions require three refresh requests, whilst fresh repeat
 Publication preflight refreshes selected branch observations in groups of at most 25.
 A single open identity may be selected notwithstanding older closed history; multiple open identities or exclusively closed or merged history prevent publication.
 The planner pins PR numbers and node identities, and constructs a verified transition whenever published bases differ from the intended predecessors.
-A separate paginated query observes open PRs targeting each publication destination whose object would change and rejects dependants outside the verified selection.
+A separate paginated query observes the identities and head objects of open PRs targeting each publication destination whose object would change.
+Ordinary publication proves whether unselected heads are reachable from their proposed base objects, permits conclusive non-merges and requires consent for identified indirect-merge risks.
+Confirmation reacquires the observation and binds consent to the exact affected PR and proposed publication objects; inconclusive ancestry or repeated changes stop publication.
+Conclusive stored-parent ancestry proofs are retained within the invocation by their exact head and proposed base object identities.
+Fresh live PR observations remain mandatory, whilst unchanged immutable object pairs require no repeated ancestry commands; inconclusive observations are never cached.
+Publication-base transitions continue to reject dependants outside their verified selection.
 For ordinary submissions without a publication-base transition, destinations already identifying the selected objects require no incoming-dependency query, even where open PRs above the selection target those destinations.
 The actual push destination establishes object equality, and explicit expected-object leases prevent an intervening update from being overwritten.
 The publication plan retains the changing destinations and a separate acquisition timestamp for each group of at most 25 such destinations, using the invocation's monotonic clock.
 Each timestamp precedes acquisition of its group's first page, so request delays and pagination contribute to the observation age.
 Before publication, dependant observations older than 30 seconds are reacquired; fresh groups require no additional request.
 Immediately before each Git push command, an in-memory timestamp check refuses publication if dependant evidence expired during later reads, pagination, quota waits or an earlier push batch, without issuing another observation request.
+When an unselected dependant has been observed, ordinary publication additionally reacquires the affected groups immediately before each push batch and renews any required indirect-merge consent.
+Known outside groups defer expired-evidence renewal to that boundary, avoiding a duplicate refresh immediately beforehand; other groups retain their existing expiry and refusal rules.
+An observation which no longer contains an outside dependant removes that destination from mandatory per-batch reacquisition.
+Selected-identity and proposed-head lookups are constructed once per refresh pass, and an unchanged publication omits their dependant-preflight construction entirely.
 Base transitions retain the acquisition start of their final dependant check through the subsequent head verification, and temporary-base publication and cleanup use the same freshness rule.
 Refusal of a later batch preserves the confirmed results of earlier batches and records no attempted write for the unsent batch.
 Slow acquisition of a later group does not renew the earlier groups, and failed reacquisition prevents publication without renewing the affected observation.
@@ -414,6 +423,19 @@ The normal repeat uses nine batched configuration reads, including association c
 Native mode adds one topology read for the selected existing stack.
 Pagination, capability fallback, descendant context, recovery and long-submission refresh are explicit additional work.
 These bounds establish removal of identified duplication; they do not establish a universal optimum or a live-service latency guarantee.
+
+Changed-publication operation regressions use an in-memory transport and command runner with complete linear stored-parent facts and one unselected successor for partial selections.
+Their budgets include initial dependant preflight, every mandatory push-boundary reacquisition and the complete ordinary workflow; they measure operation counts rather than live-service elapsed time.
+
+| Changed selection | Dependant HTTP reads | Maximum recorded ancestry commands | Git push batches |
+| --- | --- | --- | --- |
+| All 16 PRs | 1 | 0 | 1 |
+| Bottom 3 of 16 PRs | 2 | 3 | 1 |
+| Bottom 151 of 152 PRs | 9 | 7 | 2 |
+
+The partial-selection budgets retain a fresh observation of the affected group before every batch whilst proving each immutable object pair once.
+Consent, pagination, changed head objects and expired observations constitute explicit additional work.
+
 The ten-PR reversal fixture, including native-stack dissolution and restoration and REST responses without membership, requires 41 HTTP requests, compared with 43 before shared post-publication verification, 83 after collective-read batching and the former 256.
 Its five explicit recovery queries comprise three collective observations and the initial precondition for each of two retargeting phases.
 One combined observation supplies ordinary PR content and selected recovery metadata to the post-publication validators, preserving identity, cardinality, lifecycle, object, base and membership checks.

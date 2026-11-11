@@ -509,6 +509,233 @@ fn mixed_publication_refreshes_selected_heads_and_only_changing_dependants() {
 }
 
 #[test]
+fn partial_publication_requires_consent_when_a_remote_dependant_head_will_become_reachable() {
+    for accept in [false, true] {
+        let world = World::new(3);
+        world.run(&["--no-stack"]).unwrap();
+        let proposed = format!("b{:039x}", 3);
+        let original = {
+            let mut memory = world.0.lock().unwrap();
+            for index in 0..=3 {
+                memory.parents.insert(
+                    format!("{index:040x}"),
+                    if index == 0 {
+                        Vec::new()
+                    } else {
+                        vec![format!("{:040x}", index - 1)]
+                    },
+                );
+            }
+            memory
+                .parents
+                .insert(proposed.clone(), vec![commit(2).hash]);
+            memory.commits[2].hash.clone_from(&proposed);
+            let mut outside = memory.prs[&103].clone();
+            outside["number"] = serde_json::json!(201);
+            outside["node_id"] = serde_json::json!("PR_201");
+            outside["head"]["ref"] = serde_json::json!("outside");
+            outside["head"]["sha"] = serde_json::json!(proposed);
+            outside["base"]["ref"] = serde_json::json!("topic/3");
+            memory.prs.insert(201, outside.clone());
+            memory
+                .remote_refs
+                .insert("refs/heads/outside".into(), proposed.clone());
+            memory.answers.push_back(accept);
+            outside["state"] = serde_json::json!("closed");
+            outside["merged"] = serde_json::json!(true);
+            memory.changes_on_push.insert(201, Some(outside));
+            memory.trace.clear();
+            memory.config.clone()
+        };
+
+        let result = world.run(&["--no-stack"]);
+
+        assert_eq!(result.is_ok(), accept, "{result:?}");
+        let memory = world.0.lock().unwrap();
+        assert!(memory.stderr.contains("PR #201") && memory.stderr.contains("indirectly merged"));
+        assert_eq!(
+            memory
+                .trace
+                .iter()
+                .filter(|event| event["kind"] == "confirm")
+                .count(),
+            1
+        );
+        assert_eq!(
+            memory.remote_refs["refs/heads/topic/3"],
+            if accept { proposed } else { commit(3).hash }
+        );
+        assert_eq!(memory.prs[&201]["merged"], accept);
+        if !accept {
+            assert_eq!(memory.config, original);
+            assert!(!memory.trace.iter().any(publication_effect));
+        }
+        drop(memory);
+    }
+}
+
+#[test]
+fn an_outside_head_changed_after_preflight_is_checked_again_before_the_push() {
+    use crate::github::http::{Request, Transport};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    #[derive(Debug)]
+    struct ChangedHead {
+        world: Arc<World>,
+        armed: AtomicBool,
+    }
+    impl Transport for ChangedHead {
+        fn request(&self, request: Request<'_>) -> anyhow::Result<Vec<u8>> {
+            let dependants = request.body.is_some_and(|body| {
+                serde_json::from_slice::<serde_json::Value>(body).unwrap()["variables"]
+                    .get("b0")
+                    .is_some()
+            });
+            let observation = self.world.request(request)?;
+            if dependants && self.armed.swap(false, Ordering::Relaxed) {
+                self.world.0.lock().unwrap().prs.get_mut(&104).unwrap()["head"]["sha"] =
+                    serde_json::json!(commit(1).hash);
+            }
+            Ok(observation)
+        }
+    }
+
+    let world = World::new(4);
+    world.run(&["--no-stack"]).unwrap();
+    {
+        let mut memory = world.0.lock().unwrap();
+        for index in 0..=4 {
+            memory.parents.insert(
+                format!("{index:040x}"),
+                if index == 0 {
+                    Vec::new()
+                } else {
+                    vec![format!("{:040x}", index - 1)]
+                },
+            );
+        }
+        let proposed = format!("b{:039x}", 3);
+        memory
+            .parents
+            .insert(proposed.clone(), vec![commit(2).hash]);
+        memory.commits.truncate(3);
+        memory.commits[2].hash = proposed;
+        memory.branch = "topic/3".into();
+        memory.prs.get_mut(&104).unwrap()["head"]["sha"] = serde_json::json!(commit(4).hash);
+        memory.trace.clear();
+    }
+    let mut app = world.app();
+    app.transport = Arc::new(ChangedHead {
+        world: world.clone(),
+        armed: AtomicBool::new(true),
+    });
+
+    let error = app
+        .execute(
+            &crate::cli::Flags::parse(vec!["--no-stack".into()]).unwrap(),
+            &std::collections::BTreeMap::from([("HOME".into(), "/unit/home".into())]),
+        )
+        .unwrap_err();
+
+    assert!(format!("{error:#}").contains("declined"));
+    let memory = world.0.lock().unwrap();
+    assert!(!memory.trace.iter().any(publication_effect));
+    assert_eq!(
+        memory
+            .trace
+            .iter()
+            .filter(|event| event["kind"] == "confirm")
+            .count(),
+        1
+    );
+    assert_eq!(memory.remote_refs["refs/heads/topic/3"], commit(3).hash);
+    drop(memory);
+}
+
+#[test]
+fn expired_outside_evidence_is_reacquired_once_at_the_push_boundary() {
+    let world = World::new(4);
+    world.run(&["--no-stack"]).unwrap();
+    let commits = {
+        let mut memory = world.0.lock().unwrap();
+        for index in 0..=4 {
+            memory.parents.insert(
+                format!("{index:040x}"),
+                if index == 0 {
+                    Vec::new()
+                } else {
+                    vec![format!("{:040x}", index - 1)]
+                },
+            );
+        }
+        let proposed = format!("b{:039x}", 3);
+        memory
+            .parents
+            .insert(proposed.clone(), vec![commit(2).hash]);
+        memory.commits.truncate(3);
+        memory.commits[2].hash = proposed;
+        memory.prs.get_mut(&104).unwrap()["head"]["sha"] = serde_json::json!(commit(4).hash);
+        memory.commits.clone()
+    };
+    let config = world.config();
+    let app = world.app();
+    let github = GitHub {
+        session: crate::github::Session::default(),
+        clock: Some(world.as_ref()),
+        config: &config,
+        commands: &app.commands,
+        transport: world.as_ref(),
+        template: "",
+    };
+    let mut selected = state(commits);
+    let plan = super::pull_requests::Publication::observe(&github, &selected.stack, 0).unwrap();
+    {
+        let mut memory = world.0.lock().unwrap();
+        memory.clock_elapsed += std::time::Duration::from_secs(31);
+        memory.trace.clear();
+    }
+
+    app.push(
+        &config,
+        Git {
+            commands: &app.commands,
+            repo: &config.repo,
+        },
+        &github,
+        &mut selected,
+        &plan,
+    )
+    .unwrap();
+
+    let trace = world.trace();
+    assert_eq!(
+        trace
+            .iter()
+            .filter(|event| {
+                event["kind"] == "http" && event["body"]["variables"].get("b0").is_some()
+            })
+            .count(),
+        1
+    );
+    assert!(!trace.iter().any(|event| {
+        event["program"] == "git"
+            && matches!(event["args"][1].as_str(), Some("cat-file" | "rev-list"))
+    }));
+    let observation = trace
+        .iter()
+        .position(|event| event["kind"] == "http" && event["body"]["variables"].get("b0").is_some())
+        .unwrap();
+    let push = trace
+        .iter()
+        .position(|event| event["args"][0] == "push")
+        .unwrap();
+    assert!(observation < push);
+}
+
+#[test]
 fn unchanged_partial_publication_preserves_a_concurrent_remote_update_without_pushing() {
     let world = World::new(3);
     world.run(&["--no-stack"]).unwrap();

@@ -2,6 +2,7 @@
 
 mod branch;
 mod cleanup;
+mod dependants;
 mod plan;
 pub(crate) mod policy;
 mod presentation;

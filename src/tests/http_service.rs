@@ -66,7 +66,7 @@ pub(crate) fn respond(
                 continue;
             }
             if let Some(index) = key.strip_prefix('b') {
-                repository[format!("p{index}")] = json!({"nodes":prs.values().filter(|p| p["base"]["ref"] == *reference && p["state"] == "open").map(|p| json!({"number":p["number"],"headRefName":p["head"]["ref"]})).collect::<Vec<_>>(),"pageInfo":{"hasNextPage":false}});
+                repository[format!("p{index}")] = json!({"nodes":prs.values().filter(|p| p["base"]["ref"] == *reference && p["state"] == "open").map(|p| json!({"number":p["number"],"headRefName":p["head"]["ref"],"headRefOid":p["head"]["sha"]})).collect::<Vec<_>>(),"pageInfo":{"hasNextPage":false}});
                 continue;
             }
             if let Some(index) = key

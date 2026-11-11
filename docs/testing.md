@@ -192,7 +192,10 @@ HTTP failure diagnostics are emitted through the error chain rather than duplica
 ## Published-stack safety regressions
 
 Complete, verifiable reordered submissions shall preserve open PR identities through a safe publication transition, with native stack management both enabled and disabled.
-Unverifiable transitions shall stop before remote mutation, including conflicting publication identities, ambiguous open identities, exclusively closed or merged branch history, and open dependants outside the verified selection of a topology transition or a changing publication destination.
+Unverifiable transitions shall stop before remote mutation, including conflicting publication identities, ambiguous open identities, exclusively closed or merged branch history, and open dependants outside the verified selection of a topology transition.
+Ordinary publication regressions distinguish conclusive non-merges, confirmed indirect-merge risks and inconclusive ancestry for PRs outside the selection.
+Consent regressions require reacquisition after interactive waits, renewed consent for changed heads or proposed bases, bounded repeated changes and preservation of the existing publication-freshness limits.
+A disposable sixteen-member native-stack regression updates only its bottom three branches whilst retaining stale upper heads, existing PRs and complete native membership, with optional native management both enabled and disabled.
 An unchanged five-commit prefix of a larger published stack shall remain submittable with legacy trailers and local publication associations, with native stack management both enabled and disabled, whilst preserving unselected dependent PRs, remote refs and stored commit objects.
 Destination-object regressions shall distinguish unchanged, missing and changed remote refs independently of PR-head observations, retain dependency-observation expiry for changing destinations, and reject concurrent updates through explicit expected-object leases.
 A disposable Git repository supplies actual ancestry to a host-lifecycle fixture which recognises indirect merges, optionally deletes merged heads and retargets dependent PRs.

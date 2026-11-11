@@ -49,6 +49,7 @@ unit = [
   "src/submission/transition.rs",
   "src/submission/plan.rs",
   "src/submission/cleanup.rs",
+  "src/submission/dependants.rs",
   "src/identity/mod.rs",
   "src/identity/resolve.rs",
   "src/identity/store.rs",

@@ -47,10 +47,17 @@ Changes to published base relationships require a verified transition before pub
 The transition procedure prevents GitHub from recognising an unintended indirect merge whilst branch references and PR relationships disagree.
 Incomplete evidence stops submission; `--yes`, `--no-stack` and native stack mode do not bypass these checks.
 
-Publication also stops if an open PR outside the verified selection targets a branch whose published object would change.
-An unchanged selected prefix may be resubmitted whilst later PRs remain outside the selection, provided that no publication-base transition is required.
+An ordinary publication may update a selected prefix whilst later PRs remain outside the selection, provided that no publication-base transition is required.
+For an open unselected PR targeting a changing branch, the client observes its current head object and verifies whether that object is reachable from the proposed base object.
+A conclusive negative ancestry result permits publication without confirmation; stale upper branches and conflicts outside the selected history do not require publication of the remaining stack.
+A positive result identifies an indirect-merge risk, emits a warning naming the affected PRs and requires confirmation, or explicit automatic acceptance through `--yes`.
+Consent is bound to the observed PR identity, head reference, head object, base reference and proposed base object.
+Observations are reacquired after confirmation; changed evidence requires fresh consent, and repeated changes stop the bounded confirmation loop.
+An observed unselected dependency is checked again immediately before each push batch; consent is never requested retrospectively for an already completed publication.
+Unavailable head identities or inconclusive local ancestry stop publication with an actionable diagnostic rather than treating uncertainty as a safe result.
+Existing native-stack membership is preserved when the selected PRs form a compatible contiguous slice of that stack.
 Unchanged objects are verified against the actual push destination and published with explicit expected-object leases; tracking refs and PR-head observations alone do not establish this exception.
-Include the complete dependent stack where appropriate.
+Publication-base transitions retain their separate verification requirements and refuse unselected incoming dependants.
 A head with only closed or merged PR history is rejected; retrying does not create a replacement PR automatically.
 A recorded merge may target another stack branch rather than the repository trunk, so the diagnostic shall not prescribe an unconditional rebase onto the trunk.
 Dry runs remain local previews and do not establish that these remote safety requirements are satisfied.

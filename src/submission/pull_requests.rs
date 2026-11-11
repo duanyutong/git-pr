@@ -37,6 +37,7 @@ pub(super) struct Publication {
     entries: Vec<(usize, String, Option<Identity>)>,
     dependant_refs: Vec<String>,
     dependant_times: Vec<Cell<Instant>>,
+    dependant_approvals: super::dependants::Approvals,
     transition: Option<super::transition::Transition>,
     actions: Arc<PublicationPlan>,
     ancestry: Option<Ancestry>,
@@ -79,6 +80,7 @@ impl Publication {
             entries: Vec::new(),
             dependant_refs: Vec::new(),
             dependant_times: Vec::new(),
+            dependant_approvals: super::dependants::Approvals::default(),
             transition: None,
             actions: Arc::default(),
             ancestry: None,
@@ -123,7 +125,7 @@ impl Publication {
             plan.leases = Arc::clone(&transition.refs);
             plan.cleanup.extend(transition.cleanup_candidates().clone());
         }
-        if plan.transition.is_none() {
+        if plan.transition.is_none() && !plan.actions.changing.is_empty() {
             // A leased push of the already published object cannot change its dependants.
             // Use the actual push destination rather than cached tracking refs or PR heads.
             plan.dependant_refs = plan
@@ -133,12 +135,14 @@ impl Publication {
                 .map(|(_, reference, _)| reference.clone())
                 .collect();
             let selected = plan.selected_prs();
+            let proposed = Self::proposed_heads(stack);
             plan.dependant_times = plan
                 .dependant_refs
                 .chunks(25)
                 .map(|chunk| {
-                    let acquired = github.now();
-                    github.check_publication_dependants(chunk, &selected)?;
+                    let acquired = plan
+                        .dependant_approvals
+                        .verify(github, chunk, &selected, &proposed)?;
                     Ok(Cell::new(acquired))
                 })
                 .collect::<Result<_>>()?;
@@ -284,6 +288,14 @@ impl Publication {
             .collect()
     }
 
+    fn proposed_heads(stack: &[Commit]) -> std::collections::BTreeMap<&str, &str> {
+        stack
+            .iter()
+            .filter(|commit| !commit.skip)
+            .map(|commit| (commit.remote_ref(), commit.hash.as_str()))
+            .collect()
+    }
+
     pub(super) fn finish(&self, github: &GitHub<'_>, state: &State) -> Result<()> {
         if let Some(transition) = &self.transition {
             transition.finish(github, state)?;
@@ -397,18 +409,35 @@ impl Publication {
                 }
             }
         }
-        let mut selected = None;
-        // Preserve each bounded group's own acquisition age across long rewrites.
-        for (chunk, observed) in self.dependant_refs.chunks(25).zip(&self.dependant_times) {
-            let acquired = github.now();
-            if acquired.saturating_duration_since(observed.get()) > Duration::from_secs(30) {
-                let selected = selected.get_or_insert_with(|| self.selected_prs());
-                github.check_publication_dependants(chunk, selected)?;
-                observed.set(acquired);
-            }
+        if !published {
+            self.refresh_dependants(github, &state.stack, false)?;
         }
         if let (Some(transition), Some(recovery)) = (&self.transition, recovery) {
             transition.verify_published(state, &recovery)?;
+        }
+        Ok(())
+    }
+
+    fn refresh_dependants(&self, github: &GitHub<'_>, stack: &[Commit], force: bool) -> Result<()> {
+        let mut context = None;
+        // Preserve each bounded group's own acquisition age across long rewrites.
+        for (chunk, observed) in self.dependant_refs.chunks(25).zip(&self.dependant_times) {
+            let required = if force {
+                self.dependant_approvals.has_outside(chunk)
+            } else {
+                // Known outside groups are reacquired at the push boundary.
+                // Refreshing them here would repeat that same live observation.
+                github.now().saturating_duration_since(observed.get()) > Duration::from_secs(30)
+                    && !self.dependant_approvals.has_outside(chunk)
+            };
+            if required {
+                let (selected, proposed) = context
+                    .get_or_insert_with(|| (self.selected_prs(), Self::proposed_heads(stack)));
+                let acquired = self
+                    .dependant_approvals
+                    .verify(github, chunk, selected, proposed)?;
+                observed.set(acquired);
+            }
         }
         Ok(())
     }
@@ -487,6 +516,7 @@ impl Application {
                 .map(|&i| &state.stack[i])
                 .collect::<Vec<_>>();
             git.push_with_leases(&commits, Some(&publication.leases), &|| {
+                publication.refresh_dependants(github, &state.stack, true)?;
                 publication.require_fresh(github.now(), transition_observed)
             })?;
             git.sync_refs(state.selected());

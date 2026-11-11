@@ -156,9 +156,10 @@ fn unchanged_five_commit_prefix_preserves_unselected_dependants() {
 }
 
 #[test]
-fn middle_branch_publication_refuses_unselected_dependants() {
+fn middle_branch_publication_preserves_unselected_dependants() {
     let f = Fixture::new(3, true);
     f.run(&[]).unwrap();
+    f.service.prs.lock().unwrap().get_mut(&103).unwrap()["head"]["sha"] = json!(f.hashes[2]);
     f.git(&["checkout", "topic/2"]);
     f.git(&[
         "commit",
@@ -168,11 +169,113 @@ fn middle_branch_publication_refuses_unselected_dependants() {
     ]);
     let before = f.service.prs.lock().unwrap().clone();
     f.service.trace.lock().unwrap().clear();
-    let error = format!("{:#}", f.run(&[]).unwrap_err());
-    assert!(error.contains("open PR #103") && error.contains("outside the verified selection"));
-    assert_eq!(commands(&f.trace(), "git", "push"), [] as [Value; 0]);
-    assert_eq!(*f.service.prs.lock().unwrap(), before);
+    f.run(&[]).unwrap();
+    assert_eq!(commands(&f.trace(), "git", "push").len(), 1);
+    assert_eq!(f.service.prs.lock().unwrap()[&103], before[&103]);
+    assert!(
+        f.git(&["ls-remote", "origin", "refs/heads/topic/3"])
+            .starts_with(&f.hashes[2])
+    );
     assert_eq!(f.git(&["branch", "--show-current"]), "topic/2");
+}
+
+#[test]
+fn bottom_three_updates_preserve_the_sixteen_member_native_stack_and_stale_upper_branches() {
+    for (mode, shallow) in [
+        ("--github-stack", false),
+        ("--github-stack", true),
+        ("--no-stack", false),
+        ("--no-stack", true),
+    ] {
+        let mut f = Fixture::new(16, true);
+        f.run(&["--github-stack"]).unwrap();
+        f.git(&["checkout", "topic/4"]);
+        f.write("file-1.txt", "Conflicting upper change\n");
+        f.git(&["add", "file-1.txt"]);
+        f.git(&["commit", "--amend", "--no-edit"]);
+        f.hashes[3] = f.git(&["rev-parse", "HEAD"]);
+        f.git(&["push", "--force", "origin", "HEAD:refs/heads/topic/4"]);
+        for index in 1..=16 {
+            f.service
+                .prs
+                .lock()
+                .unwrap()
+                .get_mut(&(100 + index))
+                .unwrap()["head"]["sha"] = json!(f.hashes[usize::try_from(index - 1).unwrap()]);
+        }
+        let outside: std::collections::BTreeMap<_, _> = f
+            .service
+            .prs
+            .lock()
+            .unwrap()
+            .range(104..)
+            .map(|(&number, pr)| (number, pr.clone()))
+            .collect();
+        let membership = f.service.prs.lock().unwrap()[&101]["stack"].clone();
+        if shallow {
+            f.write(".git/shallow", &format!("{}\n", f.trunk));
+        }
+        f.git(&["checkout", "topic/1"]);
+        f.write("file-1.txt", "Amended bottom change\n");
+        f.git(&["add", "file-1.txt"]);
+        f.git(&["commit", "--amend", "--no-edit"]);
+        let first = f.git(&["rev-parse", "HEAD"]);
+        f.git(&["checkout", "topic/3"]);
+        f.git(&["rebase", "--onto", &first, &f.hashes[0]]);
+        let second = f.git(&["rev-parse", "HEAD^"]);
+        let third = f.git(&["rev-parse", "HEAD"]);
+        f.git(&["update-ref", "refs/heads/topic/2", &second]);
+        let conflict = f
+            .app
+            .commands
+            .runner
+            .execute(
+                "git",
+                &[
+                    "merge-tree".into(),
+                    "--write-tree".into(),
+                    third.clone(),
+                    f.hashes[3].clone(),
+                ],
+                &f.cwd,
+                &f.app.commands.env,
+            )
+            .unwrap();
+        assert_eq!(conflict.status, 1, "{conflict:?}");
+        assert!(conflict.text.contains("CONFLICT"));
+        f.service.trace.lock().unwrap().clear();
+
+        f.run(&[mode]).unwrap();
+
+        let references = f.git(&["ls-remote", "--heads", "origin"]);
+        for (index, expected) in [(1, first), (2, second), (3, third)] {
+            assert!(references.contains(&format!("{expected}\trefs/heads/topic/{index}")));
+        }
+        for index in 4..=16 {
+            assert!(references.contains(&format!(
+                "{}\trefs/heads/topic/{index}",
+                f.hashes[index - 1]
+            )));
+        }
+        let prs = f.service.prs.lock().unwrap();
+        assert_eq!(prs.len(), 16);
+        for pr in prs.values() {
+            assert_eq!(pr["stack"], membership);
+        }
+        for (number, original) in outside {
+            assert_eq!(prs[&number], original);
+        }
+        drop(prs);
+        assert_eq!(commands(&f.trace(), "git", "push").len(), 1);
+        assert!(!f.trace().iter().any(|event| {
+            event["method"] == "DELETE"
+                || (event["method"] == "POST"
+                    && event["path"]
+                        .as_str()
+                        .is_some_and(|path| path.starts_with("stacks")))
+        }));
+        assert!(f.terminal.answers.lock().unwrap().is_empty());
+    }
 }
 
 #[test]

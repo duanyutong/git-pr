@@ -45,6 +45,7 @@ Python versioning tests reside separately in `scripts/test_version.py` and do no
 | Jujutsu operations | `jj/mod.rs`: revision cardinality, change-ID recovery, working-copy assembly and bookmark targets. |
 | Submission workflows | `submission/mod.rs`, `submission/state.rs`, `submission/plan.rs`, `submission/transition.rs`, `submission/cleanup.rs`, `submission/pull_requests.rs` and `submission/presentation.rs`: phase barriers, publication recovery, author and draft filtering, explicit selections, PR completion, history, labels and partial failures. |
 | Standalone branch publication | `submission/branch.rs`: implicit selection, managed-publication evidence, complete branch histories, checkpoints, previews, upstream configuration and failure reporting without GitHub operations. |
+| Unselected publication dependants | `submission/dependants.rs`: observed head ancestry, immutable-proof reuse, scoped live-evidence tracking, non-merge acceptance, indirect-merge warnings, explicit consent, changed-evidence renewal, bounded confirmation and inconclusive-evidence refusal. |
 | GitHub decisions | `github/policy.rs`: draft creation, label overlap reconciliation, PR selection and URLs, and stack failure classification. |
 | Invocation outcomes | `model/outcome.rs`: shared attempted-effect evidence, confirmed changes, rejected attempts and preservation of earlier confirmed effects after a subsequent failure. |
 | Jujutsu value interpretation | `jj/policy.rs`: working-copy status and description interpretation. |

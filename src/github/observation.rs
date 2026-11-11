@@ -13,6 +13,26 @@ use crate::model::PullRequest;
 
 const BATCH_SIZE: usize = 25;
 
+#[derive(Debug)]
+pub(crate) struct PublicationDependant {
+    pub number: u64,
+    pub head: String,
+    pub base: String,
+    pub hash: String,
+}
+
+fn dependant_identity(node: &Value) -> Result<(u64, &str)> {
+    let number = node["number"]
+        .as_u64()
+        .filter(|n| *n != 0)
+        .context("missing dependant PR identity")?;
+    let head = node["headRefName"]
+        .as_str()
+        .filter(|head| !head.is_empty())
+        .context("missing dependant PR head")?;
+    Ok((number, head))
+}
+
 #[derive(Debug, Deserialize)]
 struct Repository {
     full_name: String,
@@ -391,7 +411,7 @@ impl GitHub<'_> {
         Ok(merged)
     }
 
-    /// Updating a base branch also affects PRs outside the selected local stack.
+    /// Transitions require exclusive ownership of their affected PR relationships.
     pub(crate) fn check_publication_dependants(
         &self,
         references: &[String],
@@ -405,6 +425,48 @@ impl GitHub<'_> {
         references: &[String],
         selected: &std::collections::HashMap<u64, (&str, &str)>,
         started: Option<Instant>,
+    ) -> Result<()> {
+        self.visit_publication_dependants(references, started, |reference, node| {
+            let (number, head) = dependant_identity(node)?;
+            if selected.get(&number) != Some(&(head, reference)) {
+                bail!(
+                    "unsafe publication: open PR #{number} (head {head:?}) depends on branch {reference:?} outside the verified selection. Updating that branch can indirectly merge or retarget the PR; include its complete stack or arrange a separately verified transition before retrying"
+                );
+            }
+            Ok(())
+        })
+    }
+
+    pub(crate) fn publication_dependants(
+        &self,
+        references: &[String],
+        selected: &std::collections::HashMap<u64, (&str, &str)>,
+    ) -> Result<Vec<PublicationDependant>> {
+        let mut outside = Vec::new();
+        self.visit_publication_dependants(references, None, |reference, node| {
+            let (number, head) = dependant_identity(node)?;
+            if let Some(expected) = selected.get(&number) {
+                if *expected != (head, reference) {
+                    bail!("publication dependant PR #{number} changed its selected head or base");
+                }
+            } else {
+                let hash = node["headRefOid"].as_str()
+                    .filter(|hash| crate::git::policy::valid_oid(hash))
+                    .with_context(|| format!("cannot verify indirect merge for PR #{number} outside the verified selection: missing or invalid head object"))?;
+                outside.push(PublicationDependant {
+                    number, head: head.into(), base: reference.into(), hash: hash.into(),
+                });
+            }
+            Ok(())
+        })?;
+        Ok(outside)
+    }
+
+    fn visit_publication_dependants(
+        &self,
+        references: &[String],
+        started: Option<Instant>,
+        mut visit: impl FnMut(&str, &Value) -> Result<()>,
     ) -> Result<()> {
         let (owner, name) = self
             .config
@@ -426,7 +488,7 @@ impl GitHub<'_> {
                     let _ = write!(declarations, ",$b{i}:String!,$c{i}:String");
                     let _ = write!(
                         fields,
-                        "p{i}:pullRequests(baseRefName:$b{i},states:[OPEN],first:100,after:$c{i}){{nodes{{number headRefName}} pageInfo{{hasNextPage endCursor}}}} "
+                        "p{i}:pullRequests(baseRefName:$b{i},states:[OPEN],first:100,after:$c{i}){{nodes{{number headRefName headRefOid}} pageInfo{{hasNextPage endCursor}}}} "
                     );
                     variables[format!("b{i}")] = json!(reference);
                     variables[format!("c{i}")] = json!(cursor.after);
@@ -454,19 +516,7 @@ impl GitHub<'_> {
                         .as_array()
                         .context("incomplete publication dependant observation")?;
                     for node in nodes {
-                        let number = node["number"]
-                            .as_u64()
-                            .filter(|n| *n != 0)
-                            .context("missing dependant PR identity")?;
-                        let head = node["headRefName"]
-                            .as_str()
-                            .filter(|h| !h.is_empty())
-                            .context("missing dependant PR head")?;
-                        if selected.get(&number) != Some(&(head, reference.as_str())) {
-                            bail!(
-                                "unsafe publication: open PR #{number} (head {head:?}) depends on branch {reference:?} outside the verified selection. Updating that branch can indirectly merge or retarget the PR; include its complete stack or arrange a separately verified transition before retrying"
-                            );
-                        }
+                        visit(reference, node)?;
                     }
                     cursor.advance(connection)?;
                 }

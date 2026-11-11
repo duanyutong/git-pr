@@ -16,6 +16,71 @@ fn metadata_mutation(event: &Value) -> bool {
                 .is_some_and(|query| !query.starts_with("mutation")))
 }
 
+fn changed_prefix(total: u64, selected: u64) -> std::sync::Arc<World> {
+    let world = World::new(total);
+    world.run(&["--no-stack"]).unwrap();
+    let mut memory = world.0.lock().unwrap();
+    for index in 0..=total {
+        memory.parents.insert(
+            format!("{index:040x}"),
+            if index == 0 {
+                Vec::new()
+            } else {
+                vec![format!("{:040x}", index - 1)]
+            },
+        );
+    }
+    for (number, pr) in &mut memory.prs {
+        pr["head"]["sha"] = json!(format!("{:040x}", number - 100));
+    }
+    memory.commits.truncate(usize::try_from(selected).unwrap());
+    for index in 1..=selected {
+        let hash = format!("b{index:039x}");
+        memory.parents.insert(
+            hash.clone(),
+            vec![if index == 1 {
+                "0".repeat(40)
+            } else {
+                format!("b{:039x}", index - 1)
+            }],
+        );
+        memory.commits[usize::try_from(index - 1).unwrap()].hash = hash;
+    }
+    memory.branch = format!("topic/{selected}");
+    memory.trace.clear();
+    drop(memory);
+    world
+}
+
+#[test]
+fn changed_publication_has_bounded_dependant_observation_and_ancestry_work() {
+    for (total, selected, ancestry_limit) in [(16, 16, 0), (16, 3, 3), (152, 151, 7)] {
+        let world = changed_prefix(total, selected);
+        world.run(&["--no-stack"]).unwrap();
+        let trace = world.trace();
+        let dependants = count(&trace, |event| {
+            event["kind"] == "http" && event["body"]["variables"].get("b0").is_some()
+        });
+        let ancestry = count(&trace, |event| {
+            event["program"] == "git"
+                && matches!(event["args"][1].as_str(), Some("cat-file" | "rev-list"))
+        });
+        let pushes = count(&trace, |event| {
+            event["program"] == "git" && event["args"][0] == "push"
+        });
+        eprintln!(
+            "PERFORMANCE {selected}/{total}: {dependants} dependant requests, {ancestry} ancestry commands, {pushes} pushes"
+        );
+        assert_eq!(pushes, usize::try_from(selected.div_ceil(128)).unwrap());
+        assert_eq!(
+            dependants,
+            usize::try_from(selected.div_ceil(25)).unwrap()
+                + if selected < total { pushes } else { 0 }
+        );
+        assert!(ancestry <= ancestry_limit, "{ancestry} > {ancestry_limit}");
+    }
+}
+
 #[test]
 fn unchanged_submission_observes_each_safety_barrier_without_mutations_or_waits() {
     for size in [1, 5, 24, 25, 26, 100, 101] {
