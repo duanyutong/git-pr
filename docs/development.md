@@ -1,9 +1,9 @@
 # Development
 
 Rust 1.99.1 and Edition 2024 are specified by `rust-toolchain.toml` and `Cargo.toml`.
-Development requires Git, rustup, uv, just and prek; command-runner versions are declared in `scripts/dev-tools.env`.
+Development requires Git, rustup, uv, just, prek and `man`; command-runner versions are declared in `scripts/dev-tools.env`.
 Linux requires a C compiler, pkg-config and the D-Bus development headers; credential acceptance additionally requires `dbus-run-session` and `gnome-keyring-daemon`.
-The corresponding Debian and Ubuntu packages are `build-essential pkg-config libdbus-1-dev libssl-dev dbus-x11 gnome-keyring`.
+The corresponding Debian and Ubuntu packages are `build-essential pkg-config libdbus-1-dev libssl-dev dbus-x11 gnome-keyring man-db`.
 macOS requires the Xcode command-line tools.
 
 The command `sh setup.sh` verifies the command-runner versions, synchronises the Python environment from `uv.lock`, provisions hook environments, fetches locked Rust dependencies and registers hooks.

@@ -3,6 +3,31 @@
 Submission commands operate from the Git repository or Jujutsu workspace.
 The examples below assume that `git-pr` is installed as described in the [README](../README.md#installation).
 
+## Installation
+
+Source installation requires the compiler specified in `rust-toolchain.toml`.
+Displaying the manual requires `man`.
+The standard installation uses the optimised release profile and installs the executable and its manual under `~/.cargo`:
+
+```sh
+./install.sh
+```
+
+An optional prefix may be supplied as `./install.sh /absolute/prefix`.
+The installer always passes the default or supplied prefix to Cargo as `--root`.
+This deliberate installer policy overrides `CARGO_INSTALL_ROOT`, Cargo's `install.root` configuration and `CARGO_HOME` for the installation destination, in accordance with [Cargo's installation-root precedence](https://doc.rust-lang.org/cargo/commands/cargo-install.html#description).
+To retain a configured installation destination, supply that directory explicitly.
+The helper does not infer Cargo's configured destination.
+
+The prefix's `bin` directory must be on `PATH` so that Git can locate the executable and the manual viewer can discover the adjacent `share/man` directory.
+If `MANPATH` is explicitly set, include the prefix's `share/man` directory whilst retaining the existing manual search paths.
+Direct installation with `cargo install --path . --locked` installs only the executable.
+For direct Cargo installation, `--debug` selects a development build and `--frozen` additionally disables network access, requiring all dependencies to be cached.
+
+Use the helper for subsequent source updates to keep the executable and manual aligned.
+Cargo does not update or remove the separately installed manual; after `cargo uninstall git-pr`, remove `<prefix>/share/man/man1/git-pr.1` separately.
+Package maintainers may generate the same manual from a compiled executable with `./scripts/man.sh ./target/release/git-pr > git-pr.1`.
+
 ## Authentication
 
 Managed pull-request submissions use GitHub authentication configured through the GitHub CLI:
@@ -104,11 +129,14 @@ The [configuration reference](configuration.md#git-configuration) defines the su
 
 ## Command reference and execution limits
 
-The built-in help lists flags and output fields:
+The installed manual lists flags and output fields:
 
 ```sh
 git pr --help
 ```
+
+Git resolves this invocation through its manual viewer; [source installation](../README.md#installation) therefore installs both the executable and its manual.
+The commands `git pr -h` and `git-pr --help` display the built-in help without requiring a manual viewer.
 
 The [configuration reference](configuration.md) describes precedence and execution checkpoints.
 A dry run previews publication associations and subsequent operations without changing local or remote state.

@@ -3,6 +3,8 @@
 Tests exercise policy through production pure functions, repository semantics through disposable Git and Jujutsu repositories, and submission through controlled process and HTTP boundaries.
 Fixtures use deterministic identities, timestamps and private credential directories.
 Neither production credentials nor production pull requests form part of acceptance.
+Installation tests use isolated homes and a substitute Cargo boundary to verify default and explicit prefixes, rejected arguments, binary and manual failures, and discovery through both Git help invocations.
+The manual is generated from the compiled executable's built-in help; native rendering is checked at widths of 80 and 120 columns.
 A failed run retains its diagnostics; automatic retries do not constitute acceptance.
 The [behavioural contract inventory](behavioural-contracts.md) defines independent expectations, permissible normalisation and bounded generated dimensions.
 The [assurance guide](assurance.md) specifies generated campaigns, known-defect sensitivity, critical mutation analysis, semantic fuzzing and retained evidence.

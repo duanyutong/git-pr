@@ -23,11 +23,15 @@ GitHub Enterprise Server requires changes to REST endpoint construction, as desc
 
 ## Installation
 
-Source installation requires Rust.
+Source installation requires Rust; displaying the manual requires `man`.
 
 ```sh
-cargo install --path . --locked
+./install.sh
+git pr --help
 ```
+
+The default destination is `~/.cargo`; ensure `~/.cargo/bin` is on `PATH`.
+See [installation details](docs/commands.md#installation) for custom prefixes, Cargo configuration, updates and removal.
 
 Authentication, repository initialisation and submission examples are documented in [common commands](docs/commands.md).
 
