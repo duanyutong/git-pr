@@ -224,8 +224,9 @@ pub(crate) fn persist(
     change: &str,
     review: u64,
 ) -> Result<()> {
-    for (key, value) in assignments(repo, binding, change, review) {
-        insert(commands, &key, &value)?;
+    let values = assignments(repo, binding, change, review);
+    if !values.is_empty() {
+        persist_observed(commands, &Records::read(commands)?, &values)?;
     }
     Ok(())
 }

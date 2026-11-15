@@ -426,7 +426,7 @@ impl GitHub<'_> {
         selected: &std::collections::HashMap<u64, (&str, &str)>,
         started: Option<Instant>,
     ) -> Result<()> {
-        self.visit_publication_dependants(references, started, |reference, node| {
+        self.commands.diagnostics.phase("publication dependant observation", || self.visit_publication_dependants(references, started, |reference, node| {
             let (number, head) = dependant_identity(node)?;
             if selected.get(&number) != Some(&(head, reference)) {
                 bail!(
@@ -434,7 +434,7 @@ impl GitHub<'_> {
                 );
             }
             Ok(())
-        })
+        }))
     }
 
     pub(crate) fn publication_dependants(
@@ -527,7 +527,12 @@ impl GitHub<'_> {
     }
 
     pub(crate) fn observe(&self, references: &[String]) -> Result<()> {
-        self.observe_mode(references, None, None).map(|_| ())
+        self.commands
+            .diagnostics
+            .phase("PR identity and content observation", || {
+                self.observe_mode(references, None, None)
+            })
+            .map(|_| ())
     }
 
     pub(super) fn observe_with_budget(

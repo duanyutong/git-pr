@@ -242,6 +242,7 @@ fn command_label(program: &str, args: &[String]) -> String {
                 | "log"
                 | "show"
                 | "show-ref"
+                | "ls-remote"
                 | "for-each-ref"
                 | "cat-file"
                 | "merge-base"

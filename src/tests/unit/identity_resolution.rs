@@ -20,6 +20,78 @@ fn inspect(
     resolve(&github, selected, records, branches, false, true)
 }
 
+#[derive(Debug)]
+struct ExpiringIdentityObservation {
+    world: std::sync::Arc<World>,
+    first: std::sync::atomic::AtomicBool,
+}
+
+impl crate::github::http::Transport for ExpiringIdentityObservation {
+    fn request(&self, request: crate::github::http::Request<'_>) -> Result<Vec<u8>> {
+        if request.url.ends_with("/graphql") {
+            if !self.first.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                anyhow::bail!("identity observation unavailable");
+            }
+            let response = self.world.request(request)?;
+            crate::commands::Clock::sleep(self.world.as_ref(), std::time::Duration::from_secs(31));
+            return Ok(response);
+        }
+        self.world.request(request)
+    }
+}
+
+#[test]
+fn discovery_and_expired_pending_creation_observations_fail_closed() {
+    for pending in [false, true] {
+        let world = World::new(1);
+        let config = world.config();
+        let commands = world.commands();
+        let transport = ExpiringIdentityObservation {
+            world: world.clone(),
+            first: pending.into(),
+        };
+        let github = GitHub {
+            session: crate::github::Session::default(),
+            config: &config,
+            commands: &commands,
+            clock: Some(world.as_ref()),
+            transport: &transport,
+            template: "",
+        };
+        let error = if pending {
+            let attempt = crate::identity::Attempt {
+                id: "00000000-0000-4000-8000-000000000001".into(),
+                head: Head::new(&config.repo, "topic/1").unwrap(),
+                base: "main".into(),
+            };
+            world
+                .0
+                .lock()
+                .unwrap()
+                .config
+                .insert("git-pr.pendingCreate".into(), attempt.value());
+            prepare(&github, &mut [commit(1)], 0).unwrap_err()
+        } else {
+            discover(
+                &github,
+                &commit(1),
+                "topic/1",
+                &Records::default(),
+                false,
+                true,
+            )
+            .unwrap_err()
+        };
+        assert!(format!("{error:#}").contains("identity observation unavailable"));
+        assert!(
+            !world
+                .trace()
+                .iter()
+                .any(|e| e["args"][0] == "push" || e["method"] == "PATCH")
+        );
+    }
+}
+
 #[test]
 fn invalid_claims_are_rejected_in_every_reconciliation_role() {
     for (anchor, field) in [

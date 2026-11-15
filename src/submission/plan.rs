@@ -128,6 +128,14 @@ impl Ancestry {
                     pairs.insert((hash.to_owned(), base.to_owned()));
                 }
                 pairs.insert((hash.to_owned(), new_base.clone()));
+                if let Some((_, current_base)) = observed.prs.get(&head.index) {
+                    if let Some(base) = observed.base_tip(current_base) {
+                        pairs.insert((hash.to_owned(), base.to_owned()));
+                    }
+                    if let Ok(base) = desired.tip(observed, current_base) {
+                        pairs.insert((hash.to_owned(), base));
+                    }
+                }
             }
         }
         Ok(pairs)
@@ -216,6 +224,38 @@ impl Ancestry {
         Ok(())
     }
 
+    /// PRs whose current edge cannot survive every old/new publication ordering.
+    pub(super) fn staging_required(
+        &self,
+        desired: &DesiredPublication<'_>,
+        observed: &ObservedPublication<'_>,
+    ) -> Result<BTreeSet<usize>> {
+        let mut required = BTreeSet::new();
+        for head in &desired.heads {
+            let Some((_, current_base)) = observed.prs.get(&head.index) else {
+                continue;
+            };
+            let Some(old_base) = observed.base_tip(current_base) else {
+                required.insert(head.index);
+                continue;
+            };
+            let new_base = desired
+                .heads
+                .iter()
+                .find(|candidate| candidate.reference == current_base)
+                .map_or(old_base, |candidate| candidate.hash);
+            let old_head = observed.tip(head.reference)?;
+            for hash in [old_head, head.hash] {
+                for base in [old_base, new_base] {
+                    if self.contains(hash, base)? {
+                        required.insert(head.index);
+                    }
+                }
+            }
+        }
+        Ok(required)
+    }
+
     pub(super) fn verify_strategy(
         &self,
         strategy: &Strategy,
@@ -238,6 +278,13 @@ impl Ancestry {
                 }
                 Ok(())
             }
+            Strategy::PublishThenRetarget => {
+                self.check_staging(desired, observed)?;
+                if !self.staging_required(desired, observed)?.is_empty() {
+                    bail!("current PR bases require staging before publication");
+                }
+                Ok(())
+            }
             Strategy::Stage(_) => self.check_staging(desired, observed),
         }
     }
@@ -248,6 +295,7 @@ pub(super) enum Strategy {
     #[default]
     Publish,
     Retarget,
+    PublishThenRetarget,
     Stage(String),
 }
 
@@ -255,31 +303,56 @@ pub(super) enum Strategy {
 pub(super) struct PublicationPlan {
     pub strategy: Strategy,
     pub changing: Vec<usize>,
+    pub staged: BTreeSet<usize>,
     pub link_native: bool,
 }
 
 impl PublicationPlan {
+    pub(super) fn verify(
+        &self,
+        ancestry: &Ancestry,
+        desired: &DesiredPublication<'_>,
+        observed: &ObservedPublication<'_>,
+    ) -> Result<()> {
+        ancestry.verify_strategy(&self.strategy, desired, observed)?;
+        if matches!(self.strategy, Strategy::Stage(_))
+            && !ancestry
+                .staging_required(desired, observed)?
+                .is_subset(&self.staged)
+        {
+            bail!("prepared commits require additional temporary base transitions");
+        }
+        Ok(())
+    }
+
     pub(super) fn derive(
         desired: &DesiredPublication<'_>,
         observed: &ObservedPublication<'_>,
         ancestry: &Ancestry,
     ) -> Result<Self> {
+        let mut staged = BTreeSet::new();
         let strategy = if desired.changes_bases(observed) {
             ancestry.check_final(desired, observed)?;
             if ancestry.direct_is_safe(desired, observed)? {
                 Strategy::Retarget
             } else {
                 ancestry.check_staging(desired, observed)?;
-                Strategy::Stage(
-                    temporary_base(observed.prs.values().map(|(number, _)| *number))
-                        .context("publication transition has no existing PR identity")?,
-                )
+                staged = ancestry.staging_required(desired, observed)?;
+                if staged.is_empty() {
+                    Strategy::PublishThenRetarget
+                } else {
+                    Strategy::Stage(
+                        temporary_base(observed.prs.values().map(|(number, _)| *number))
+                            .context("publication transition has no existing PR identity")?,
+                    )
+                }
             }
         } else {
             Strategy::Publish
         };
         Ok(Self {
             strategy,
+            staged,
             changing: desired
                 .heads
                 .iter()

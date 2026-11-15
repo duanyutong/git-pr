@@ -143,18 +143,12 @@ impl Transition {
         Ok(recovery)
     }
 
-    pub(super) fn prepare_staging(&mut self, git: Git<'_>) -> Result<()> {
-        let Strategy::Stage(reference) = &self.plan.strategy else {
-            return Ok(());
-        };
-        let reference = reference.clone();
-        let observed = git.recovery_refs(&self.destination, std::slice::from_ref(&reference))?;
-        if let Some(tip) = observed.get(&reference).and_then(Option::as_ref) {
-            self.adopt_temporary(git, reference.clone(), tip.clone())?;
+    pub(super) fn prepare_staging(&mut self) {
+        // Observation already validated reserved refs; dispatch renews their leases.
+        if let Strategy::Stage(reference) = &self.plan.strategy {
+            self.temporary
+                .insert(reference.clone(), self.anchor.clone());
         }
-        Arc::make_mut(&mut self.refs).extend(observed);
-        self.temporary.insert(reference, self.anchor.clone());
-        Ok(())
     }
 
     fn observe_temporary(
@@ -419,7 +413,24 @@ impl Transition {
     }
 
     pub(super) fn publication_base(&self, index: usize) -> &str {
-        self.staging().unwrap_or(&self.bases[index])
+        if let Some(reference) = self.staging()
+            && self.plan.staged.contains(&index)
+        {
+            return reference;
+        }
+        if matches!(
+            self.plan.strategy,
+            Strategy::PublishThenRetarget | Strategy::Stage(_)
+        ) && let Some(pr) = self
+            .entries
+            .binary_search_by_key(&index, |entry| entry.index)
+            .ok()
+            .and_then(|position| self.entries.get(position))
+            .and_then(|entry| entry.pr.as_ref())
+        {
+            return &pr.base.name;
+        }
+        &self.bases[index]
     }
 
     pub(super) const fn changes_native(&self) -> bool {
@@ -473,7 +484,7 @@ impl Transition {
                 &current
             }
         };
-        ancestry.verify_strategy(&self.plan.strategy, &desired, &observed)
+        self.plan.verify(ancestry, &desired, &observed)
     }
 
     /// Return the start of the final dependant observation for publication dispatch.
@@ -510,6 +521,11 @@ impl Transition {
                 (pr.base.name != base).then(|| (pr.clone(), base.to_owned()))
             })
             .collect();
+        if changes.is_empty() && self.staging().is_none() {
+            // prepare_native has already refreshed refs, identities and dependants
+            // after its final mutation; no retarget invalidated that observation.
+            return Ok(dependants_acquired);
+        }
         github
             .commands
             .diagnostics

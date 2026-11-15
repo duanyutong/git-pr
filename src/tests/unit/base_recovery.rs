@@ -643,7 +643,7 @@ fn transition_dependant_evidence_is_required_at_the_selected_push() {
         for mode in ["read", "quota", "pagination"] {
             for seconds in [0, 30, 31] {
                 let world = if staged {
-                    transition_world(&[2, 1], &[1, 2])
+                    staged_transition_world()
                 } else {
                     world(2)
                 };
@@ -705,7 +705,7 @@ fn transition_dependant_evidence_is_required_at_the_selected_push() {
                     assert_eq!(pushes, 1);
                 }
                 let effects = app.commands.outcomes.snapshot();
-                assert!(effects[&Operation::Base(101)].confirmed);
+                assert!(effects[&Operation::Base(if staged { 102 } else { 101 })].confirmed);
                 if staged {
                     assert!(effects[&Operation::Branch("git-pr/transition/101".into())].confirmed);
                 }
@@ -779,7 +779,7 @@ fn planned_transition(
         &transition.observed(&git.repo.trunk),
         &ancestry,
     )?);
-    transition.prepare_staging(git)?;
+    transition.prepare_staging();
     Ok(transition)
 }
 
@@ -1170,6 +1170,133 @@ fn transition_world(order: &[u64], published: &[u64]) -> Arc<World> {
     }
     mock_ancestry(&w, &parents);
     w
+}
+
+// Reuse an old head below a rewritten former base: publishing either ref first
+// would merge PR #102 unless its current edge is temporarily detached.
+fn staged_transition_world() -> Arc<World> {
+    let world = transition_world(&[2, 1, 3], &[1, 2, 3]);
+    world.0.lock().unwrap().commits[0].hash = oid(12);
+    mock_ancestry(
+        &world,
+        &BTreeMap::from([
+            (0, vec![]),
+            (11, vec![0]),
+            (12, vec![11]),
+            (13, vec![12]),
+            (21, vec![12]),
+            (23, vec![21]),
+        ]),
+    );
+    world
+}
+
+#[test]
+fn six_layer_insertion_operation_budget() {
+    for native in [false, true] {
+        let w = transition_world(&[1, 5, 2, 3, 6, 4], &[1, 2, 3, 4]);
+        if native {
+            for pr in w.0.lock().unwrap().prs.values_mut() {
+                pr["stack"] = json!({"number":9});
+            }
+        }
+        w.run(&[if native {
+            "--github-stack"
+        } else {
+            "--no-stack"
+        }])
+        .unwrap();
+        let trace = w.trace();
+        let pushes = trace.iter().filter(|e| e["args"][0] == "push").count();
+        let retargets = trace.iter().filter(|e| is_retarget(e)).count();
+        let reads = trace.iter().filter(|e| e["args"][0] == "ls-remote").count();
+        let http = trace.iter().filter(|e| e["kind"] == "http").count();
+        eprintln!(
+            "six-layer native={native}: {pushes} pushes, {retargets} retargets, {reads} ref reads, {http} HTTP requests"
+        );
+        assert_eq!((pushes, retargets), (1, 2));
+        assert_eq!((reads, http), if native { (5, 20) } else { (4, 14) });
+        assert!(
+            !trace
+                .iter()
+                .filter(|e| effect(e))
+                .any(|e| e.to_string().contains("git-pr/transition/"))
+        );
+        let publication = trace.iter().position(|e| e["args"][0] == "push").unwrap();
+        assert!(
+            trace
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| is_retarget(e))
+                .all(|(index, _)| index > publication)
+        );
+        let memory = w.0.lock().unwrap();
+        for number in 1..=4 {
+            assert_eq!(
+                memory.prs[&(100 + number)]["node_id"],
+                format!("PR_{}", 100 + number)
+            );
+            assert_eq!(memory.prs[&(100 + number)]["state"], "open");
+        }
+        for (number, base) in [(1, "main"), (2, "topic/5"), (3, "topic/2"), (4, "topic/6")] {
+            assert_eq!(memory.prs[&(100 + number)]["base"]["ref"], base);
+        }
+        drop(memory);
+    }
+}
+
+#[test]
+fn selective_staging_detaches_only_the_unsafe_current_edge() {
+    let world = staged_transition_world();
+    world.run(&["--no-stack"]).unwrap();
+    let bases: Vec<_> = world
+        .trace()
+        .iter()
+        .filter(|e| is_retarget(e))
+        .map(|e| {
+            (
+                e["body"]["variables"]["input"]["pullRequestId"].clone(),
+                e["body"]["variables"]["input"]["baseRefName"].clone(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        bases,
+        vec![
+            (json!("PR_102"), json!("git-pr/transition/101")),
+            (json!("PR_102"), json!("main")),
+            (json!("PR_101"), json!("topic/2")),
+            (json!("PR_103"), json!("topic/1")),
+        ]
+    );
+    assert!(
+        world
+            .0
+            .lock()
+            .unwrap()
+            .prs
+            .values()
+            .all(|pr| pr["state"] == "open")
+    );
+}
+
+#[test]
+fn selective_staging_refuses_a_plan_that_leaves_an_unsafe_edge_attached() {
+    let world = staged_transition_world();
+    with_github(&world, |github| {
+        let state = state(&world);
+        let (mut transition, bases) = observe(&world, github, &state);
+        assert_eq!(transition.plan.staged, BTreeSet::from([0]));
+        Arc::make_mut(&mut transition.plan).staged.clear();
+        assert!(
+            transition
+                .apply(github, &state, &bases)
+                .unwrap_err()
+                .to_string()
+                .contains("additional temporary base transitions")
+        );
+        assert!(!world.trace().iter().any(effect));
+    });
 }
 
 fn rewrite_unpublished_transition(w: &World, advance_trunk: bool) {
@@ -1701,7 +1828,7 @@ fn arrange_transition_failure(w: &World, case: &str) {
             .insert("refs/heads/git-pr/transition/101".into(), oid(11));
     }
     if case == "staging-read" {
-        w.fail("git ls-remote --refs -- https://github.com/org/repo.git refs/heads/git-pr/transition/101");
+        w.fail("git ls-remote --refs -- https://github.com/org/repo.git refs/heads/git-pr/transition/101 refs/heads/topic/1 refs/heads/topic/2 refs/heads/topic/3");
     }
     if case == "observation" {
         let mut values = {
@@ -1725,7 +1852,7 @@ fn transition_preparation_rejects_collisions_and_changing_evidence() {
         "staging-during-prepare",
         "native-change",
     ] {
-        let w = transition_world(&[2, 1, 3], &[1, 2, 3]);
+        let w = staged_transition_world();
         arrange_transition_failure(&w, case);
         with_github(&w, |github| {
             let state = state(&w);
@@ -1757,7 +1884,7 @@ fn transition_preparation_rejects_collisions_and_changing_evidence() {
                 }
                 "final-ancestry" => {
                     w.reply(
-                        &format!("git merge-base --is-ancestor {} {}", oid(22), oid(21)),
+                        &format!("git merge-base --is-ancestor {} {}", oid(12), oid(21)),
                         1,
                         "",
                     );
@@ -2047,7 +2174,7 @@ fn temporary_bases_require_known_ownership_and_available_ancestry() {
         "unavailable",
         "collision-during-observation",
     ] {
-        let w = transition_world(&[2, 1, 3], &[1, 2, 3]);
+        let w = staged_transition_world();
         if case == "invalid-owner" {
             w.0.lock().unwrap().prs.get_mut(&101).unwrap()["base"]["ref"] =
                 json!("git-pr/transition/invalid");
@@ -2062,8 +2189,10 @@ fn temporary_bases_require_known_ownership_and_available_ancestry() {
                 oid(0)
             ));
         } else {
-            w.reply("git ls-remote --refs -- https://github.com/org/repo.git refs/heads/git-pr/transition/101", 0,
-                &format!("{}\trefs/heads/git-pr/transition/101", oid(11)));
+            w.0.lock()
+                .unwrap()
+                .remote_refs
+                .insert("refs/heads/git-pr/transition/101".into(), oid(11));
         }
         assert!(w.run(&["--no-stack"]).is_err(), "{case}");
         assert!(!w.trace().iter().any(effect), "{case}");
@@ -2173,7 +2302,7 @@ fn ten_pr_transition_request_budget() {
     );
     assert_eq!(reads, 0);
     assert_eq!(batches, 5);
-    assert_eq!(requests, 41);
+    assert_eq!(requests, 40);
     let memory = w.0.lock().unwrap();
     for (index, number) in (1..=10).rev().enumerate() {
         let pr = &memory.prs[&(100 + number)];
@@ -2935,7 +3064,7 @@ fn publication_planning_shares_initial_destination_refs_in_direct_and_staged_pat
                 .iter()
                 .filter(|event| event["program"] == "git" && event["args"][0] == "ls-remote")
                 .count();
-            assert_eq!(reads, if staged { 2 } else { 1 });
+            assert_eq!(reads, 1);
         });
     }
 }
@@ -3281,7 +3410,11 @@ fn shallow_transitions_use_local_parent_evidence_without_full_history() {
         with_github(&world, |github| {
             let state = state(&world);
             let (plan, bases) = observe(&world, github, &state);
-            assert!(matches!(plan.plan.strategy, Strategy::Stage(_)));
+            if order == [2, 1] {
+                assert!(matches!(plan.plan.strategy, Strategy::Stage(_)));
+            } else {
+                assert_eq!(plan.plan.strategy, Strategy::PublishThenRetarget);
+            }
             plan.apply(github, &state, &bases).unwrap();
         });
     }

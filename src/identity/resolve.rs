@@ -42,14 +42,22 @@ pub(crate) fn prepare(github: &GitHub<'_>, stack: &mut [Commit], start: usize) -
             if !commit.attr(REMOTE_REF).is_empty() {
                 references.insert(commit.attr(REMOTE_REF).to_owned());
             }
-            if let Some(name) = anchor(commit, &records, &branches)?
-                && let Some(head) = records.head(&name, &github.config.repo)?
-            {
-                references.insert(head.reference);
+            if let Some(name) = anchor(commit, &records, &branches)? {
+                // Include unbound anchors in the same query as established heads.
+                // Exact-commit discovery still runs before choosing an identity.
+                if let Some(head) = records.head(&name, &github.config.repo)? {
+                    references.insert(head.reference);
+                } else if commit.attr(REMOTE_REF).is_empty() {
+                    references.insert(name);
+                }
             }
         }
         github
-            .observe(&references.into_iter().collect::<Vec<_>>())
+            .commands
+            .diagnostics
+            .phase("publication identity discovery", || {
+                github.observe(&references.into_iter().collect::<Vec<_>>())
+            })
             .context(crate::diagnostics::errors::Fatal)?;
     }
     if github.config.repo.jj {

@@ -104,6 +104,8 @@ fn planning_selects_direct_retargeting_or_staging_from_verified_graph_facts() {
             plan.strategy,
             if order == [1, 2, 3] {
                 Strategy::Retarget
+            } else if order == [1, 4, 2, 3] {
+                Strategy::PublishThenRetarget
             } else {
                 Strategy::Stage("git-pr/transition/101".into())
             }
@@ -282,6 +284,11 @@ fn execution_guards_require_complete_facts_and_a_safe_selected_strategy() {
     );
     assert!(
         ancestry
+            .verify_strategy(&Strategy::PublishThenRetarget, &desired, &observed)
+            .is_err()
+    );
+    assert!(
+        ancestry
             .verify_strategy(
                 &Strategy::Stage("git-pr/transition/101".into()),
                 &desired,
@@ -350,6 +357,93 @@ fn execution_guards_require_complete_facts_and_a_safe_selected_strategy() {
     bases[0] = "missing".into();
     let desired = DesiredPublication::new(&commits, 0, &bases, false);
     assert!(ancestry.check_final(&desired, &observed).is_err());
+}
+
+#[test]
+fn unavailable_current_bases_require_staging_and_incomplete_head_proofs_are_refused() {
+    let (commits, bases) = stack(&[2], 200);
+    let desired = DesiredPublication::new(&commits, 0, &bases, false);
+    let mut tips = refs();
+    tips.remove("topic/1");
+    let mut observed = ObservedPublication {
+        refs: &tips,
+        prs: BTreeMap::from([(0, (102, "topic/1".into()))]),
+        trunk: "main",
+        anchor: "0",
+    };
+    assert_eq!(
+        Ancestry::default()
+            .staging_required(&desired, &observed)
+            .unwrap(),
+        BTreeSet::from([0])
+    );
+    observed.prs.get_mut(&0).unwrap().1 = "topic/3".into();
+    assert!(
+        Ancestry::default()
+            .staging_required(&desired, &observed)
+            .is_err()
+    );
+    let mut tips = tips.clone();
+    tips.remove("topic/2");
+    let observed = ObservedPublication {
+        refs: &tips,
+        ..observed
+    };
+    assert!(
+        Ancestry::default()
+            .staging_required(&desired, &observed)
+            .is_err()
+    );
+}
+
+#[test]
+fn publish_first_requires_complete_current_edge_proofs_and_unintegrated_heads() {
+    let order = [1, 4, 2, 3];
+    let (commits, bases) = stack(&order, 200);
+    let desired = DesiredPublication::new(&commits, 0, &bases, false);
+    let tips = refs();
+    let mut identities = prs(&order);
+    identities.retain(|_, (number, _)| *number != 104);
+    let observed = ObservedPublication {
+        refs: &tips,
+        prs: identities,
+        trunk: "main",
+        anchor: "0",
+    };
+    let mut ancestry = facts(&desired, &observed, &[1, 2, 3], &order);
+    ancestry.0.remove(&("102".into(), "201".into())).unwrap();
+    assert!(PublicationPlan::derive(&desired, &observed, &ancestry).is_err());
+    assert!(
+        ancestry
+            .verify_strategy(&Strategy::PublishThenRetarget, &desired, &observed)
+            .is_err()
+    );
+    let mut ancestry = facts(&desired, &observed, &[1, 2, 3], &order);
+    ancestry.0.insert(("101".into(), "0".into()), true);
+    assert!(
+        ancestry
+            .verify_strategy(&Strategy::PublishThenRetarget, &desired, &observed)
+            .is_err()
+    );
+}
+
+#[test]
+fn staged_execution_requires_complete_current_edge_proofs() {
+    let order = [2, 1, 3];
+    let (commits, bases) = stack(&order, 200);
+    let desired = DesiredPublication::new(&commits, 0, &bases, false);
+    let tips = refs();
+    let observed = ObservedPublication {
+        refs: &tips,
+        prs: prs(&order),
+        trunk: "main",
+        anchor: "0",
+    };
+    let mut ancestry = facts(&desired, &observed, &[1, 2, 3], &order);
+    let plan = PublicationPlan::derive(&desired, &observed, &ancestry).unwrap();
+    assert!(matches!(plan.strategy, Strategy::Stage(_)));
+    ancestry.0.remove(&("102".into(), "201".into())).unwrap();
+    assert!(plan.verify(&ancestry, &desired, &observed).is_err());
 }
 
 #[test]

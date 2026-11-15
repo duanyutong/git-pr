@@ -115,13 +115,19 @@ impl Publication {
             &plan.observed(&github.config.repo.trunk),
             &ancestry,
         )?);
+        github.commands.explain(&format!(
+            "Publication strategy: {:?}; {} changing refs; {} staged PRs.",
+            plan.actions.strategy,
+            plan.actions.changing.len(),
+            plan.actions.staged.len()
+        ));
         // Retain only evidence whose reuse avoids several ancestry processes.
         if ancestry.0.len() > 2 {
             plan.ancestry = Some(ancestry);
         }
         if let Some(transition) = &mut plan.transition {
             transition.plan = Arc::clone(&plan.actions);
-            transition.prepare_staging(git)?;
+            transition.prepare_staging();
             plan.leases = Arc::clone(&transition.refs);
             plan.cleanup.extend(transition.cleanup_candidates().clone());
         }
@@ -317,6 +323,21 @@ impl Publication {
         self.actions.link_native
     }
 
+    fn complete_publication(&self, github: &GitHub<'_>, state: &mut State) -> Result<()> {
+        github.commands.terminal.stage_with_completion(
+            "Verifying publication and finalising PR bases",
+            "Publication verified",
+        );
+        if let Some(transition) = &self.transition {
+            transition.complete(github, state)?;
+        }
+        if !self.actions.changing.is_empty() || self.transition.is_some() {
+            self.verify(github, state, true)
+                .context("PR state changed or could not be verified after publication; pushed refs are retained, and PR creation and updates have been stopped")?;
+        }
+        Ok(())
+    }
+
     fn require_fresh(&self, now: Instant, transition: Option<Instant>) -> Result<()> {
         super::policy::require_fresh_publication(
             now,
@@ -488,7 +509,6 @@ impl Application {
             return Ok(());
         }
         crate::identity::resolve::verify_bindings(&self.commands, &config.repo, state.selected())?;
-        git.recovery_destination()?;
         let transition_observed = if let Some(transition) = &publication.transition {
             self.commands.terminal.stage_with_completion(
                 "Preparing publication transition",
@@ -505,6 +525,7 @@ impl Application {
                 .stage_with_completion("Publishing branches", "Publication reconciled");
             Some(acquired)
         } else {
+            git.recovery_destination()?;
             None
         };
         crate::identity::resolve::verify_anchors(&self.commands, state.selected())?;
@@ -529,19 +550,13 @@ impl Application {
                     != Some(&commit.hash);
             }
         }
-        if let Some(transition) = &publication.transition {
-            transition.complete(github, state)?;
-        }
-        if !changing.is_empty() || publication.transition.is_some() {
-            publication.verify(github, state, true)
-                .context("PR state changed or could not be verified after publication; pushed refs are retained, and PR creation and updates have been stopped")?;
-        }
         super::presentation::checked_outcome(
             &self.commands,
             "Branches",
             indices.len(),
             changing.len(),
         );
+        publication.complete_publication(github, state)?;
         self.commands
             .terminal
             .stage_with_completion("Reconciling pull requests", "Pull requests reconciled");

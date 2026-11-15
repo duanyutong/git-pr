@@ -55,6 +55,8 @@ fn default_recording_preserves_effects_and_quiet_terminal_output() {
     drop(measured);
     let log = terminal.diagnostics.lock().unwrap();
     assert!(log.contains("start command: git push"));
+    assert!(log.contains("start command: git ls-remote"));
+    assert!(log.contains("start phase: final verification and cleanup"));
     assert!(log.contains("Timing summary: completed"));
     assert!(log.contains("selected base"));
     assert!(!log.contains("unit-token"));

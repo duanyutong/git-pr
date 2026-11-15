@@ -784,12 +784,29 @@ fn rebased_expansion_recovers_a_dissolved_native_stack_before_any_branch_was_pub
     let order = expand_two_prs(&f);
     let old_tip = f.git(&["rev-parse", "HEAD"]);
     f.app.transport = Arc::new(RestWithoutMembership(f.service.clone()));
+    let leases = order
+        .iter()
+        .map(|(head, _)| {
+            let expected = match head.as_str() {
+                "topic/1" => f.hashes[0].as_str(),
+                "topic/2" => f.hashes[1].as_str(),
+                _ => "",
+            };
+            format!("--force-with-lease=refs/heads/{head}:{expected}")
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    let refs = order
+        .iter()
+        .map(|(head, hash)| format!("{hash}:refs/heads/{head}"))
+        .collect::<Vec<_>>()
+        .join(" ");
     f.service.command_errors.lock().unwrap().insert(
-        format!("git push --porcelain --no-follow-tags --force-with-lease=refs/heads/git-pr/transition/101: -- origin {}:refs/heads/git-pr/transition/101", f.trunk),
-        (1, "interrupted before staging publication".into()),
+        format!("git push --porcelain --no-follow-tags {leases} -- origin {refs}"),
+        (1, "interrupted before branch publication".into()),
     );
     let error = f.run(&["--github-stack", "--draft", "--yes"]).unwrap_err();
-    assert!(format!("{error:#}").contains("interrupted before staging publication"));
+    assert!(format!("{error:#}").contains("interrupted before branch publication"));
     assert!(
         f.service
             .prs

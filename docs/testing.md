@@ -40,6 +40,50 @@ Routine development may use native local checks and the CI matrix; duplicating e
 
 ## Behavioural evidence
 
+### Submission performance contracts
+
+Publication planning distinguishes retargeting before publication, publication before retargeting and selective temporary staging.
+Publication before retargeting requires proof that every existing current-base relationship remains safe across all relevant old and new head and base objects, including partial push application.
+The final development-base relationships remain strictly ancestral, and already integrated heads remain ineligible for a transition.
+Only PRs whose current relationship requires detachment use a temporary base when staging is necessary.
+Dispatch revalidates the selected strategy and staging set after preparation.
+
+The six-layer insertion regression starts with four existing PRs and inserts two unpublished layers into rewritten history.
+The following operation counts were obtained from the same deterministic in-memory fixture before and after optimisation, rather than from a live GitHub timing comparison.
+
+| Native membership | Operation | Before | After |
+| --- | --- | --- | --- |
+| Disabled | Pushes | 3 | 1 |
+| Disabled | Base mutations | 8 | 2 |
+| Disabled | Remote-ref observations | 7 | 4 |
+| Disabled | HTTP requests | 25 | 14 |
+| Enabled | Pushes | 3 | 1 |
+| Enabled | Base mutations | 8 | 2 |
+| Enabled | Remote-ref observations | 8 | 5 |
+| Enabled | HTTP requests | 31 | 20 |
+
+The successful-path regression enforces these counts, stable existing PR identities, open lifecycle state, intended final bases and publication before the two necessary retargets.
+Separate interruption, race, shallow-history and selective-staging regressions establish that reduced operation counts do not authorise stale mutations or unsafe intermediate states.
+The unchanged-submission contracts continue to prohibit pushes, remote mutations, local ref synchronisation and unconditional waits.
+
+The eliminated remote-ref observations comprise the duplicate reserved-helper read during planning, the post-retarget refresh when no pre-publication retarget occurred, and the cleanup read for an unnecessary helper.
+The remaining observations acquire initial lease expectations, renew evidence before publication, verify published refs before base reconciliation and verify final state after content or native mutations.
+Native dissolution requires a further observation because dissolution invalidates membership evidence.
+These distinct mutation boundaries shall not be collapsed into an invocation-wide mutable-state cache.
+
+The fixture still requires two PR creations, six description updates in two bounded requests and, when native management is enabled, dissolution followed by reconstruction of membership.
+New PR numbers are unavailable before creation, so complete managed descriptions cannot be predicted at that boundary.
+Base changes require the existing native membership transition, whilst human text, request limits, quota accounting and mutation spacing remain protected by their independent contracts.
+Local publication records retain their write verification and pending-create journal; compatible reads are shared, whilst conflicting or concurrently changed associations remain errors.
+Ancestry work remains concurrent and deduplicated by object pair.
+The operation reductions do not establish a particular live-network latency improvement.
+
+Retained diagnostics distinguish identity discovery, ordinary PR observation, recovery observation, dependant observation, final verification and cleanup.
+Remote-ref commands retain the safe `ls-remote` operation name without including arguments or credentials.
+Terminal stages separate branch publication from final base transitions and native linking from subsequent verification and cleanup.
+
+### General behavioural contracts
+
 Independent requirements and native repository observations determine the expected behaviour.
 The generated property suite supplements example-based regressions with reproducible combinations of trailers, structured snapshots, literal refs, selections and managed descriptions.
 Disposable-repository assertions independently check Git syntax, selected remotes, URL rewriting, uncertain publication and preservation of unrelated worktrees and index bytes.

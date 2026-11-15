@@ -214,7 +214,15 @@ impl Application {
         associations: &crate::identity::store::Records,
         numbers: &[u64],
     ) -> Result<()> {
-        publication.finish(github, state)?;
+        self.stage(
+            "Verifying final state and cleaning up",
+            "Final state verified",
+        );
+        self.commands
+            .diagnostics
+            .phase("final verification and cleanup", || {
+                publication.finish(github, state)
+            })?;
         if let Err(error) = crate::identity::resolve::cleanup(github, associations, &state.stack) {
             self.commands.warn(&format!(
                 "could not finish merged publication metadata cleanup; retained associations may be retried: {error:#}"

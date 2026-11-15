@@ -22,7 +22,12 @@ impl GitHub<'_> {
     /// Acquire complete recovery evidence in one bounded query per group.
     /// These observations deliberately bypass the ordinary content cache.
     pub(crate) fn recovery_prs(&self, numbers: &[u64]) -> Result<Vec<RecoveryPullRequest>> {
-        self.recovery_prs_at(numbers, None).map(|(prs, _)| prs)
+        self.commands
+            .diagnostics
+            .phase("PR recovery observation", || {
+                self.recovery_prs_at(numbers, None)
+            })
+            .map(|(prs, _)| prs)
     }
 
     fn recovery_prs_at(
