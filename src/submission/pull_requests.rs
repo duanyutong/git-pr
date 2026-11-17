@@ -94,7 +94,7 @@ impl Publication {
         {
             let transition =
                 super::transition::Transition::observe(github, stack, start, &plan.bases)
-                    .context("unsafe publication: publication transition could not be verified")?;
+                    .with_context(|| plan.transition_context())?;
             plan.leases = Arc::clone(&transition.refs);
             transition.destination().clone_into(&mut plan.destination);
             plan.cleanup.extend(transition.cleanup_candidates().clone());
@@ -157,6 +157,25 @@ impl Publication {
         Ok(plan)
     }
 
+    fn transition_context(&self) -> String {
+        let changes = self
+            .entries
+            .iter()
+            .filter_map(|(index, _, pr)| {
+                pr.as_ref()
+                    .filter(|pr| pr.base != self.bases[*index])
+                    .map(|pr| {
+                        format!(
+                            "PR #{} ({:?} to {:?})",
+                            pr.number, pr.base, self.bases[*index]
+                        )
+                    })
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("unsafe publication: publication transition could not be verified for {changes}")
+    }
+
     fn observe_identities(
         &mut self,
         github: &GitHub<'_>,
@@ -201,6 +220,9 @@ impl Publication {
                     && !stack[start..]
                         .iter()
                         .any(|commit| !commit.skip && commit.remote_ref() == pr.base.name)
+                    && stack
+                        .iter()
+                        .any(|commit| commit.remote_ref() == pr.base.name)
                 {
                     crate::github::policy::require_publication_base(pr, &self.bases[index])?;
                 }

@@ -1192,6 +1192,215 @@ fn staged_transition_world() -> Arc<World> {
 }
 
 #[test]
+fn retired_interior_base_allows_rewritten_stack_and_preserves_unselected_pr() {
+    for backend in ["git", "branchless", "jj"] {
+        for native in [false, true] {
+            for stacked in [false, true] {
+                let w = transition_world(&[1, 2, 3, 4], &[5, 2, 3, 4, 1]);
+                {
+                    let mut memory = w.0.lock().unwrap();
+                    memory.branchless = backend == "branchless";
+                    memory.jj = backend == "jj";
+                    // The reused bottom branch already targets trunk remotely.
+                    memory.prs.get_mut(&101).unwrap()["base"]["ref"] = json!("main");
+                    if stacked {
+                        for number in [102, 103, 104, 105] {
+                            memory.prs.get_mut(&number).unwrap()["stack"] = json!({"number":9});
+                        }
+                    }
+                }
+                let mut retired = w.0.lock().unwrap().prs[&105].clone();
+                retired["stack"] = Value::Null;
+                w.run(&[if native {
+                    "--github-stack"
+                } else {
+                    "--no-stack"
+                }])
+                .unwrap();
+                let memory = w.0.lock().unwrap();
+                assert_eq!(memory.prs.len(), 5);
+                assert_eq!(memory.prs[&105], retired);
+                assert_eq!(memory.remote_refs["refs/heads/topic/5"], oid(15));
+                for number in 1..=4 {
+                    let pr = &memory.prs[&(100 + number)];
+                    assert_eq!(pr["node_id"], format!("PR_{}", 100 + number));
+                    assert_eq!(pr["state"], "open");
+                    assert_eq!(pr["head"]["sha"], oid(20 + number));
+                    assert_eq!(
+                        pr["base"]["ref"],
+                        if number == 1 {
+                            "main".into()
+                        } else {
+                            format!("topic/{}", number - 1)
+                        }
+                    );
+                    assert_eq!(pr["stack"].is_object(), native);
+                }
+                drop(memory);
+            }
+        }
+    }
+}
+
+#[test]
+fn retired_native_member_requires_eligible_unchanged_identity_and_membership() {
+    for case in [
+        "auto-merge",
+        "head-ref",
+        "head",
+        "base",
+        "node",
+        "stack",
+        "live-ref",
+    ] {
+        let w = transition_world(&[1, 2, 3], &[4, 2, 3, 1]);
+        w.0.lock().unwrap().prs.get_mut(&101).unwrap()["base"]["ref"] = json!("main");
+        for pr in w.0.lock().unwrap().prs.values_mut() {
+            pr["stack"] = json!({"number":9});
+        }
+        with_github(&w, |github| {
+            let state = state(&w);
+            let (plan, bases) = observe(&w, github, &state);
+            {
+                let mut memory = w.0.lock().unwrap();
+                let retired = memory.prs.get_mut(&104).unwrap();
+                match case {
+                    "auto-merge" => retired["auto_merge"] = json!({"merge_method":"squash"}),
+                    "head-ref" => retired["head"]["ref"] = json!("other"),
+                    "head" => retired["head"]["sha"] = json!(oid(99)),
+                    "base" => retired["base"]["ref"] = json!("other"),
+                    "node" => retired["node_id"] = json!("other"),
+                    "stack" => retired["stack"] = json!({"number":8}),
+                    "live-ref" => {
+                        memory
+                            .remote_refs
+                            .insert("refs/heads/topic/4".into(), oid(99));
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            let error = plan.apply(github, &state, &bases).unwrap_err();
+            assert!(!w.trace().iter().any(effect), "{case}: {error:#}");
+        });
+    }
+}
+
+#[test]
+fn retired_native_member_preflight_requires_matching_live_ref_and_auto_merge_disabled() {
+    for case in ["live-ref", "missing-ref", "parent-read", "auto-merge"] {
+        let w = transition_world(&[1, 2, 3], &[4, 2, 3, 1]);
+        w.0.lock().unwrap().prs.get_mut(&101).unwrap()["base"]["ref"] = json!("main");
+        {
+            let mut memory = w.0.lock().unwrap();
+            for pr in memory.prs.values_mut() {
+                pr["stack"] = json!({"number":9});
+            }
+            if case == "live-ref" {
+                memory
+                    .remote_refs
+                    .insert("refs/heads/topic/4".into(), oid(99));
+            } else if case == "missing-ref" {
+                memory.remote_refs.remove("refs/heads/topic/4");
+            } else if case == "auto-merge" {
+                memory.prs.get_mut(&104).unwrap()["auto_merge"] = json!({"merge_method":"squash"});
+            }
+        }
+        if case == "parent-read" {
+            w.http(
+                "GET pulls/104",
+                vec![Response::Failure("retired PR #104 unavailable".into())],
+            );
+        }
+        let error = w.run(&["--no-stack"]).unwrap_err();
+        assert!(
+            format!("{error:#}").contains(if case == "missing-ref" {
+                "topic/4"
+            } else {
+                "#104"
+            }),
+            "{error:#}"
+        );
+        assert!(!w.trace().iter().any(effect));
+    }
+}
+
+#[test]
+fn skipped_local_base_still_requires_complete_selection() {
+    let w = transition_world(&[1, 2, 3], &[1, 2, 3]);
+    let mut stack = w.0.lock().unwrap().commits.clone();
+    stack[1].skip = true;
+    with_github(&w, |github| {
+        let error =
+            crate::submission::pull_requests::Publication::observe(github, &stack, 0).unwrap_err();
+        assert!(format!("{error:#}").contains("unsafe publication"));
+        let bases = crate::stack::selection::resolve_bases(&stack, 0, "main");
+        let error = Transition::observe(github, &stack, 0, &bases).unwrap_err();
+        assert!(format!("{error:#}").contains("complete published stack"));
+        assert!(!w.trace().iter().any(effect));
+    });
+}
+
+#[test]
+fn retired_native_observations_must_remain_available() {
+    for absent in [false, true] {
+        let w = transition_world(&[1, 2, 3], &[4, 2, 3, 1]);
+        w.0.lock().unwrap().prs.get_mut(&101).unwrap()["base"]["ref"] = json!("main");
+        for pr in w.0.lock().unwrap().prs.values_mut() {
+            pr["stack"] = json!({"number":9});
+        }
+        with_github(&w, |github| {
+            let state = state(&w);
+            let (plan, _) = observe(&w, github, &state);
+            github.invalidate_heads(&["topic/4".into()]);
+            if absent {
+                w.0.lock().unwrap().prs.remove(&104);
+                github.observe(&["topic/4".into()]).unwrap();
+            }
+            assert!(plan.observe_native(github, None).is_err());
+            assert!(!w.trace().iter().any(effect));
+        });
+    }
+}
+
+#[test]
+fn retired_base_in_another_native_stack_retains_its_membership() {
+    let w = transition_world(&[1, 2, 3], &[4, 2, 3, 1]);
+    {
+        let mut memory = w.0.lock().unwrap();
+        memory.prs.get_mut(&101).unwrap()["base"]["ref"] = json!("main");
+        for (number, pr) in &mut memory.prs {
+            pr["stack"] = json!({"number":if *number == 104 {8} else {9}});
+        }
+    }
+    with_github(&w, |github| {
+        let state = state(&w);
+        let (plan, _) = observe(&w, github, &state);
+        assert!(plan.retired.is_empty());
+        assert_eq!(plan.native.unwrap().0, 9);
+        assert_eq!(w.0.lock().unwrap().prs[&104]["stack"]["number"], 8);
+        assert!(!w.trace().iter().any(effect));
+    });
+}
+
+#[test]
+fn retired_base_transition_rejects_changed_remote_dependency_before_effects() {
+    let w = transition_world(&[1, 2, 3], &[4, 2, 3, 1]);
+    w.0.lock().unwrap().prs.get_mut(&101).unwrap()["base"]["ref"] = json!("main");
+    let state = state(&w);
+    with_github(&w, |github| {
+        let (plan, bases) = observe(&w, github, &state);
+        w.0.lock()
+            .unwrap()
+            .remote_refs
+            .insert("refs/heads/topic/4".into(), oid(99));
+        let error = plan.apply(github, &state, &bases).unwrap_err();
+        assert!(format!("{error:#}").contains("changed during publication"));
+        assert!(!w.trace().iter().any(effect));
+        assert_eq!(w.0.lock().unwrap().prs[&102]["base"]["ref"], "topic/4");
+    });
+}
+
+#[test]
 fn six_layer_insertion_operation_budget() {
     for native in [false, true] {
         let w = transition_world(&[1, 5, 2, 3, 6, 4], &[1, 2, 3, 4]);

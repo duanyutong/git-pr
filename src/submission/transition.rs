@@ -35,6 +35,7 @@ mod unit;
 pub(super) struct Transition {
     entries: Vec<Entry>,
     parents: BTreeMap<String, MergedParent>,
+    retired: BTreeMap<String, RecoveryPullRequest>,
     pub(super) refs: Arc<BTreeMap<String, Option<String>>>,
     destination: String,
     bases: Vec<String>,
@@ -64,6 +65,7 @@ impl Transition {
         let mut recovery = Self {
             entries: Vec::new(),
             parents: BTreeMap::new(),
+            retired: BTreeMap::new(),
             refs: Arc::default(),
             destination: git.recovery_destination()?,
             bases: bases.to_vec(),
@@ -112,16 +114,7 @@ impl Transition {
             references.insert(reference.clone());
         }
         for (index, pr) in obsolete {
-            if temporary_owner(&pr.base.name).is_some_and(|number| numbers.contains(&number)) {
-                continue;
-            }
-            if bases[index] != git.repo.trunk {
-                bail!(
-                    "include the complete published stack before changing PR #{}",
-                    pr.number
-                );
-            }
-            recovery.observe_parent(github, &pr)?;
+            recovery.observe_base(github, stack, index, &pr, &numbers)?;
         }
         // Observe mutable development/helper refs that the transition changes or
         // depends upon. Trunk is deliberately excluded: PR bases name a branch,
@@ -233,6 +226,42 @@ impl Transition {
         Ok(())
     }
 
+    fn observe_base(
+        &mut self,
+        github: &GitHub<'_>,
+        stack: &[Commit],
+        index: usize,
+        pr: &RecoveryPullRequest,
+        numbers: &[u64],
+    ) -> Result<()> {
+        if temporary_owner(&pr.base.name).is_some_and(|number| numbers.contains(&number)) {
+            return Ok(());
+        }
+        if self.bases[index] == github.config.repo.trunk {
+            return self.observe_parent(github, pr);
+        }
+        // A retired base absent from local history remains an observed,
+        // immutable dependency. The planner verifies the old and new
+        // relationships before retargeting or publishing selected heads.
+        if pr.base.name.starts_with("git-pr/transition/")
+            || stack
+                .iter()
+                .any(|commit| commit.remote_ref() == pr.base.name)
+        {
+            bail!(
+                "include the complete published stack before changing PR #{}",
+                pr.number
+            );
+        }
+        if pr.stack.is_some() {
+            let parent = github.recovery_parent(&pr.base.name)?;
+            if parent.stack == pr.stack {
+                self.retired.insert(pr.base.name.clone(), parent);
+            }
+        }
+        Ok(())
+    }
+
     fn tip(&self, reference: &str) -> Result<&str> {
         self.refs
             .get(reference)
@@ -242,6 +271,14 @@ impl Transition {
 
     fn check_evidence(&self, git: Git<'_>) -> Result<()> {
         let trunk = &self.anchor;
+        for (reference, pr) in &self.retired {
+            if self.tip(reference)? != pr.head.sha {
+                bail!(
+                    "retired native member PR #{} disagrees with its live ref",
+                    pr.number
+                );
+            }
+        }
         for entry in &self.entries {
             if let Some(pr) = &entry.pr {
                 if self.tip(&entry.reference)? != pr.head.sha {
@@ -385,6 +422,11 @@ impl Transition {
             .entries
             .iter()
             .filter_map(|e| e.pr.as_ref()?.stack.as_ref().map(|s| s.number))
+            .chain(
+                self.retired
+                    .values()
+                    .filter_map(|pr| pr.stack.as_ref().map(|s| s.number)),
+            )
             .collect();
         if stacks.len() > 1 {
             bail!("publication transition spans multiple native stacks")
@@ -395,11 +437,22 @@ impl Transition {
                 .entries
                 .iter()
                 .filter_map(|entry| entry.pr.as_ref())
+                .chain(self.retired.values())
                 .filter(|pr| pr.stack.is_some())
                 .map(|pr| pr.number)
                 .collect();
+            let mut selected = self.numbers();
+            let mut retired = Vec::new();
+            for (reference, pr) in &self.retired {
+                selected.push(pr.number);
+                let observed = github
+                    .publication_pr(reference)?
+                    .context("missing retired native member")?;
+                retired.push(observed);
+            }
+            crate::github::policy::require_native_eligibility(retired.iter().map(AsRef::as_ref))?;
             return github
-                .check_transition_stack(number, &self.numbers(), &claimed, started)
+                .check_transition_stack(number, &selected, &claimed, started)
                 .map(|acquired| Some((number, acquired)));
         }
         Ok(None)
@@ -588,7 +641,9 @@ impl Transition {
                     if current
                         .entries
                         .iter()
-                        .any(|entry| entry.pr.as_ref().is_some_and(|pr| pr.stack.is_some()))
+                        .filter_map(|entry| entry.pr.as_ref())
+                        .chain(current.retired.values())
+                        .any(|pr| pr.stack.is_some())
                     {
                         bail!(
                             "native stack transition is incomplete; publication stopped; retry from fresh remote observations"
@@ -678,6 +733,7 @@ impl Transition {
         }
         let mut current = self.clone();
         current.refs = Arc::new(refs);
+        current.refresh_retired(github, started)?;
         for entry in &current.entries {
             let observed = github.publication_pr(&entry.reference)?;
             if observed.as_ref().map(|pr| (pr.number, &pr.node_id))
@@ -712,6 +768,28 @@ impl Transition {
             Some(started),
         )?;
         Ok((current, dependants_acquired))
+    }
+
+    fn refresh_retired(&mut self, github: &GitHub<'_>, started: Instant) -> Result<()> {
+        if self.retired.is_empty() {
+            return Ok(());
+        }
+        let references = self.retired.keys().cloned().collect::<Vec<_>>();
+        let numbers = self
+            .retired
+            .values()
+            .map(|pr| pr.number)
+            .collect::<Vec<_>>();
+        let (observed, _) = github.observe_recovery_with_budget(&references, &numbers, started)?;
+        for (expected, actual) in self.retired.values_mut().zip(observed) {
+            let mut before = expected.clone();
+            if actual.stack.is_none() {
+                before.stack = None;
+            }
+            policy::same_recovery_head(&before, &actual, &before.base.name)?;
+            *expected = actual;
+        }
+        Ok(())
     }
 
     fn verify_heads(&self, github: &GitHub<'_>, state: &State, published: bool) -> Result<()> {

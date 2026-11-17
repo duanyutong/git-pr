@@ -47,6 +47,9 @@ Publication before retargeting requires proof that every existing current-base r
 The final development-base relationships remain strictly ancestral, and already integrated heads remain ineligible for a transition.
 Only PRs whose current relationship requires detachment use a temporary base when staging is necessary.
 Dispatch revalidates the selected strategy and staging set after preparation.
+An interior PR may leave a former base absent from local history when the verified transition preserves every selected PR identity and observes the former base as an immutable remote dependency.
+Regression cases preserve the retired branch and its unselected PR, exercise all three backends with native linking enabled and disabled, and refuse a changed former base before any publication effect.
+Where the retired PR shares native membership with selected PRs, dissolution additionally requires verified identity, unchanged publication state and disabled auto-merge for that member; reconstruction includes only the selected PRs.
 
 The six-layer insertion regression starts with four existing PRs and inserts two unpublished layers into rewritten history.
 The following operation counts were obtained from the same deterministic in-memory fixture before and after optimisation, rather than from a live GitHub timing comparison.
