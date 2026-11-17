@@ -25,6 +25,7 @@ pub(crate) struct Progress {
 #[derive(Debug)]
 pub(crate) struct Recorder {
     pub events: Mutex<Vec<Progress>>,
+    active: Mutex<Option<String>>,
     world: Arc<World>,
 }
 
@@ -32,6 +33,7 @@ impl Recorder {
     pub(crate) fn new(world: Arc<World>) -> Arc<Self> {
         Arc::new(Self {
             events: Mutex::default(),
+            active: Mutex::default(),
             world,
         })
     }
@@ -51,7 +53,20 @@ impl Terminal for Recorder {
     fn confirm(&self, prompt: &str) -> bool {
         self.world.confirm(prompt)
     }
+    fn has_progress(&self) -> bool {
+        self.active.lock().unwrap().is_some()
+    }
+    fn clear_progress(&self, label: &str) {
+        let mut active = self.active.lock().unwrap();
+        if active
+            .as_ref()
+            .is_some_and(|value| value.starts_with(label))
+        {
+            *active = None;
+        }
+    }
     fn progress(&self, label: &str, done: usize, total: usize) {
+        *self.active.lock().unwrap() = Some(label.into());
         assert!(done <= total);
         self.events.lock().unwrap().push(Progress {
             label: label.into(),
@@ -186,16 +201,14 @@ fn submission_reports_creation_labels_and_base_checks_without_changing_publicati
     .unwrap();
     let events = recorder.events.lock().unwrap().clone();
     for index in 0..3 {
-        assert!(events.iter().any(|event| event.label
-            == format!("Creating Feature {}", index + 1)
-            && event.done == index
-            && event.total == 3));
         assert!(
-            events
-                .iter()
-                .any(|event| event.label == format!("Created #{}", index + 101)
-                    && event.done == index + 1)
+            events.iter().any(|event| event.label == "PRs created"
+                && event.done == index
+                && event.total == 3)
         );
+        assert!(events.iter().any(|event| event.label == "PRs created"
+            && event.done == index + 1
+            && event.total == 3));
         assert!(
             events
                 .iter()
@@ -296,4 +309,103 @@ fn failed_base_and_label_checks_do_not_finish_their_counters() {
             total: 2
         }
     );
+}
+
+#[test]
+fn explicit_fetch_activity_retains_the_existing_command_boundary() {
+    let world = World::new(1);
+    world.reply("git fetch origin", 0, "");
+    world.commands().git(&["fetch", "origin"]).unwrap();
+    assert_eq!(
+        world
+            .trace()
+            .iter()
+            .filter(|event| event["args"][0] == "fetch")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn git_fallback_progress_checks_ten_selected_branches_without_counting_the_helper() {
+    let world = World::new(1);
+    world.run(&["--no-stack"]).unwrap();
+    {
+        let mut memory = world.0.lock().unwrap();
+        memory.commits = (1..=10).map(commit).collect();
+        memory.branch = "topic/10".into();
+    }
+    let recorder = Recorder::new(world.clone());
+    let mut app = world.app();
+    app.commands.terminal = recorder.clone();
+    app.execute(
+        &Flags::parse(vec!["--no-stack".into()]).unwrap(),
+        &BTreeMap::from([("HOME".into(), "/unit/home".into())]),
+    )
+    .unwrap();
+    let events = recorder
+        .events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|event| event.label == "Remote branches checked")
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(
+        events,
+        vec![
+            Progress {
+                label: "Remote branches checked".into(),
+                done: 0,
+                total: 10
+            },
+            Progress {
+                label: "Remote branches checked".into(),
+                done: 10,
+                total: 10
+            },
+        ]
+    );
+    assert_eq!(world.0.lock().unwrap().prs.len(), 10);
+}
+
+#[test]
+fn git_ref_progress_advances_only_validated_batches_and_clears_after_rejection() {
+    let world = World::new(1);
+    let config = world.config();
+    let recorder = Recorder::new(world.clone());
+    let mut commands = world.commands();
+    commands.terminal = recorder.clone();
+    let git = crate::git::Git {
+        commands: &commands,
+        repo: &config.repo,
+    };
+    let mut references = (1..=129).map(|i| format!("topic/{i}")).collect::<Vec<_>>();
+    references.push("git-pr/transition/101".into());
+    assert_eq!(git.recovery_refs("origin", &references).unwrap().len(), 130);
+    let counts = recorder
+        .events
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|event| (event.done, event.total))
+        .collect::<Vec<_>>();
+    assert_eq!(counts, vec![(0, 129), (128, 129), (129, 129)]);
+    assert!(!recorder.has_progress());
+    recorder.events.lock().unwrap().clear();
+    world.reply(
+        "git ls-remote --refs -- origin refs/heads/topic/1 refs/heads/topic/2",
+        0,
+        "malformed",
+    );
+    assert!(git.recovery_refs("origin", &references[..2]).is_err());
+    assert_eq!(
+        *recorder.events.lock().unwrap(),
+        vec![Progress {
+            label: "Remote branches checked".into(),
+            done: 0,
+            total: 2
+        }]
+    );
+    assert!(!recorder.has_progress());
 }

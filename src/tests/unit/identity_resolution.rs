@@ -17,7 +17,7 @@ fn inspect(
         transport: world.as_ref(),
         template: "",
     };
-    resolve(&github, selected, records, branches, false, true)
+    resolve(&github, selected, records, branches, false, true, None)
 }
 
 #[derive(Debug)]
@@ -79,6 +79,7 @@ fn discovery_and_expired_pending_creation_observations_fail_closed() {
                 &Records::default(),
                 false,
                 true,
+                None,
             )
             .unwrap_err()
         };
@@ -229,7 +230,8 @@ fn fallback_discovery_validates_destinations_and_unselected_context() {
             "invalid..anchor",
             &Records::default(),
             true,
-            true
+            true,
+            None
         )
         .is_err()
     );
@@ -240,7 +242,8 @@ fn fallback_discovery_validates_destinations_and_unselected_context() {
             "topic/1",
             &Records::default(),
             true,
-            false
+            false,
+            None
         )
         .unwrap(),
         None
@@ -252,7 +255,8 @@ fn fallback_discovery_validates_destinations_and_unselected_context() {
             "topic/1",
             &Records::default(),
             false,
-            false
+            false,
+            None
         )
         .unwrap(),
         None
@@ -269,7 +273,8 @@ fn fallback_discovery_validates_destinations_and_unselected_context() {
             "topic/1",
             &Records::default(),
             false,
-            true
+            true,
+            None
         )
         .is_err()
     );
@@ -304,7 +309,8 @@ fn unselected_editor_and_push_evidence_requires_an_existing_review() {
                 "renamed",
                 &Records::default(),
                 false,
-                false
+                false,
+                None
             )
             .unwrap()
             .is_some(),
@@ -340,7 +346,8 @@ fn unselected_editor_and_push_evidence_requires_an_existing_review() {
                 "renamed",
                 &Records::default(),
                 false,
-                true
+                true,
+                None
             )
             .is_ok()
         );
@@ -386,4 +393,60 @@ fn unrelated_scope_conflicts_and_changed_lifecycle_are_not_absence() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn batched_push_mapping_inventory_rejects_truncated_and_duplicate_rows() {
+    for output in [
+        "truncated",
+        "topic/1\0origin",
+        "topic/1\0origin\0refs/heads/topic/1\ntopic/1\0origin\0refs/heads/topic/1",
+    ] {
+        let world = World::new(1);
+        world.reply("git for-each-ref --format=%(refname:strip=2)%00%(push:remotename)%00%(push:remoteref) refs/heads/",0,output);
+        assert!(push_inventory(&world.commands()).is_err());
+    }
+}
+
+#[test]
+fn scalar_discovery_retains_failures_and_truncated_push_observations() {
+    for (status, output) in [(0, "truncated"), (1, "unavailable")] {
+        let world = World::new(1);
+        world.reply(
+            "git for-each-ref --format=%(push:remotename)%00%(push:remoteref) refs/heads/topic/1",
+            status,
+            output,
+        );
+        let commands = world.commands();
+        let config = world.config();
+        let github = GitHub {
+            commands: &commands,
+            config: &config,
+            session: crate::github::Session::default(),
+            clock: Some(world.as_ref()),
+            transport: world.as_ref(),
+            template: "",
+        };
+        assert!(
+            discover(
+                &github,
+                &commit(1),
+                "topic/1",
+                &Records::default(),
+                false,
+                true,
+                None
+            )
+            .is_err()
+        );
+    }
+    let world = World::new(1);
+    {
+        let mut memory = world.0.lock().unwrap();
+        memory.commits[0].attrs.clear();
+        memory
+            .config
+            .insert("branch.topic/1.gitPrPullRequest".into(), "invalid".into());
+    }
+    assert!(world.run(&["--no-stack"]).is_err());
 }

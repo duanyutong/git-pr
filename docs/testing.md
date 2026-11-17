@@ -107,6 +107,18 @@ Observation freshness and cache timestamps use the same injected clock; unit fix
 Routine operation-budget cases cover batching boundaries; the optional 1,000-PR case is invoked with `cargo test --locked unchanged_submission_at_large_scale -- --ignored` and carries no elapsed-time acceptance threshold.
 Completion barriers remain explicit between publication, creation, base changes, descriptions, labels and native linking.
 
+A ten-layer fixture starts with one published PR and adds nine unpublished commits, comparing Git observation with combined API discovery under both native-stack settings.
+The supported API path requires no `ls-remote` command and no negative REST commit-association requests, retaining one push and nine sequential creations.
+The controlled HTTP request count falls from 23 to 15 with native management disabled and from 24 to 16 with it enabled; these fixture counts exclude external latency and do not predict wall-clock savings.
+Independent remote-ref storage prevents PR metadata from serving as branch-tip evidence in the fixture.
+Discovery regressions require exact repository and ref identities, complete aliases, commit object types, bounded groups of 25 refs, independent acquisition timestamps and conservative fallback for unsupported capabilities.
+Negative object evidence additionally requires a readable known-present repository object and expires through the existing commit-association freshness policy.
+Concurrent branch creation, movement and deletion shall fail their explicit leases before PR creation, and evidence expiring during acquisition shall not authorise publication.
+A lost push acknowledgement retains authoritative Git recovery rather than relying upon cached API evidence.
+An isolated native Git fixture verifies publication without message rewriting or a separate Git ref observation.
+Network presentation regressions require operation-specific timers, completed counts across waits, no API quota on Git operations, Unicode-safe clipping and at most two transient rows at representative terminal widths.
+Fallback Git reads advance only after complete batch validation, retain unconfirmed counts after malformed responses and exclude internal helper refs from selected-branch totals.
+
 Computation budgets require one analysis per unchanged observed body and one predecessor-base plan per active submission, with native management disabled and enabled.
 Changed observations invalidate parsed body state before mutation; regression cases retain refreshed human text and preserve newline handling.
 Legacy-footer regressions require preservation of human issue references, conservative treatment of ambiguous PR lists and idempotent migration with or without emoji and with either line-ending convention.

@@ -27,6 +27,7 @@ struct Activity {
     detail: String,
     started: Instant,
     wait: Option<Duration>,
+    network: Option<crate::commands::Network>,
 }
 
 #[derive(Debug)]
@@ -327,7 +328,28 @@ impl Terminal for ProgressTerminal {
         }
     }
 
+    fn has_progress(&self) -> bool {
+        lock(&self.shared.state).progress.is_some()
+    }
+
+    fn clear_progress(&self, label: &str) {
+        let mut state = lock(&self.shared.state);
+        if state
+            .progress
+            .as_ref()
+            .is_some_and(|progress| progress.label.starts_with(label))
+        {
+            state.progress = None;
+        }
+    }
+
     fn progress(&self, label: &str, done: usize, total: usize) {
+        self.record(&format!(
+            "Progress: {} {}/{}",
+            single_line(label),
+            done.min(total),
+            total
+        ));
         let mut state = lock(&self.shared.state);
         state.fallback_reported = false;
         state.progress = Some(Progress {
@@ -414,13 +436,48 @@ impl Terminal for ProgressTerminal {
         self.begin_activity(label, "", wait)
     }
 
+    fn start_network_activity(
+        &self,
+        label: &str,
+        network: crate::commands::Network,
+        detail: &str,
+    ) -> u64 {
+        self.record(&format!(
+            "Network activity started: {} · {} · {}",
+            single_line(label),
+            network.label(),
+            single_line(detail)
+        ));
+        let id = self.begin_activity(label, &format!("{} · {detail}", network.label()), None);
+        if let Some(activity) = lock(&self.shared.state).activities.get_mut(&id) {
+            activity.network = Some(network);
+        }
+        id
+    }
+
     fn start_activity_with_detail(&self, label: &str, detail: &str) -> u64 {
         self.begin_activity(label, detail, None)
     }
 
     fn end_activity(&self, id: u64) {
         let mut state = lock(&self.shared.state);
-        state.activities.remove(&id);
+        if let Some(activity) = state.activities.remove(&id)
+            && let Some(network) = activity.network
+        {
+            let notice = format!(
+                "{} · {} · {:.1}s elapsed",
+                activity.label,
+                network.label(),
+                activity.started.elapsed().as_secs_f64()
+            );
+            self.record(&format!("Network activity ended: {notice}"));
+            if !self.shared.animated
+                && activity.wait.is_none()
+                && activity.started.elapsed() >= Duration::from_secs(1)
+            {
+                self.shared.terminal.err(&format!("{notice}\n"));
+            }
+        }
         state.fallback_reported = false;
         if state.activities.is_empty() && state.stage.is_none() {
             self.clear(&mut state);
@@ -454,6 +511,8 @@ impl ProgressTerminal {
                 .err(&format!("{label}; waiting {}\n", duration(wait)));
         }
         state.fallback_reported = false;
+        let network = (wait.is_some() && label.starts_with("GitHub"))
+            .then_some(crate::commands::Network::Api);
         state.activities.insert(
             id,
             Activity {
@@ -461,6 +520,7 @@ impl ProgressTerminal {
                 detail: single_line(detail),
                 wait,
                 started: Instant::now(),
+                network,
             },
         );
         drop(state);
@@ -473,6 +533,7 @@ impl ProgressTerminal {
         self.end_stage(&mut state, true);
         state.fallback_reported = false;
         state.stage = Some(Activity {
+            network: None,
             label: single_line(label),
             detail: String::new(),
             started: Instant::now(),
@@ -545,9 +606,14 @@ fn paint_frame(shared: &Shared, state: &mut State, frame: usize, columns: usize,
     }
     let lines: Vec<_> = text.lines().collect();
     if lines.len() < rows && lines.iter().all(|line| line.width() < columns) {
+        let colour = if current_activity(state).is_some_and(|activity| activity.network.is_some()) {
+            "34"
+        } else {
+            "36"
+        };
         shared.terminal.err(&format!(
             "\r\x1b[2K{}",
-            paint(&lines.join("\r\n"), "36", shared.colour)
+            paint(&lines.join("\r\n"), colour, shared.colour)
         ));
         state.painted = lines.len();
     } else if !state.fallback_reported {
@@ -555,12 +621,24 @@ fn paint_frame(shared: &Shared, state: &mut State, frame: usize, columns: usize,
         // an animation frame permanent terminal history.
         if let Some(mut activity) = current_activity(state) {
             activity.detail.clear();
-            let notice = render_text(
-                &activity,
-                state.progress.as_ref(),
-                state.quota.as_ref(),
-                usize::MAX,
-            );
+            let notice = if activity.network.is_some() {
+                render_network(
+                    &activity,
+                    state.progress.as_ref(),
+                    state
+                        .quota
+                        .as_ref()
+                        .filter(|_| activity.network != Some(crate::commands::Network::Git)),
+                    usize::MAX,
+                )
+            } else {
+                render_text(
+                    &activity,
+                    state.progress.as_ref(),
+                    state.quota.as_ref(),
+                    usize::MAX,
+                )
+            };
             for line in complete_lines(&notice, columns.saturating_sub(3)) {
                 shared.terminal.err(&format!("  {line}\n"));
             }
@@ -611,7 +689,10 @@ fn render_state(state: &State, frame: usize, width: usize) -> String {
         render(
             &activity,
             state.progress.as_ref(),
-            state.quota.as_ref(),
+            state
+                .quota
+                .as_ref()
+                .filter(|_| activity.network != Some(crate::commands::Network::Git)),
             frame,
             width,
         )
@@ -621,14 +702,29 @@ fn render_state(state: &State, frame: usize, width: usize) -> String {
 fn current_activity(state: &State) -> Option<Activity> {
     let latest = state.activities.last_key_value().map(|(_, value)| value);
     let wait = state.activities.values().rev().find(|a| a.wait.is_some());
-    let active = wait.or(state.stage.as_ref()).or(latest)?;
-    let mut label = if wait.is_none() && state.progress.is_some() {
+    let active = wait
+        .or_else(|| {
+            state
+                .activities
+                .values()
+                .rev()
+                .find(|activity| activity.network.is_some())
+        })
+        .or(state.stage.as_ref())
+        .or(latest)?;
+    let mut label = if wait.is_none() && state.progress.is_some() && active.network.is_none() {
         String::new()
     } else {
         active.label.clone()
     };
     let mut detail = String::new();
-    if wait.is_none() {
+    if wait.is_none() && active.network.is_some() {
+        detail.clone_from(&active.detail);
+        if !state.detail.is_empty() {
+            detail.push_str(" · ");
+            detail.push_str(&state.detail);
+        }
+    } else if wait.is_none() {
         if let Some(detail) = latest.filter(|a| !std::ptr::eq(*a, active)) {
             if !label.is_empty() {
                 label.push_str(" · ");
@@ -649,6 +745,15 @@ fn current_activity(state: &State) -> Option<Activity> {
         detail,
         started: active.started,
         wait: active.wait,
+        network: active.network.or_else(|| {
+            wait.and_then(|_| {
+                state
+                    .activities
+                    .values()
+                    .rev()
+                    .find_map(|activity| activity.network)
+            })
+        }),
     })
 }
 
@@ -659,7 +764,11 @@ fn render(
     frame: usize,
     width: usize,
 ) -> String {
-    let text = render_text(activity, progress, quota, width);
+    let text = if activity.network.is_some() {
+        render_network(activity, progress, quota, width)
+    } else {
+        render_text(activity, progress, quota, width)
+    };
     let spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'][frame % 10];
     text.lines()
         .flat_map(|line| complete_lines(line, width.saturating_sub(5)))
@@ -673,6 +782,79 @@ fn render(
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn render_network(
+    activity: &Activity,
+    progress: Option<&Progress>,
+    quota: Option<&(String, Instant, Duration)>,
+    width: usize,
+) -> String {
+    let available = width.saturating_sub(5);
+    let label = progress.map_or(activity.label.as_str(), |progress| progress.label.as_str());
+    let count = progress.map_or_else(String::new, |progress| {
+        format!("{}/{} ", progress.done, progress.total)
+    });
+    let elapsed = activity.wait.map_or_else(
+        || format!(" · {} elapsed", duration(activity.started.elapsed())),
+        |wait| {
+            format!(
+                " · {} remaining",
+                duration(wait.saturating_sub(activity.started.elapsed()))
+            )
+        },
+    );
+    let primary = format!(
+        "{count}{}{elapsed}",
+        clip(
+            label,
+            available.saturating_sub(count.width() + elapsed.width())
+        )
+    );
+    let primary = if primary.width() <= available {
+        primary
+    } else {
+        format!(
+            "{count}{}",
+            clip(label, available.saturating_sub(count.width()))
+        )
+    };
+    let mut detail = if activity.wait.is_some() {
+        let full = format!("Waiting · {}", activity.label);
+        if full.width() <= available {
+            full
+        } else {
+            format!(
+                "Waiting · {}",
+                activity
+                    .label
+                    .strip_prefix("GitHub ")
+                    .unwrap_or(&activity.label)
+            )
+        }
+    } else {
+        activity.detail.clone()
+    };
+    if activity.network == Some(crate::commands::Network::Api)
+        && let Some((label, _, _)) = quota
+    {
+        let resource = label.split_whitespace().next().unwrap_or_default();
+        if activity.wait.is_some()
+            || activity
+                .detail
+                .starts_with(&format!("GitHub API · {resource}"))
+        {
+            let candidate = format!("{detail} · {label}");
+            if candidate.width() <= available {
+                detail = candidate;
+            }
+        }
+    }
+    if detail.is_empty() {
+        primary
+    } else {
+        format!("{primary}\n{}", clip(&detail, available))
+    }
 }
 
 fn render_text(

@@ -609,6 +609,8 @@ impl GitHub<'_> {
             .iter()
             .filter(|r| !r.is_empty() && !heads.contains_key(*r) && seen.insert(r.as_str()))
             .collect();
+        let mut progress = (!missing.is_empty() && !self.commands.terminal.has_progress())
+            .then(|| self.commands.progress("PR heads checked", missing.len()));
         let (owner, name) = self
             .config
             .repo
@@ -681,6 +683,9 @@ impl GitHub<'_> {
                 }
                 heads.insert(head.reference.clone(), numbers);
                 guard(&self.session.head_times).insert(head.reference.clone(), head.acquired);
+                if let Some(progress) = &mut progress {
+                    progress.advance(1);
+                }
             }
         }
         drop(heads);
@@ -735,6 +740,14 @@ impl GitHub<'_> {
                 );
                 variables[format!("h{i}")] = json!(head.reference);
             }
+            let probe = if recovery {
+                None
+            } else {
+                self.discovery_probe(chunk.iter().map(|head| head.reference.to_owned()).collect())
+            };
+            if let Some(probe) = &probe {
+                probe.append(self, &mut declarations, &mut fields, &mut variables);
+            }
             let operation = if recovery {
                 "query RecoveryHeads"
             } else {
@@ -753,6 +766,15 @@ impl GitHub<'_> {
             let acquired = response.acquired;
             let response: Value = serde_json::from_slice(&response.body)
                 .context("invalid GitHub GraphQL observation response")?;
+            if let Some(probe) = &probe {
+                if probe.unsupported(&response) {
+                    self.disable_discovery();
+                    continue;
+                }
+                if response.get("errors").is_none() {
+                    probe.remember(self, &response, acquired)?;
+                }
+            }
             let Some(errors) = response.get("errors") else {
                 return Ok((response, with_stack, acquired));
             };

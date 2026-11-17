@@ -332,7 +332,7 @@ for columns in [40, 80, 124]:
                 output += data
         assert predicate(output), output[-3000:]
     def has_frame(counter, activity):
-        return lambda data: any(counter in frame and activity in frame and b'4700/5000' in frame for frame in re.findall(rb'\x1b\[36m(.*?)\x1b\[0m', data, re.S))
+        return lambda data: any(counter in frame and activity in frame and (columns == 40 and activity == b'remaining' or b'4700/5000' in frame) for frame in re.findall(rb'\x1b\[3[46]m(.*?)\x1b\[0m', data, re.S))
     try:
         receive(has_frame(b'1/4', b'remaining'))
         process.stdin.write(b'next\n'); process.stdin.flush()

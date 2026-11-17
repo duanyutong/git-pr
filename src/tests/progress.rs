@@ -1,4 +1,111 @@
 use super::*;
+
+#[test]
+fn network_progress_keeps_confirmed_counts_and_its_own_timer_without_api_quota_on_git() {
+    use crate::commands::Network;
+    let terminal = Arc::new(MemoryTerminal::default());
+    let progress = ProgressTerminal::with_animation(terminal.clone(), false);
+    progress.stage("Preparing publication");
+    progress.progress("Remote branches checked", 0, 10);
+    progress.quota("GraphQL", 4990, 5000, Duration::from_secs(90));
+    let id = progress.start_network_activity(
+        "Checking remote branches",
+        Network::Git,
+        "10 branches in this batch",
+    );
+    {
+        let mut state = lock(&progress.shared.state);
+        state.stage.as_mut().unwrap().started =
+            Instant::now().checked_sub(Duration::from_secs(80)).unwrap();
+        state.activities.get_mut(&id).unwrap().started = Instant::now()
+            .checked_sub(Duration::from_millis(2100))
+            .unwrap();
+        for width in [20, 40, 80, 120] {
+            let text = render_state(&state, 0, width);
+            assert!(text.contains("0/10"), "{text}");
+            assert!(!text.contains("4990") && !text.contains("80s"), "{text}");
+            assert!(text.lines().count() <= 2, "{text}");
+            if width >= 80 {
+                assert!(
+                    text.contains("3s elapsed") && text.contains("Git network"),
+                    "{text}"
+                );
+            }
+        }
+        paint_frame(&progress.shared, &mut state, 0, 20, 1);
+        assert!(!terminal.stderr.lock().unwrap().contains("4990"));
+        drop(state);
+    }
+    progress.progress("Remote branches checked", 10, 10);
+    assert!(render_state(&lock(&progress.shared.state), 0, 80).contains("10/10"));
+    progress.end_activity(id);
+    progress.clear_progress("Remote branches checked");
+    assert!(lock(&progress.shared.state).progress.is_none());
+}
+
+#[test]
+fn api_batch_progress_survives_waits_and_does_not_leak_into_the_next_operation() {
+    use crate::commands::Network;
+    let terminal = Arc::new(MemoryTerminal::default());
+    let progress = ProgressTerminal::with_animation(terminal, false);
+    progress.progress("Creating PRs", 3, 9);
+    let wait = progress.start_activity("GitHub mutation spacing", Some(Duration::from_secs(2)));
+    let text = render_state(&lock(&progress.shared.state), 0, 80);
+    assert!(text.contains("3/9") && text.contains("remaining"), "{text}");
+    progress.end_activity(wait);
+    progress.progress("Descriptions #1, #2, #3, #4, #5", 0, 10);
+    let batch = progress.start_network_activity(
+        "Updating 5 PR(s)",
+        Network::Api,
+        "GraphQL · 5 PRs in this batch",
+    );
+    let local = progress.start_activity("Local bookkeeping", None);
+    let text = render_state(&lock(&progress.shared.state), 0, 120);
+    assert!(
+        text.contains("GitHub API") && text.contains("0/10"),
+        "{text}"
+    );
+    assert!(!text.contains("Local bookkeeping"), "{text}");
+    progress.end_activity(local);
+    progress.detail("REST title with a quota-like word");
+    progress.quota("REST", 2999, 5000, Duration::from_secs(80));
+    let text = render_state(&lock(&progress.shared.state), 0, 120);
+    assert!(!text.contains("2999/5000"), "{text}");
+    progress.quota("GraphQL", 4990, 5000, Duration::from_secs(80));
+    let text = render_state(&lock(&progress.shared.state), 0, 120);
+    assert!(
+        text.contains("0/10") && text.contains("GraphQL 4990/5000"),
+        "{text}"
+    );
+    assert!(!text.contains("3/9"), "{text}");
+    progress.progress("Descriptions", 5, 10);
+    assert!(render_state(&lock(&progress.shared.state), 0, 80).contains("5/10"));
+    progress.clear_progress("Labels");
+    assert!(lock(&progress.shared.state).progress.is_some());
+    progress.clear_progress("Descriptions");
+    progress.end_activity(batch);
+    progress.stage("Linking native stack");
+    assert!(!render_state(&lock(&progress.shared.state), 0, 80).contains("/10"));
+}
+
+#[test]
+fn network_frames_preserve_graphemes_and_do_not_invent_totals() {
+    use crate::commands::Network;
+    let activity = Activity {
+        label: "Linking native stack".into(),
+        detail: "GitHub API · REST · 👨‍👩‍👧‍👦 e\u{301}".into(),
+        started: Instant::now(),
+        wait: None,
+        network: Some(Network::Api),
+    };
+    for width in [20, 40, 80, 120] {
+        let text = render(&activity, None, None, 0, width);
+        assert!(text.lines().count() <= 2, "{text}");
+        assert!(!text.contains("0/1") && !text.contains('%'), "{text}");
+        assert!(!text.contains('\x1b'));
+        assert!(text.lines().all(|line| line.width() < width), "{text}");
+    }
+}
 #[derive(Debug, Default)]
 struct MemoryTerminal {
     stdout: Mutex<String>,
@@ -213,6 +320,7 @@ fn completed_stages_fit_small_terminal_widths_and_preserve_status_when_space_all
 #[test]
 fn rendering_is_bounded_for_narrow_terminals_and_expired_timers() {
     let activity = Activity {
+        network: None,
         label: "Updating PR descriptions".into(),
         detail: String::new(),
         started: Instant::now(),
@@ -243,6 +351,7 @@ fn rendering_is_bounded_for_narrow_terminals_and_expired_timers() {
     assert_eq!(duration(Duration::from_millis(1)), "1s");
     assert_eq!(duration(Duration::from_secs(120)), "2m 00s");
     let long = Activity {
+        network: None,
         label: "x".repeat(120),
         wait: Some(Duration::from_secs(65)),
         ..expired
@@ -759,7 +868,7 @@ fn current_items_and_counts_survive_long_stage_labels_and_narrow_displays() {
     assert!(line.contains("1/3 Descriptions #101, #102"));
     assert!(line.contains("GitHub retry 1/3") && line.contains("remaining"));
     let compact = render_state(&lock(&progress.shared.state), 0, 40);
-    assert!(compact.contains("1/3 Descriptions #101"));
+    assert!(compact.contains("1/3 Desc"), "{compact}");
     assert!(compact.contains("remaining"));
     progress.end_activity(wait);
     progress.end_activity(request);
@@ -812,6 +921,7 @@ fn stage_summaries_retain_final_counts_and_partial_failure_without_stale_counts(
 #[test]
 fn progress_clipping_preserves_unicode_and_live_timers_at_every_width() {
     let activity = Activity {
+        network: None,
         label: "Updating descriptions with a long explanation".into(),
         detail: String::new(),
         started: Instant::now().checked_sub(Duration::from_secs(2)).unwrap(),
@@ -941,6 +1051,7 @@ fn clipping_preserves_graphemes_and_terminal_cell_width() {
     assert_eq!(clip("日本語", 3), "日…");
     for label in ["日本語", "👩‍💻界café", "a\u{301}bc"] {
         let activity = Activity {
+            network: None,
             label: label.into(),
             detail: String::new(),
             started: Instant::now(),

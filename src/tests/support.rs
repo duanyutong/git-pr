@@ -67,6 +67,7 @@ pub(super) struct Service {
     pub command_errors: Mutex<BTreeMap<String, (i32, String)>>,
     pub template_change: Mutex<Option<(PathBuf, String)>>,
     pub branchless: bool,
+    pub publication_discovery: bool,
     pub indirect_merges: Option<bool>,
     pub stack_base: Mutex<Option<String>>,
     pub resolved_destinations: Mutex<BTreeMap<String, String>>,
@@ -249,7 +250,7 @@ impl CommandRunner for Service {
         self.record(json!({"kind":"command","program":program,"args":args}));
         let key = format!("{program} {}", args.join(" "));
         if program == "git"
-            && self.indirect_merges.is_some()
+            && (self.indirect_merges.is_some() || self.publication_discovery)
             && !args
                 .first()
                 .is_some_and(|arg| arg.starts_with("--git-dir="))
@@ -392,6 +393,41 @@ impl Transport for Service {
             url.query(),
             body.as_ref(),
         )?;
+        if self.publication_discovery
+            && path == "graphql"
+            && let Some(variables) = body.as_ref().and_then(|body| body["variables"].as_object())
+        {
+            let (cwd, env) = self.git_context.lock().unwrap().clone().unwrap();
+            let remote = format!("--git-dir={}", cwd.join("../remote.git").display());
+            let repository = &mut value["data"]["repository"];
+            if variables.keys().any(|key| key.starts_with("publication")) {
+                repository["nameWithOwner"] = json!("org/repo");
+            }
+            for (key, requested) in variables
+                .iter()
+                .filter(|(key, _)| key.starts_with("publication"))
+            {
+                let requested = requested.as_str().unwrap();
+                let result = ProcessRunner::default().execute(
+                    "git",
+                    &[
+                        remote.clone(),
+                        "rev-parse".into(),
+                        "--verify".into(),
+                        format!("{requested}^{{commit}}"),
+                    ],
+                    &cwd,
+                    &env,
+                )?;
+                repository[key] = if result.status != 0 {
+                    Value::Null
+                } else if key.starts_with("publicationRef") {
+                    json!({"name":requested.strip_prefix("refs/heads/").unwrap(),"prefix":"refs/heads/","target":{"__typename":"Commit","oid":result.text}})
+                } else {
+                    json!({"__typename":"Commit","oid":result.text})
+                };
+            }
+        }
         drop(prs);
         if ((request.method == "PATCH"
             && body.as_ref().is_some_and(|body| body.get("base").is_some()))

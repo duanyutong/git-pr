@@ -121,6 +121,10 @@ pub(crate) trait Terminal: Debug + Send + Sync {
         self.out(text);
     }
     fn progress(&self, _label: &str, _done: usize, _total: usize) {}
+    fn clear_progress(&self, _label: &str) {}
+    fn has_progress(&self) -> bool {
+        false
+    }
     fn selection(
         &self,
         _commits: &[&crate::model::Commit],
@@ -147,10 +151,28 @@ pub(crate) trait Terminal: Debug + Send + Sync {
     fn start_activity_with_detail(&self, label: &str, detail: &str) -> u64 {
         self.start_activity(&format!("{label} {detail}"), None)
     }
+    fn start_network_activity(&self, label: &str, network: Network, detail: &str) -> u64 {
+        self.start_activity_with_detail(label, &format!("{} · {detail}", network.label()))
+    }
     fn end_activity(&self, _id: u64) {}
     fn quota(&self, _resource: &str, _remaining: u64, _limit: u64, _reset: Duration) {}
     fn failure(&self) -> Option<String> {
         None
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Network {
+    Git,
+    Api,
+}
+
+impl Network {
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::Git => "Git network",
+            Self::Api => "GitHub API",
+        }
     }
 }
 
@@ -195,6 +217,12 @@ impl Progress<'_> {
     }
 }
 
+impl Drop for Progress<'_> {
+    fn drop(&mut self) {
+        self.commands.terminal.clear_progress(self.label);
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct Commands {
     pub runner: Arc<dyn CommandRunner>,
@@ -208,6 +236,46 @@ pub(crate) struct Commands {
 }
 
 impl Commands {
+    pub(crate) fn network_activity(
+        &self,
+        label: &str,
+        network: Network,
+        detail: &str,
+    ) -> Activity<'_> {
+        Activity {
+            terminal: self.terminal.as_ref(),
+            id: self.terminal.start_network_activity(label, network, detail),
+        }
+    }
+
+    fn command_activity(&self, program: &str, args: &[&str]) -> Activity<'_> {
+        match (program, args.first().copied()) {
+            ("git", Some("ls-remote")) => self.network_activity(
+                "Checking remote branches",
+                Network::Git,
+                &format!(
+                    "{} refs in this batch",
+                    args.iter()
+                        .filter(|arg| arg.starts_with("refs/heads/"))
+                        .count()
+                ),
+            ),
+            ("git", Some("push")) => self.network_activity(
+                "Publishing branches",
+                Network::Git,
+                &format!(
+                    "{} branches in this batch",
+                    args.iter()
+                        .filter(|arg| arg.contains(":refs/heads/") && !arg.starts_with("--"))
+                        .count()
+                ),
+            ),
+            ("git", Some("fetch")) => {
+                self.network_activity("Fetching history", Network::Git, "Receiving remote objects")
+            }
+            _ => self.activity(&format!("{program} {}", args.first().unwrap_or(&"")), None),
+        }
+    }
     pub(crate) fn progress(&self, label: &'static str, total: usize) -> Progress<'_> {
         self.terminal.progress(label, 0, total);
         Progress {
@@ -224,15 +292,8 @@ impl Commands {
         }
     }
 
-    pub(crate) fn activity_with_detail(&self, label: &str, detail: &str) -> Activity<'_> {
-        Activity {
-            terminal: self.terminal.as_ref(),
-            id: self.terminal.start_activity_with_detail(label, detail),
-        }
-    }
-
     pub(crate) fn run(&self, program: &str, args: &[&str]) -> Result<String> {
-        let _activity = self.activity(&format!("{program} {}", args.first().unwrap_or(&"")), None);
+        let _activity = self.command_activity(program, args);
         if self.verbose {
             self.debug(&format!(
                 "{program} {}",
@@ -268,7 +329,7 @@ impl Commands {
         self.data("jj", args, &[]).map(|s| s.trim().to_owned())
     }
     pub(crate) fn data(&self, program: &str, args: &[&str], input: &[u8]) -> Result<String> {
-        let _activity = self.activity(&format!("{program} {}", args.first().unwrap_or(&"")), None);
+        let _activity = self.command_activity(program, args);
         let args: Vec<_> = args.iter().map(|s| (*s).to_owned()).collect();
         let output = self
             .runner

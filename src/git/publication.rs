@@ -79,6 +79,10 @@ impl Git<'_> {
         destination: &str,
         references: &[String],
     ) -> Result<BTreeMap<String, Option<String>>> {
+        let selected = |reference: &&String| !reference.starts_with("git-pr/transition/");
+        let total = references.iter().filter(selected).count();
+        let mut progress = (total != 0 && !self.commands.terminal.has_progress())
+            .then(|| self.commands.progress("Remote branches checked", total));
         let mut result = BTreeMap::new();
         for chunk in references.chunks(128) {
             let refs: Vec<_> = chunk
@@ -88,6 +92,10 @@ impl Git<'_> {
             let mut args = vec!["ls-remote", "--refs", "--", destination];
             args.extend(refs.iter().map(String::as_str));
             let response = self.commands.git(&args)?;
+            self.commands.explain(&format!(
+                "Git remote ref observation: {} requested refs, {} returned rows, {} response bytes.",
+                chunk.len(), response.lines().count(), response.len()
+            ));
             for (reference, full) in chunk.iter().zip(&refs) {
                 let mut found = None;
                 for line in response.lines() {
@@ -102,6 +110,9 @@ impl Git<'_> {
                     }
                 }
                 result.insert(reference.clone(), found);
+            }
+            if let Some(progress) = &mut progress {
+                progress.advance(chunk.iter().filter(selected).count());
             }
         }
         Ok(result)

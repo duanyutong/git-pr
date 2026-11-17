@@ -68,6 +68,12 @@ git pr feature-a feature-c          # Individual commits in ancestry order.
 
 Subsequent managed submissions update the existing PRs for the selected commits.
 
+For canonical `github.com` destinations, publication discovery acquires exact branch tips alongside PR observations and batches presence checks for unresolved commit objects.
+Complete fresh evidence may replace a separate `git ls-remote` operation; unsupported capabilities and other hosts retain Git observation.
+Only verified absent objects omit commit-association requests, whilst present or unverifiable objects retain the existing lookup.
+Publication retains explicit expected-object or expected-absence leases, and recovery retains authoritative Git verification.
+PR creation remains sequential, preserving validation, association persistence and recovery boundaries between creations.
+
 Changes to published base relationships require a verified transition before publication.
 The transition procedure prevents GitHub from recognising an unintended indirect merge whilst branch references and PR relationships disagree.
 Incomplete evidence stops submission; `--yes`, `--no-stack` and native stack mode do not bypass these checks.
@@ -144,8 +150,16 @@ Submission preserves commit identities and stores associations in [repository-lo
 
 ## Console presentation and GitHub waits
 
-Interactive submission presents named stages for repository discovery, working-copy validation, commit preparation, branch publication, PR reconciliation, descriptions, labels and native stack linking where applicable.
-One refreshing status line identifies the current stage and operation, with elapsed time and completed counts where the operation exposes a reliable total.
+Interactive submission presents named stages for repository discovery, working-copy validation, publication preparation, branch publication, PR reconciliation, descriptions, labels and native stack linking where applicable.
+One refreshing status region occupies at most two rows during network operations, identifying the operation, completed logical items and its own elapsed time.
+A secondary row identifies Git transport or the GitHub API and, where space permits, the current batch or relevant observed API quota.
+Active network work appears in blue where colour is enabled; textual labels remain available without colour.
+Counts advance after validated results, including acknowledged push batches and PR creations whose local associations have been persisted.
+A single pending ten-branch push remains at `0/10` until its result is confirmed.
+Waits retain confirmed counts and display their reason and remaining delay; unknown totals receive no invented fraction or estimated completion time.
+Narrow terminals retain counts before optional context, and redirected output retains waits and elapsed notices for network operations lasting at least one second.
+Git transport does not consume the displayed REST or GraphQL quota.
+Direct GitHub API requests retain the same quota considerations as requests issued through the GitHub CLI.
 Repository checks, the selected stack, submission progress and PR results have distinct headings and spacing.
 Completed stages retain a compact outcome and aligned duration; a failed stage retains a failure marker before the explanatory error.
 Completion messages distinguish resources checked from confirmed changes, including explicit statements when no changes were required.
@@ -246,6 +260,11 @@ The summary is emitted on successful completion, checkpoint exits and ordinary s
 Argument-parsing, process-environment and current-directory failures which precede submission retain their direct error messages.
 
 The records distinguish configuration and authentication, commit discovery and preparation, publication, PR reconciliation, description and stack-section processing, and native stack linking.
+Network records additionally identify Git or API activity, batch counts, HTTP response sizes, confirmed item checkpoints and publication-ref cache freshness.
+Publication metadata cleanup has a separate timing span.
+A slow Git transport can be investigated by setting Git's `GIT_TRACE2_EVENT` to an absolute private output path for a subsequent authorised invocation.
+Trace2 provides child-process and Git phase attribution without introducing application polling; transport-specific tracing may be required to separate authentication, negotiation and server latency.
+Raw traces shall be sanitised before sharing, particularly when remote URLs or helper arguments may contain credentials.
 Command timing includes Git, Jujutsu and credential subprocesses, including structured reads and bulk editing.
 HTTP timing records each attempt separately; dispatch queueing, deliberate mutation spacing and explicit rate-limit retry waits have separate records.
 Command durations include executable startup, Git hooks, backend processing and any network work performed by the child; they do not distinguish those internal components.

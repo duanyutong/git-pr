@@ -500,7 +500,7 @@ fn discovery_hints_must_identify_one_review_and_one_destination() {
                 );
             }
             "push" | "ambiguous" | "truncated-push" => {
-                world.reply("git for-each-ref --format=%(push:remotename)%00%(push:remoteref) refs/heads/renamed", 0, match source { "push" => "origin\0refs/heads/topic/1", "ambiguous" => "origin\0refs/heads/other", _ => "origin" });
+                world.reply("git for-each-ref --format=%(refname:strip=2)%00%(push:remotename)%00%(push:remoteref) refs/heads/", 0, match source { "push" => "renamed\0origin\0refs/heads/topic/1", "ambiguous" => "renamed\0origin\0refs/heads/other", _ => "renamed\0origin" });
             }
             "upstream" => {
                 let mut memory = world.0.lock().unwrap();

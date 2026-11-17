@@ -417,3 +417,35 @@ fn native_attempt_identifiers_have_unique_uuid_shape() {
             .is_match(&first)
     );
 }
+
+#[test]
+fn native_api_discovery_uses_real_remote_objects_without_rewriting_or_git_ref_reads() {
+    let fixture = Fixture::with_service(
+        3,
+        false,
+        super::support::Service {
+            publication_discovery: true,
+            ..super::support::Service::default()
+        },
+    );
+    let before = fixture.git(&["log", "--format=%H %T %P %B", "origin/main..HEAD"]);
+    fixture.run(&["--no-stack", "main..HEAD"]).unwrap();
+    assert_eq!(fixture.service.prs.lock().unwrap().len(), 3);
+    assert_eq!(
+        fixture.git(&["log", "--format=%H %T %P %B", "origin/main..HEAD"]),
+        before
+    );
+    let trace = fixture.trace();
+    assert!(!trace.iter().any(|e| e["args"][0] == "ls-remote"));
+    assert!(!trace.iter().any(|e| {
+        e["path"]
+            .as_str()
+            .is_some_and(|path| path.starts_with("commits/"))
+    }));
+    for i in 1..=3 {
+        assert_eq!(
+            fixture.git(&["rev-parse", &format!("refs/remotes/origin/topic/{i}")]),
+            fixture.git(&["rev-parse", &format!("topic/{i}")])
+        );
+    }
+}

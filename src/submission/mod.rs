@@ -223,11 +223,16 @@ impl Application {
             .phase("final verification and cleanup", || {
                 publication.finish(github, state)
             })?;
+        let cleanup = self
+            .commands
+            .diagnostics
+            .start("phase", || "publication metadata cleanup".into());
         if let Err(error) = crate::identity::resolve::cleanup(github, associations, &state.stack) {
             self.commands.warn(&format!(
                 "could not finish merged publication metadata cleanup; retained associations may be retried: {error:#}"
             ));
         }
+        cleanup.finish(|| "done".into());
         for commit in state.selected_mut() {
             commit.metadata_updated |= github.was_updated(commit.pr_number);
         }
@@ -283,12 +288,12 @@ impl Application {
             if config.dry_run {
                 "Preparing preview"
             } else {
-                "Preparing commits"
+                "Preparing publication"
             },
             if config.dry_run {
                 "Preview prepared"
             } else {
-                "Commits prepared"
+                "Publication prepared"
             },
         );
         state.validate_conflicts()?;

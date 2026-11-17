@@ -55,6 +55,13 @@ pub(crate) enum Response {
     Failure(String),
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) enum DiscoveryApi {
+    #[default]
+    Unsupported,
+    Supported,
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct Memory {
     pub clock_start: Option<std::time::Instant>,
@@ -71,6 +78,7 @@ pub(crate) struct Memory {
     pub prs: BTreeMap<u64, Value>,
     pub changes_on_push: BTreeMap<u64, Option<Value>>,
     pub remote_refs: BTreeMap<String, String>,
+    pub discovery_api: DiscoveryApi,
     pub trace: Vec<Value>,
     pub rich_output: bool,
     pub stdout: String,
@@ -696,6 +704,22 @@ impl CommandRunner for World {
             ("git", ["merge-base", "--independent", tips @ ..]) => {
                 tips.last().unwrap_or(&"").to_string()
             }
+            (
+                "git",
+                [
+                    "for-each-ref",
+                    "--format=%(refname:strip=2)%00%(push:remotename)%00%(push:remoteref)",
+                    "refs/heads/",
+                ],
+            ) => m
+                .commits
+                .iter()
+                .enumerate()
+                .fold(String::new(), |mut output, (i, _)| {
+                    use std::fmt::Write as _;
+                    let _ = writeln!(output, "topic/{}\0\0", i + 1);
+                    output
+                }),
             ("git", ["diff-tree", ..]) => "file.txt".into(),
             ("git", ["worktree", "list", "--porcelain"]) => {
                 "worktree /unit/repo\nbranch refs/heads/protected".into()
@@ -956,13 +980,39 @@ impl Transport for World {
                 }
             }
         }
-        let value = crate::tests::http_service::respond(
+        let mut value = crate::tests::http_service::respond(
             &mut m.prs,
             request.method,
             path,
             url.query(),
             body.as_ref(),
         )?;
+        if matches!(m.discovery_api, DiscoveryApi::Supported) && path == "graphql" {
+            let variables = &body.as_ref().unwrap()["variables"];
+            if variables.get("publicationRef0").is_some()
+                || variables.get("publicationControl").is_some()
+            {
+                let repository = &mut value["data"]["repository"];
+                repository["nameWithOwner"] = json!("org/repo");
+                let mut objects: std::collections::BTreeSet<_> =
+                    m.remote_refs.values().cloned().collect();
+                objects.insert("0".repeat(40));
+                for (key, requested) in variables.as_object().unwrap() {
+                    if key.starts_with("publicationRef") {
+                        let name = requested.as_str().unwrap();
+                        repository[key] = m.remote_refs.get(name).map_or(Value::Null, |oid| json!({"prefix":"refs/heads/","name":name.strip_prefix("refs/heads/").unwrap(),"target":{"__typename":"Commit","oid":oid}}));
+                    } else if key == "publicationControl" {
+                        repository[key] = json!({"__typename":"Commit","oid":"0".repeat(40)});
+                    } else if key.starts_with("publicationObject") {
+                        repository[key] = if objects.contains(requested.as_str().unwrap()) {
+                            json!({"__typename":"Commit","oid":requested})
+                        } else {
+                            Value::Null
+                        };
+                    }
+                }
+            }
+        }
         drop(m);
         if value.is_null() {
             return Ok(Vec::new());

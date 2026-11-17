@@ -3,6 +3,7 @@
 mod test_helpers;
 
 mod content;
+mod discovery;
 mod dispatch;
 pub(crate) mod http;
 pub(crate) mod limits;
@@ -22,6 +23,7 @@ use std::{
 
 #[derive(Debug, Default)]
 pub(crate) struct Session {
+    discovery: Mutex<discovery::Discovery>,
     prs: Mutex<BTreeMap<u64, Arc<PullRequest>>>,
     heads: Mutex<BTreeMap<String, Vec<u64>>>,
     commit_prs: Mutex<BTreeMap<String, (Instant, observation::Associations)>>,

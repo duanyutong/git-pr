@@ -273,7 +273,10 @@ impl Publication {
         ) {
             references.push(reference);
         }
-        self.leases = Arc::new(git.recovery_refs(&destination, &references)?);
+        self.leases = Arc::new(match github.publication_refs(&references)? {
+            Some(refs) => refs,
+            None => git.recovery_refs(&destination, &references)?,
+        });
         self.destination = destination;
         self.cleanup = self
             .leases
@@ -604,16 +607,15 @@ impl Application {
             self.commands
                 .detail(&format!("\nCreating {} PR(s)...", create.len()));
             let total = create.len();
-            self.commands.terminal.progress("Creating PRs", 0, total);
+            let mut progress = self.commands.progress("PRs created", total);
             for (done, i) in create.into_iter().enumerate() {
                 let base = &bases[i];
-                self.commands.terminal.progress(
-                    &format!("Creating {}", shorten_title(&state.stack[i].title)),
-                    done,
+                self.commands.detail(&format!(
+                    "Creating PR {}/{} · {}",
+                    done + 1,
                     total,
-                );
-                self.commands
-                    .detail(&format!("  {}", shorten_title(&state.stack[i].title)));
+                    shorten_title(&state.stack[i].title)
+                ));
                 let attempt = crate::identity::Attempt {
                     id: self
                         .files
@@ -642,12 +644,7 @@ impl Application {
                     &github.config.repo,
                     commit.remote_ref(),
                 )?;
-                self.commands.progress_prs(
-                    "Created",
-                    std::iter::once(state.stack[i].pr_number),
-                    done + 1,
-                    total,
-                );
+                progress.advance(1);
             }
         }
         let update: Vec<_> = needs_pr

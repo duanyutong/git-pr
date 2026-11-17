@@ -36,8 +36,10 @@ pub(crate) fn prepare(github: &GitHub<'_>, stack: &mut [Commit], start: usize) -
     let branches = inventory(github.commands)?;
     let preview = github.config.dry_run || github.config.stop_after == Some(Checkpoint::Rewrite);
     let attempts = records.attempts(&github.config.repo)?;
+    let mut push_targets = None;
     if !preview {
         let mut references = BTreeSet::new();
+        let mut unresolved = BTreeSet::new();
         for commit in stack.iter() {
             if !commit.attr(REMOTE_REF).is_empty() {
                 references.insert(commit.attr(REMOTE_REF).to_owned());
@@ -48,10 +50,17 @@ pub(crate) fn prepare(github: &GitHub<'_>, stack: &mut [Commit], start: usize) -
                 if let Some(head) = records.head(&name, &github.config.repo)? {
                     references.insert(head.reference);
                 } else if commit.attr(REMOTE_REF).is_empty() {
+                    if records.review(&name, &github.config.repo)?.is_none() {
+                        unresolved.insert(commit.hash.clone());
+                    }
                     references.insert(name);
                 }
             }
         }
+        if !unresolved.is_empty() {
+            push_targets = Some(push_inventory(github.commands)?);
+        }
+        github.prepare_discovery(unresolved.into_iter().collect());
         github
             .commands
             .diagnostics
@@ -76,7 +85,15 @@ pub(crate) fn prepare(github: &GitHub<'_>, stack: &mut [Commit], start: usize) -
     }
     for (index, commit) in stack.iter_mut().enumerate() {
         let selected = index >= start && !commit.skip;
-        let binding = resolve(github, commit, &records, &branches, preview, selected)?;
+        let binding = resolve(
+            github,
+            commit,
+            &records,
+            &branches,
+            preview,
+            selected,
+            push_targets.as_ref(),
+        )?;
         if let Some(binding) = binding {
             if selected {
                 crate::git::policy::protect_trunk(
@@ -182,6 +199,7 @@ fn resolve(
     branches: &BTreeMap<String, String>,
     preview: bool,
     selected: bool,
+    push_targets: Option<&BTreeMap<String, String>>,
 ) -> Result<Option<Binding>> {
     let repo = &github.config.repo;
     let anchor = anchor(commit, records, branches)?;
@@ -226,18 +244,7 @@ fn resolve(
         records.relocation(github.commands, old)?;
     }
     verify_change_id(records, source, commit, repo.jj)?;
-    let trailer = commit.attr(REMOTE_REF);
-    if !trailer.is_empty() {
-        let legacy = Head::new(repo, trailer)
-            .with_context(|| format!("commit {} has invalid Remote-Ref", commit.short_hash()))?;
-        if head.as_ref().is_some_and(|head| head != &legacy) {
-            bail!(
-                "Remote-Ref conflicts with gitPrHead for {}; explicitly reconcile the association",
-                commit.short_hash()
-            );
-        }
-        head = Some(legacy);
-    }
+    head = reconcile_trailer(commit, repo, head)?;
     let adopted = head.is_some() || review.is_some();
     if !preview {
         verify_review(
@@ -266,7 +273,16 @@ fn resolve(
                 "PR-only association for {name:?} requires remote verification; preview cannot determine its head"
             );
         }
-        let Some(head) = discover(github, commit, name, records, preview, selected)? else {
+        let found = discover(
+            github,
+            commit,
+            name,
+            records,
+            preview,
+            selected,
+            push_targets,
+        )?;
+        let Some(head) = found else {
             return Ok(None);
         };
         head
@@ -279,6 +295,26 @@ fn resolve(
         adopted,
         previous_anchor: previous.map(str::to_owned),
     }))
+}
+
+fn reconcile_trailer(
+    commit: &Commit,
+    repo: &Repository,
+    head: Option<Head>,
+) -> Result<Option<Head>> {
+    let trailer = commit.attr(REMOTE_REF);
+    if trailer.is_empty() {
+        return Ok(head);
+    }
+    let legacy = Head::new(repo, trailer)
+        .with_context(|| format!("commit {} has invalid Remote-Ref", commit.short_hash()))?;
+    if head.as_ref().is_some_and(|head| head != &legacy) {
+        bail!(
+            "Remote-Ref conflicts with gitPrHead for {}; explicitly reconcile the association",
+            commit.short_hash()
+        );
+    }
+    Ok(Some(legacy))
 }
 
 fn verify_change_id(
@@ -352,6 +388,27 @@ fn editor_review(value: &str, repo: &Repository) -> Result<u64> {
     )
 }
 
+fn push_inventory(commands: &Commands) -> Result<BTreeMap<String, String>> {
+    let data = commands.git_data(
+        &[
+            "for-each-ref",
+            "--format=%(refname:strip=2)%00%(push:remotename)%00%(push:remoteref)",
+            "refs/heads/",
+        ],
+        &[],
+    )?;
+    let mut targets = BTreeMap::new();
+    for line in data.lines() {
+        let (name, value) = line
+            .split_once('\0')
+            .context("incomplete push mapping inventory")?;
+        if value.split('\0').count() != 2 || targets.insert(name.into(), value.into()).is_some() {
+            bail!("invalid or duplicate push mapping inventory");
+        }
+    }
+    Ok(targets)
+}
+
 fn discover(
     github: &GitHub<'_>,
     commit: &Commit,
@@ -359,6 +416,7 @@ fn discover(
     records: &Records,
     preview: bool,
     selected: bool,
+    push_targets: Option<&BTreeMap<String, String>>,
 ) -> Result<Option<Head>> {
     let repo = &github.config.repo;
     let named = Head::new(repo, anchor)?;
@@ -366,11 +424,15 @@ fn discover(
         return Ok(selected.then_some(named));
     }
     let exact: BTreeSet<_> = github.identity_heads(&commit.hash)?.into_iter().collect();
-    let push = github.commands.git(&[
-        "for-each-ref",
-        "--format=%(push:remotename)%00%(push:remoteref)",
-        &format!("refs/heads/{anchor}"),
-    ])?;
+    let push = if let Some(targets) = push_targets {
+        targets.get(anchor).cloned().unwrap_or_default()
+    } else {
+        github.commands.git(&[
+            "for-each-ref",
+            "--format=%(push:remotename)%00%(push:remoteref)",
+            &format!("refs/heads/{anchor}"),
+        ])?
+    };
     let mut preferred = None;
     if let Some((remote, reference)) = push.split_once('\0') {
         if remote == repo.remote

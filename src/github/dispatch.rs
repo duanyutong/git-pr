@@ -55,6 +55,29 @@ impl GitHub<'_> {
         writes: usize,
         attempt: usize,
     ) -> Result<Response> {
+        let label = if writes > 0 {
+            if url.ends_with("/graphql") {
+                format!("Updating {writes} PR(s)")
+            } else if url.ends_with("/pulls") {
+                "Creating pull request".into()
+            } else {
+                "Updating GitHub state".into()
+            }
+        } else {
+            "Reading GitHub state".into()
+        };
+        let _activity = self.commands.network_activity(
+            &label,
+            crate::commands::Network::Api,
+            &format!(
+                "{} · {label}",
+                if url.ends_with("/graphql") {
+                    "GraphQL"
+                } else {
+                    "REST"
+                }
+            ),
+        );
         self.commands.debug(&format!("-> {method} {url}"));
         if self.commands.verbose
             && let Some(body) = body
@@ -85,7 +108,11 @@ impl GitHub<'_> {
                 response
             });
         span.finish(|| match &response {
-            Ok(response) => format!("HTTP {}", response.status),
+            Ok(response) => format!(
+                "HTTP {}; {} response bytes",
+                response.status,
+                response.body.len()
+            ),
             Err(error) => error
                 .downcast_ref::<HttpStatusError>()
                 .map_or_else(|| "error".into(), |e| format!("HTTP {}", e.status.as_u16())),
@@ -141,15 +168,6 @@ impl GitHub<'_> {
         let mut schedule = self.session.dispatch();
         queue.finish(|| "ready".into());
         let graphql = url.ends_with("/graphql");
-        let _activity = if graphql && writes > 0 {
-            self.commands
-                .activity(&format!("Updating {writes} PR(s)"), None)
-        } else {
-            self.commands.activity_with_detail(
-                &format!("GitHub {method}"),
-                url.split("/repos/").last().unwrap_or(url),
-            )
-        };
         let mut waited = Duration::ZERO;
         let mut attempt = 0;
         let result = loop {

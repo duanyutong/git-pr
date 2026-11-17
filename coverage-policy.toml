@@ -27,6 +27,7 @@ unit = [
   "src/git/snapshot.rs",
   "src/github/content.rs",
   "src/github/dispatch.rs",
+  "src/github/discovery.rs",
   "src/github/limits.rs",
   "src/github/mod.rs",
   "src/github/native.rs",
