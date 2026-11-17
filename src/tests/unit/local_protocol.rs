@@ -1,6 +1,64 @@
 //! Local snapshots, ref protection and bounded backend observations.
 
 use crate::tests::unit::support::stack_probe;
+
+fn observed_author_date(value: &str) -> anyhow::Result<time::OffsetDateTime> {
+    let world = World::new(1);
+    let base = "0".repeat(40);
+    let hash = commit(1).hash;
+    world.reply(
+        &stack_probe("base", "tip"),
+        0,
+        &format!("false\n{base}\ntree0\n{hash}"),
+    );
+    world.reply(
+        &format!("git log --format=%H%x00%an%x00%ae%x00%aI%x00%T%x00%P%x00%B%x00 --no-decorate --no-color --encoding=UTF-8 --no-show-signature {base}..{hash}"),
+        0,
+        &format!("{hash}\0Author\0author@example.com\0{value}\0tree1\0{base}\0Title\0"),
+    );
+    let commands = world.commands();
+    let repo = Repository::default();
+    let snapshot = Git {
+        commands: &commands,
+        repo: &repo,
+    }
+    .observe_stack("base", "tip", false)?;
+    Ok(snapshot.commits[0].date.unwrap())
+}
+
+#[test]
+fn author_dates_preserve_offsets_subseconds_and_utc_year_rollover() {
+    for (value, seconds, nanos) in [
+        ("2024-06-01T12:30:00+02:00", 1_717_237_800, 0),
+        ("2024-06-01T00:00:00-00:30", 1_717_201_800, 0),
+        ("2024-06-01T00:00:00+00:30", 1_717_198_200, 0),
+        ("1969-12-31T23:59:59.123456789Z", -1, 123_456_789),
+        ("9999-12-31T23:59:59-23:59", 253_402_387_139, 0),
+        ("2024-06-01 12:30:00+02:00", 1_717_237_800, 0),
+        ("2024-06-01t12:30:00+02:00", 1_717_237_800, 0),
+    ] {
+        let date = observed_author_date(value).unwrap();
+        assert_eq!(date.unix_timestamp(), seconds, "{value}");
+        assert_eq!(date.nanosecond(), nanos, "{value}");
+        assert_eq!(date.offset(), time::UtcOffset::UTC, "{value}");
+    }
+}
+
+#[test]
+fn malformed_author_dates_remain_ineligible_for_submission() {
+    for value in [
+        "",
+        "invalid-date",
+        "2024-06-01X12:30:00Z",
+        "2024-02-30T00:00:00Z",
+        "2024-06-01T12:30:00",
+        "2024-06-01T12:30:00Z trailing",
+        "+10000-01-01T00:00:00Z",
+    ] {
+        assert!(observed_author_date(value).is_err(), "{value}");
+    }
+}
+
 fn shallow_fork_world() -> std::sync::Arc<World> {
     let w = World::new(3);
     let base = commit(2).hash;

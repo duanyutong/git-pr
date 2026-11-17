@@ -314,7 +314,8 @@ proptest! {
             prop_assert_eq!(&actual.message, &format!("Body {i}: commit fake"));
             prop_assert_eq!(actual.attr("tags"), tag.trim());
             prop_assert_eq!(actual.attr(REMOTE_REF), format!("topic/{i}"));
-            prop_assert_eq!(actual.date.unwrap().to_rfc3339(), "2024-06-01T10:30:00+00:00");
+            prop_assert_eq!(actual.date.unwrap().unix_timestamp(), 1_717_237_800);
+            prop_assert_eq!(actual.date.unwrap().offset(), time::UtcOffset::UTC);
             prop_assert_eq!(observed.depths.get(&actual.hash), Some(&(rows.len() - i - 1)));
         }
     }

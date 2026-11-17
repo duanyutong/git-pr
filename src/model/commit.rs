@@ -8,7 +8,7 @@ pub(crate) const REMOTE_REF: &str = "remote-ref";
 pub(crate) struct Commit {
     pub hash: String,
     pub change_id: String,
-    pub date: Option<chrono::DateTime<chrono::Utc>>,
+    pub date: Option<time::OffsetDateTime>,
     pub author_name: String,
     pub author_email: String,
     pub title: String,

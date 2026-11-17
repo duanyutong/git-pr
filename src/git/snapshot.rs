@@ -63,11 +63,22 @@ pub(super) fn parse(output: &str) -> Result<Snapshot> {
         let body = records.next().context("missing commit message")?;
         let (title, body) = body.split_once('\n').unwrap_or((body, ""));
         let (message, attrs) = trailers::parse(&body.lines().collect::<Vec<_>>());
+        if !date
+            .as_bytes()
+            .get(10)
+            .is_some_and(|separator| matches!(separator, b'T' | b't' | b' '))
+        {
+            bail!("invalid separator in Git author date");
+        }
+        let date =
+            time::OffsetDateTime::parse(date, &time::format_description::well_known::Rfc3339)?;
         commits.push(Commit {
             hash: hash.into(),
             author_name: author_name.into(),
             author_email: author_email.into(),
-            date: Some(chrono::DateTime::parse_from_rfc3339(date)?.with_timezone(&chrono::Utc)),
+            // RFC 3339 restricts the local year to four digits; large-dates
+            // keeps every possible UTC rollover within the supported range.
+            date: Some(date.to_offset(time::UtcOffset::UTC)),
             title: title.trim().into(),
             message,
             attrs,

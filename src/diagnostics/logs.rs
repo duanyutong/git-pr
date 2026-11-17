@@ -36,6 +36,17 @@ fn lock<T>(value: &Mutex<T>) -> MutexGuard<'_, T> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+fn timestamp(now: SystemTime) -> Result<String> {
+    Ok(
+        time::OffsetDateTime::from_unix_timestamp_nanos(i128::try_from(
+            now.duration_since(UNIX_EPOCH)?.as_nanos(),
+        )?)?
+        .format(time::macros::format_description!(
+            "[year]-[month]-[day] [hour]:[minute]:[second].[subsecond digits:3] UTC"
+        ))?,
+    )
+}
+
 pub(crate) fn directory() -> Result<PathBuf> {
     if let Some(state) = std::env::var_os("XDG_STATE_HOME").filter(|v| Path::new(v).is_absolute()) {
         return Ok(PathBuf::from(state).join("git-pr/logs"));
@@ -60,6 +71,7 @@ impl InvocationLog {
             .mode(0o700)
             .create(directory)?;
         let now = SystemTime::now();
+        let timestamp = timestamp(now)?;
         let prefix = format!(
             "invocation-{:039}-",
             now.duration_since(UNIX_EPOCH)?.as_nanos()
@@ -73,9 +85,7 @@ impl InvocationLog {
             path,
             file: Mutex::new(file),
             metadata: Mutex::new(Metadata {
-                timestamp: chrono::DateTime::<chrono::Utc>::from(now)
-                    .format("%Y-%m-%d %H:%M:%S%.3f UTC")
-                    .to_string(),
+                timestamp,
                 repository: "unknown".into(),
                 commits: None,
                 outcome: "incomplete".into(),
@@ -229,3 +239,7 @@ pub(crate) fn list(directory: &Path, all: bool) -> Result<String> {
     }
     Ok(output)
 }
+
+#[cfg(test)]
+#[path = "../tests/logs.rs"]
+mod tests;

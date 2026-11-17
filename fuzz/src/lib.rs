@@ -171,10 +171,9 @@ pub fn snapshots(data: &[u8]) {
         assert_eq!(commit.hash, format!("{:0width$x}", index + 1));
         assert_eq!(commit.author_name, "Fuzz Author");
         assert_eq!(commit.author_email, "fuzz@example.invalid");
-        assert_eq!(
-            commit.date.unwrap().to_rfc3339(),
-            "2026-10-15T10:34:56+00:00"
-        );
+        let date = commit.date.unwrap();
+        assert_eq!(date.unix_timestamp_nanos(), 1_792_060_496_000_000_000);
+        assert_eq!(date.offset(), time::UtcOffset::UTC);
         assert_eq!(commit.title, format!("Title {index}"));
         assert_eq!(commit.message, format!("Human {text}"));
         assert_eq!(commit.attr("tags"), "x");

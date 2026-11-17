@@ -434,6 +434,49 @@ fn retry_metadata_accepts_dates_and_does_not_treat_other_graphql_errors_as_limit
 }
 
 #[test]
+fn http_dates_preserve_numeric_offsets_weekdays_and_server_time() {
+    for value in [
+        "Thu, 15 Oct 2026 12:00:03 GMT",
+        "Thu, 15 Oct 2026 14:00:03 +0200",
+        "Thu, 15 Oct 2026 11:30:03 -0030",
+        "Thu, 15 Oct 2026 12:30:03 +0030",
+        "Thu, 15 Oct 2026 12:00:03 UT",
+        "Thu, 15 Oct 2026 12:00:03 GMT (comment)",
+        "15 Oct 2026 12:00:03 GMT",
+    ] {
+        let reply = Reply::new(200, "{}")
+            .header("date", "Thu, 15 Oct 2026 12:00:00 GMT")
+            .header("retry-after", value);
+        assert_eq!(
+            crate::github::http::quota(&reply.headers).retry_after,
+            Some(Duration::from_secs(3)),
+            "{value}"
+        );
+    }
+    for value in [
+        "Fri, 15 Oct 2026 12:00:03 GMT",
+        "invalid",
+        "Wed, 31 Dec 1969 23:59:59 GMT",
+    ] {
+        let reply = Reply::new(200, "{}")
+            .header("date", "Thu, 15 Oct 2026 12:00:00 GMT")
+            .header("retry-after", value);
+        assert_eq!(
+            crate::github::http::quota(&reply.headers).retry_after,
+            None,
+            "{value}"
+        );
+    }
+    let reply = Reply::new(200, "{}")
+        .header("date", "Thu, 15 Oct 2026 11:30:00 -0030")
+        .header("x-ratelimit-reset", "1792065603");
+    assert_eq!(
+        crate::github::http::quota(&reply.headers).reset,
+        Some(Duration::from_secs(3))
+    );
+}
+
+#[test]
 fn connection_failures_are_retryable_only_for_reads_and_graphql_quotas_are_reported() {
     let error = anyhow::Error::new(crate::github::http::TransientRead);
     assert_eq!(retry(&error, 0, 0).unwrap().0, Duration::from_secs(1));

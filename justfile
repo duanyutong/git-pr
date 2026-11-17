@@ -13,7 +13,7 @@ fmt:
 
 lint:
     uv run scripts/measure.py hygiene prek run --all-files --show-diff-on-failure
-    uv run scripts/measure.py semantic prek run pyright cargo-clippy cargo-deny cargo-machete --all-files --hook-stage manual
+    uv run scripts/measure.py semantic prek run pyright cargo-clippy cargo-deny cargo-deny-fuzz cargo-machete --all-files --hook-stage manual
 
 typecheck:
     cargo check --workspace --all-targets --all-features --locked

@@ -193,9 +193,10 @@ pub(crate) fn quota(headers: &reqwest::header::HeaderMap) -> crate::github::limi
     let header = |name| headers.get(name).and_then(|value| value.to_str().ok());
     let number = |name| header(name).and_then(|value| value.parse::<u64>().ok());
     let timestamp = |value: &str| {
-        chrono::DateTime::parse_from_rfc2822(value)
+        jiff::fmt::rfc2822::DateTimeParser::new()
+            .parse_timestamp(value)
             .ok()
-            .and_then(|date| u64::try_from(date.timestamp()).ok())
+            .and_then(|date| u64::try_from(date.as_second()).ok())
     };
     // Server time avoids converting a clock-skewed reset into an early retry.
     let now = header("date").and_then(timestamp).unwrap_or_else(|| {

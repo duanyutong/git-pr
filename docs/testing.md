@@ -101,6 +101,10 @@ Configuration regressions cover global enablement, disabling overrides, repeated
 Invalid revision-range syntax is rejected before discovery.
 Valid revision resolution and configuration discovery retain bounded command counts.
 
+Date-library compatibility cases require UTC normalisation of author dates, retention of subsecond precision, support for UTC rollover beyond the four-digit source year and rejection of malformed Git timestamps.
+HTTP date cases require consistent weekdays, correct positive and negative zero-hour offsets, server-relative reset calculations and refusal of pre-epoch retry dates.
+Invocation-log timestamps retain their UTC suffix and exactly three decimal places, with fractional seconds truncated to milliseconds.
+
 Operation budgets require exclusive Git publication ownership, no production `gh` subprocesses, at most 128 refspecs and 64 KiB of refspec arguments per push, and at most 25 PR aliases per GraphQL request.
 Content mutations additionally respect a five-alias maximum and a 1 MiB encoded request budget.
 Request-boundary regressions require exactly 25 renders for 25 large descriptions, including renewal of an expired observation whose content remains unchanged.
