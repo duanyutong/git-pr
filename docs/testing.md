@@ -27,6 +27,9 @@ For example, an in-memory command response can establish that submission stops a
 The native regression exercises that effect against the operating system.
 Running it on both supported systems checks the shared Unix contract against both implementations; a passing macOS execution alone supplies no Linux execution evidence.
 
+Capture regressions require complete buffered output and EOF to survive reader scheduling delays, whilst open descendant streams remain subject to the post-exit waiting deadline and continuously ready output remains bounded by byte count.
+Deterministic clock cases exercise both delayed consumption and delayed readiness observations; native socket and process cases verify non-blocking drainage, descendant termination and diagnostic ordering.
+
 Local recipes, including `just check`, `just coverage` and `just backends`, execute on the host operating system.
 They neither launch Docker nor automatically repeat themselves on another platform.
 The [CI workflow](../.github/workflows/ci.yml) supplies the automated platform matrix: `just check` runs on macOS and Ubuntu runners, with `just credentials` additionally running on Ubuntu.

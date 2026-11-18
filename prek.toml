@@ -112,7 +112,8 @@ always_run = true
 id = "cargo-clippy"
 name = "Clippy"
 language = "system"
-entry = "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings"
+entry = "cargo clippy --workspace --all-targets --all-features --locked"
+env = { CARGO_BUILD_WARNINGS = "deny" }
 stages = ["manual"]
 pass_filenames = false
 always_run = true

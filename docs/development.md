@@ -32,6 +32,7 @@ The command `just test-unit` runs the declared in-memory suites; `just coverage-
 The [unit coverage specification](unit-coverage.md) identifies the enforced policy scope and excluded external effects.
 The recipe `just fmt` applies formatting through prek and reports changes for review.
 The recipe `just lint` runs hygiene followed by the manual Clippy, dependency-policy, unused-dependency and Python type checks.
+Clippy rejects warnings through Cargo's `build.warnings` policy, preserving compiler arguments and cached artefacts when switching between ordinary and strict checks.
 The dependency-policy gate checks advisories in both the application and the independent fuzz workspace against the shared `deny.toml` policy.
 The recipe `just check` runs lint, all test targets, separate doctests and the production release build.
 Run `just check`, `just coverage` and `just backends` before committing changes for acceptance.

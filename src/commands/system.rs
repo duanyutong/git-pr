@@ -301,21 +301,40 @@ fn join_reader(worker: std::thread::ScopedJoinHandle<'_, Result<Vec<u8>>>) -> Re
         .unwrap_or_else(|_| Err(anyhow::anyhow!("command output reader failed")))
 }
 
-fn read_bounded(stream: &mut dyn Read, finished: &AtomicBool) -> Result<Vec<u8>> {
-    // The caller owns the I/O adapter; every reader shares the bounded error policy.
+fn read_bounded(stream: &mut UnixStream, finished: &AtomicBool) -> Result<Vec<u8>> {
+    collect_output(
+        |buffer, begin_drain| {
+            if begin_drain {
+                stream.set_nonblocking(true)?;
+            }
+            stream.read(buffer)
+        },
+        finished,
+        Instant::now,
+        std::thread::sleep,
+    )
+}
+
+fn collect_output(
+    mut read: impl FnMut(&mut [u8], bool) -> std::io::Result<usize>,
+    finished: &AtomicBool,
+    mut now: impl FnMut() -> Instant,
+    mut pause: impl FnMut(Duration),
+) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
     let mut buffer = [0_u8; 8192];
     let mut finishing = None;
     loop {
-        if finished.load(Ordering::Acquire) {
-            // Allow a raced read to reach EOF after the parent's writers close.
-            // Further bytes must not extend the grace period indefinitely.
-            let since = finishing.get_or_insert_with(Instant::now);
-            if since.elapsed() >= Duration::from_secs(1) {
-                bail!("command exited with an output stream still open in a descendant");
-            }
+        let begin_drain = finishing.is_none() && finished.load(Ordering::Acquire);
+        if begin_drain {
+            finishing = Some(now());
         }
-        match stream.read(&mut buffer) {
+        // Check the deadline before observing readiness, but reject only an open,
+        // idle stream. Ready bytes and EOF survive reader scheduling delays;
+        // the byte cap still bounds a descendant that continuously fills the socket.
+        let expired = finishing
+            .is_some_and(|since| now().saturating_duration_since(since) >= Duration::from_secs(1));
+        match read(&mut buffer, begin_drain) {
             Ok(0) => return Ok(bytes),
             Ok(count) => {
                 if count > CAPTURE_LIMIT - bytes.len() {
@@ -327,8 +346,20 @@ fn read_bounded(stream: &mut dyn Read, finished: &AtomicBool) -> Result<Vec<u8>>
                 if matches!(
                     error.kind(),
                     std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                ) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                ) =>
+            {
+                if expired {
+                    bail!("command exited with an output stream still open in a descendant");
+                }
+                if finishing.is_some() {
+                    pause(Duration::from_millis(10));
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
+                if expired {
+                    return Err(error.into());
+                }
+            }
             Err(error) => return Err(error.into()),
         }
     }

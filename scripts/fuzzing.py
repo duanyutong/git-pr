@@ -141,11 +141,9 @@ def replay(args: argparse.Namespace, report: dict[str, object]) -> bool:
             "--locked",
             "--target-dir",
             "fuzz/target",
-            "--",
-            "-D",
-            "warnings",
         ],
         output / "clippy.log",
+        environment=dict(os.environ) | {"CARGO_BUILD_WARNINGS": "deny"},
     )
     report["clippy_status"] = status
     if status:

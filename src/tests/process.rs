@@ -489,17 +489,112 @@ fn output_reads_retry_transient_errors_and_preserve_permanent_failures() {
         Ok(vec![]),
     ]));
     assert_eq!(
-        super::read_bounded(&mut reader, &AtomicBool::new(false)).unwrap(),
+        super::collect_output(
+            |buffer, _| io::Read::read(&mut reader, buffer),
+            &AtomicBool::new(false),
+            Instant::now,
+            std::thread::sleep,
+        )
+        .unwrap(),
         b"complete observation"
     );
     let mut reader = Reader(VecDeque::from([Err(io::Error::new(
         io::ErrorKind::ConnectionReset,
         "capture socket reset",
     ))]));
-    let error = super::read_bounded(&mut reader, &AtomicBool::new(false)).unwrap_err();
+    let error = super::collect_output(
+        |buffer, _| io::Read::read(&mut reader, buffer),
+        &AtomicBool::new(false),
+        Instant::now,
+        std::thread::sleep,
+    )
+    .unwrap_err();
     let cause = error.downcast_ref::<io::Error>().unwrap();
     assert_eq!(cause.kind(), io::ErrorKind::ConnectionReset);
     assert_eq!(cause.to_string(), "capture socket reset");
+}
+
+#[test]
+fn completed_output_survives_reader_scheduling_delays() {
+    use std::{cell::Cell, io::Read as _, sync::atomic::AtomicBool};
+
+    let now = Cell::new(Instant::now());
+    let expected = vec![b'x'; 20_000];
+    let mut reader = std::io::Cursor::new(&expected);
+    let output = super::collect_output(
+        |buffer, _| {
+            let count = reader.read(buffer)?;
+            now.set(now.get() + Duration::from_secs(2));
+            Ok(count)
+        },
+        &AtomicBool::new(true),
+        || now.get(),
+        |_| panic!("ready output and EOF must not wait"),
+    )
+    .unwrap();
+    assert_eq!(output, expected);
+}
+
+#[test]
+fn completed_output_accepts_eof_after_a_delayed_readiness_observation() {
+    use std::{cell::Cell, io, sync::atomic::AtomicBool};
+
+    let now = Cell::new(Instant::now());
+    let mut first = true;
+    let output = super::collect_output(
+        |_, _| {
+            if std::mem::take(&mut first) {
+                now.set(now.get() + Duration::from_secs(2));
+                Err(io::ErrorKind::WouldBlock.into())
+            } else {
+                Ok(0)
+            }
+        },
+        &AtomicBool::new(true),
+        || now.get(),
+        |_| {},
+    )
+    .unwrap();
+    assert_eq!(output, b"");
+}
+
+#[test]
+fn continuously_ready_post_exit_output_remains_byte_bounded() {
+    use std::sync::atomic::AtomicBool;
+
+    let now = Instant::now();
+    let error = super::collect_output(
+        |buffer, _| {
+            buffer.fill(b'x');
+            Ok(buffer.len())
+        },
+        &AtomicBool::new(true),
+        || now,
+        |_| panic!("continuously ready output must not wait"),
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("output exceeded 64 MiB"));
+}
+
+#[test]
+fn interrupted_post_exit_output_cannot_retry_indefinitely() {
+    use std::{cell::Cell, io, sync::atomic::AtomicBool};
+
+    let now = Cell::new(Instant::now());
+    let error = super::collect_output(
+        |_, _| {
+            now.set(now.get() + Duration::from_secs(2));
+            Err(io::ErrorKind::Interrupted.into())
+        },
+        &AtomicBool::new(true),
+        || now.get(),
+        |_| panic!("interrupted reads must retain their original error"),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<io::Error>().unwrap().kind(),
+        io::ErrorKind::Interrupted
+    );
 }
 
 #[test]
