@@ -8,7 +8,7 @@ No successful finite campaign establishes the absence of all defects.
 ## Commands and prerequisites
 
 Run commands from the repository root after the normal [development setup](development.md).
-The declared `prek` hooks provision cargo-mutants `27.1.0` and cargo-fuzz `0.13.2` in their managed environments; no additional repository-specific executable path is required.
+The declared `prek` hooks provision cargo-mutants `27.1.0`, cargo-nextest `0.9.152` and cargo-fuzz `0.13.2` in their managed environments; no additional repository-specific executable path is required.
 The property-testing dependency and its transitive graph are resolved by the root `Cargo.lock`, while the independent fuzz workspace has its own `fuzz/Cargo.lock`.
 Ordinary property tests and retained fuzz replay use the supported stable compiler.
 Coverage-guided fuzzing requires `nightly-2026-10-14` and a supported C++ compiler, as specified by the [Rust Fuzz Book](https://rust-fuzz.github.io/book/cargo-fuzz/setup.html).
@@ -91,7 +91,21 @@ It does not establish that every conceivable variation of those defects has been
 [cargo-mutants](https://mutants.rs/) introduces small production changes and executes the selected tests to determine whether their assertions detect those changes.
 The reviewed file and name filters in [.cargo/mutants.toml](../.cargo/mutants.toml) prioritise trailer interpretation, literal ref validation, trunk protection, selection, ref recovery and submission policy.
 Their source scope comprises `src/model/trailers.rs`, `src/git/policy.rs`, `src/stack/selection.rs` and `src/submission/policy.rs`; directory reorganisation does not expand or reduce that behavioural scope.
-It runs locked library unit tests and applies bounded build and test deadlines, with a minimum test allowance of 60 seconds.
+It runs the same locked library unit selection through nextest and applies bounded build and test deadlines, with a minimum test allowance of 60 seconds.
+The dedicated Cargo `mutants` profile inherits test semantics, removes debug symbols and enables incremental compilation; the campaign explicitly enables incremental compilation in its child environment.
+The separate nextest `mutants` profile prioritises existing fast policy assertions and stops a mutated execution after its first failing test, whilst the successful baseline and any surviving mutation must complete the selected suite.
+This ordering does not remove tests, assertions, generated inputs or workflow sequences.
+Ordinary acceptance, doctests and strict unit coverage retain their existing commands.
+In-memory Git fixtures retain compiled configuration expressions within each independent fixture and continue observing current configuration values and response overrides on every query.
+
+The default campaign uses two mutation workers; `GIT_PR_MUTATION_JOBS=1 just mutants` limits local execution to one worker.
+The override accepts one or two workers, and nextest inherits `RUST_TEST_THREADS` unless `NEXTEST_TEST_THREADS` is explicitly supplied.
+For serial local execution, set `CARGO_BUILD_JOBS=1`, `RUST_TEST_THREADS=1`, `NEXTEST_TEST_THREADS=1` and `GIT_PR_MUTATION_JOBS=1`.
+The campaign report records the tool versions, worker count, test concurrency and build profile alongside its outcomes.
+
+The `just mutants` recipe follows the current campaign log outside prek so that native mutation completions and elapsed-time heartbeats remain visible during execution.
+The follower ignores unchanged cached output, follows newly created or replaced files and reports completed counts from fresh machine-readable outcomes.
+Previous evidence remains archived, the campaign retains its existing process-group timeout and the recipe reaps its follower after success, failure or cancellation.
 The actual generated inventory is authoritative for the executed scope and may additionally include tool-generated structure-field changes within the selected files.
 The declared filter alone shall not be represented as an exact count of examined functions or mutations.
 Functions and mutation operators absent from the recorded inventory receive no implied mutation score.

@@ -262,12 +262,106 @@ class MutationVerdictTests(unittest.TestCase):
                 self.validate(data, inventory)
 
 
+class NextestMutationVerdictTests(MutationVerdictTests):
+    """Apply the same evidence requirements to the pinned nextest protocol."""
+
+    def outcomes(self, *summaries: str, baseline: str | None = "Success") -> tuple[dict, list]:
+        data, inventory = super().outcomes(*summaries, baseline=baseline)
+        for outcome in data["outcomes"]:
+            for phase in outcome["phase_results"]:
+                phase["argv"][1:2] = ["nextest", "run"]
+                if phase["phase"] == "Test" and phase["process_status"] == {"Failure": 101}:
+                    phase["process_status"] = {"Failure": 100}
+            if outcome["summary"] == "Unviable":
+                continue
+            (self.directory / outcome["log_path"]).write_text(
+                "    FAIL [  0.010s] git-pr tests::contract\n"
+                "Summary [  0.020s] 1/167 tests run: 0 passed, 1 failed, 166 skipped\n"
+                if outcome["summary"] == "CaughtMutant"
+                else "    PASS [  0.010s] git-pr tests::contract\n"
+                "Summary [  0.020s] 167 tests run: 167 passed, 1 skipped\n"
+            )
+        return data, inventory
+
+    def test_completed_failing_suite_is_also_detected(self) -> None:
+        data, inventory = self.outcomes("CaughtMutant")
+        log = self.directory / data["outcomes"][1]["log_path"]
+        log.write_text(log.read_text().replace("1/167 tests run", "167 tests run"))
+        self.assertEqual(self.validate(data, inventory)["caught"], 1)
+
+    def test_verbose_failure_with_padded_test_ordinal_is_detected(self) -> None:
+        data, inventory = self.outcomes("CaughtMutant")
+        log = self.directory / data["outcomes"][1]["log_path"]
+        log.write_text(log.read_text().replace("] git-pr", "] (  7/229) git-pr"))
+        self.assertEqual(self.validate(data, inventory)["caught"], 1)
+
+    def test_individually_valid_outcomes_cannot_mix_test_protocols(self) -> None:
+        data, inventory = self.outcomes("CaughtMutant")
+        mutant = data["outcomes"][1]
+        for phase in mutant["phase_results"]:
+            phase["argv"][1:3] = ["test"]
+        mutant["phase_results"][1]["process_status"] = {"Failure": 101}
+        (self.directory / mutant["log_path"]).write_text(
+            "test tests::contract ... FAILED\n"
+            "test result: FAILED. 166 passed; 1 failed; 0 ignored;\n"
+        )
+        with self.assertRaisesRegex(AssertionError, "campaign uses different"):
+            self.validate(data, inventory)
+
+    def test_rejects_empty_execution_wrong_exits_and_nonassertion_failures(self) -> None:
+        for variation in ("empty", "exec failure", "abort", "wrong exit", "missing run", "mixed"):
+            with self.subTest(variation=variation):
+                data, inventory = self.outcomes("CaughtMutant")
+                baseline, mutant = data["outcomes"]
+                if variation == "empty":
+                    (self.directory / baseline["log_path"]).write_text(
+                        "Summary [0.0s] 0 tests run: 0 passed, 167 skipped\n"
+                    )
+                elif variation in ("exec failure", "abort"):
+                    log = self.directory / mutant["log_path"]
+                    log.write_text(log.read_text().replace("    FAIL", "    EXECFAIL"))
+                elif variation == "wrong exit":
+                    mutant["phase_results"][1]["process_status"] = {"Failure": 101}
+                elif variation == "missing run":
+                    mutant["phase_results"][1]["argv"] = ["cargo", "nextest", "--lib"]
+                else:
+                    for phase in mutant["phase_results"]:
+                        phase["argv"][1:3] = ["test"]
+                with self.assertRaises(AssertionError):
+                    self.validate(data, inventory)
+
+
 class ChangedMutationScopeTests(unittest.TestCase):
     """An empty changed-line intersection is evidence of nonexecution, not a full gate."""
+
+    def test_invalid_worker_budgets_do_not_start_a_campaign(self) -> None:
+        for workers in ("0", "-1", "3", "invalid"):
+            with (
+                self.subTest(workers=workers),
+                unittest.mock.patch.object(
+                    assurance.subprocess,
+                    "check_output",
+                    side_effect=[
+                        f"cargo-mutants {assurance.MUTANTS_VERSION}",
+                        f"cargo-nextest {assurance.NEXTEST_VERSION}",
+                    ],
+                ),
+                unittest.mock.patch.dict(os.environ, {"GIT_PR_MUTATION_JOBS": workers}),
+                unittest.mock.patch.object(assurance, "execute") as execute,
+                self.assertRaisesRegex(ValueError, "must be 1 or 2"),
+            ):
+                assurance.mutants({})
+            execute.assert_not_called()
 
     def test_empty_diff_requires_fresh_successful_explicit_nonexecution_evidence(self) -> None:
         for variation in (
             "valid",
+            "empty without inventory",
+            "empty diff without inventory",
+            "no source without inventory",
+            "unscoped without inventory",
+            "stale outcomes without inventory",
+            "failed command without inventory",
             "full scope",
             "missing notice",
             "stale outcomes",
@@ -287,15 +381,22 @@ class ChangedMutationScopeTests(unittest.TestCase):
                 ) -> dict:
                     directory = log.parent / "mutants.out"
                     directory.mkdir(parents=True)
-                    (directory / "mutants.json").write_text("[]\n")
+                    if "without inventory" not in variation:
+                        (directory / "mutants.json").write_text("[]\n")
                     log.write_text(
                         ""
                         if variation == "missing notice"
+                        else "INFO Diff file is empty\n"
+                        if variation == "empty diff without inventory"
+                        else "INFO Diff changes no Rust source files\n"
+                        if variation == "no source without inventory"
+                        else "INFO No mutants to filter\n"
+                        if "without inventory" in variation
                         else "No mutants found under the active filters\n"
                     )
-                    if variation == "stale outcomes":
+                    if variation.startswith("stale outcomes"):
                         (directory / "outcomes.json").write_text("{}")
-                    return {"status": 1 if variation == "failed command" else 0}
+                    return {"status": 1 if variation.startswith("failed command") else 0}
 
                 with (
                     unittest.mock.patch.object(assurance, "ROOT", root),
@@ -305,14 +406,27 @@ class ChangedMutationScopeTests(unittest.TestCase):
                     unittest.mock.patch.object(
                         assurance.subprocess,
                         "check_output",
-                        side_effect=[f"cargo-mutants {assurance.MUTANTS_VERSION}", "a" * 40],
+                        side_effect=[
+                            f"cargo-mutants {assurance.MUTANTS_VERSION}",
+                            f"cargo-nextest {assurance.NEXTEST_VERSION}",
+                            "a" * 40,
+                        ],
                     ),
                     unittest.mock.patch.dict(
                         os.environ,
-                        {"GIT_PR_MUTATION_BASE": "" if variation == "full scope" else "base"},
+                        {
+                            "GIT_PR_MUTATION_BASE": ""
+                            if variation in ("full scope", "unscoped without inventory")
+                            else "base"
+                        },
                     ),
                 ):
-                    if variation == "valid":
+                    if variation in (
+                        "valid",
+                        "empty without inventory",
+                        "empty diff without inventory",
+                        "no source without inventory",
+                    ):
                         assurance.mutants(report)
                         self.assertEqual(report["mutation"]["status"], "no changed mutations")
                         self.assertEqual(report["mutation"]["examined"], 0)

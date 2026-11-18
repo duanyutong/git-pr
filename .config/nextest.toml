@@ -1,0 +1,7 @@
+[profile.mutants]
+fail-fast = true
+retries = 0
+
+[[profile.mutants.overrides]]
+filter = "test(tests::unit::pure::) | test(tests::unit::policy::) | test(tests::unit::local_protocol::) | test(tests::unit::mutations::) | test(tests::unit::errors::)"
+priority = 100

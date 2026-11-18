@@ -23,6 +23,7 @@ test:
     uv run --locked scripts/test_version.py
     uv run scripts/test_coverage.py
     uv run scripts/test_assurance.py
+    uv run --locked scripts/test_mutation_progress.py
     uv run --locked scripts/test_fuzzing.py
     prek run acceptance-tests --all-files --hook-stage manual --verbose
     uv run scripts/measure.py doctests cargo test --workspace --doc --all-features --locked
@@ -74,6 +75,26 @@ assurance:
     prek run assurance regression-sensitivity fuzz-smoke --all-files --hook-stage manual --verbose
 
 mutants base="":
+    #!/bin/sh
+    set -eu
+    progress_dir=$(mktemp -d)
+    uv run --locked scripts/mutation_progress.py "$progress_dir/ready" &
+    progress_pid=$!
+    stop_progress() {
+        kill "$progress_pid" 2>/dev/null || true
+        wait "$progress_pid" 2>/dev/null || true
+        rm -rf "$progress_dir"
+    }
+    trap stop_progress EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    while [ ! -f "$progress_dir/ready" ]; do
+        if ! kill -0 "$progress_pid" 2>/dev/null; then
+            wait "$progress_pid"
+            exit 1
+        fi
+        sleep 0.05
+    done
     GIT_PR_MUTATION_BASE="$1" prek run mutants --all-files --hook-stage manual --verbose
 
 fuzz-smoke:

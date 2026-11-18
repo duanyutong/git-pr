@@ -70,6 +70,7 @@ pub(crate) struct Memory {
     pub responses: BTreeMap<String, VecDeque<Response>>,
     pub http_responses: BTreeMap<String, VecDeque<Response>>,
     pub config: BTreeMap<String, String>,
+    pub compiled_config_patterns: BTreeMap<String, regex::Regex>,
     pub files: BTreeMap<PathBuf, String>,
     pub file_errors: BTreeMap<PathBuf, std::io::ErrorKind>,
     pub attempt_error: Option<std::io::ErrorKind>,
@@ -418,7 +419,12 @@ impl CommandRunner for World {
             strings.as_slice()
         };
         if program == "git" && view.get(1) == Some(&"--null") && view.contains(&"--get-regexp") {
-            let pattern = regex::Regex::new(view.last().unwrap()).unwrap();
+            let expression = *view.last().unwrap();
+            let pattern = m
+                .compiled_config_patterns
+                .entry(expression.to_owned())
+                .or_insert_with(|| regex::Regex::new(expression).unwrap())
+                .clone();
             let prefix = view
                 .iter()
                 .find(|arg| arg.starts_with("--type="))

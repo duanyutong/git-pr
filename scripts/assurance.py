@@ -19,6 +19,7 @@ import time
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 EVIDENCE = ROOT / "target/validation/assurance"
 MUTANTS_VERSION = "27.1.0"
+NEXTEST_VERSION = "0.9.152"
 DEFAULT_SEED = "5138697615354058066"
 
 
@@ -334,7 +335,13 @@ def archive(gate: str) -> None:
 def source_identity() -> dict[str, str]:
     """Record the source and scope used by each campaign before execution."""
     paths = [*ROOT.glob("src/**/*.rs"), ROOT / "Cargo.toml", ROOT / "Cargo.lock"]
-    paths.extend([ROOT / ".cargo/mutants.toml", pathlib.Path(__file__).resolve()])
+    paths.extend(
+        [
+            ROOT / ".cargo/mutants.toml",
+            ROOT / ".config/nextest.toml",
+            pathlib.Path(__file__).resolve(),
+        ]
+    )
     return {
         str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
         for path in sorted(paths)
@@ -512,7 +519,7 @@ def mutation_log(directory: pathlib.Path, outcome: dict) -> str:
     return re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", path.read_text())
 
 
-def validate_mutation_phases(outcome: dict, directory: pathlib.Path) -> None:
+def validate_mutation_phases(outcome: dict, directory: pathlib.Path) -> str:
     """Require actual build and assertion evidence rather than trusting summary labels."""
     phases = outcome.get("phase_results")
     if not isinstance(phases, list) or not all(isinstance(phase, dict) for phase in phases):
@@ -520,6 +527,7 @@ def validate_mutation_phases(outcome: dict, directory: pathlib.Path) -> None:
     unviable = outcome["summary"] == "Unviable"
     if [phase.get("phase") for phase in phases] != (["Build"] if unviable else ["Build", "Test"]):
         raise AssertionError("incomplete or unexpected mutation phases")
+    runners = []
     for phase in phases:
         duration = phase.get("duration")
         if type(duration) not in (int, float) or not math.isfinite(duration) or duration < 0:
@@ -527,13 +535,16 @@ def validate_mutation_phases(outcome: dict, directory: pathlib.Path) -> None:
         argv = phase.get("argv")
         if not isinstance(argv, list) or not argv or not all(isinstance(arg, str) for arg in argv):
             raise AssertionError("missing mutation phase command")
+        runner = "nextest" if argv[1:3] == ["nextest", "run"] else "cargo"
         if (
-            len(argv) < 2
-            or pathlib.Path(argv[0]).name != "cargo"
-            or argv[1] != "test"
+            pathlib.Path(argv[0]).name != "cargo"
+            or (runner == "cargo" and argv[1:2] != ["test"])
             or ("--no-run" in argv) != (phase["phase"] == "Build")
         ):
             raise AssertionError("unexpected mutation phase command")
+        runners.append(runner)
+    if len(set(runners)) != 1:
+        raise AssertionError("mutation phases use different test runners")
     if unviable:
         status = phases[0].get("process_status")
         if (
@@ -544,21 +555,36 @@ def validate_mutation_phases(outcome: dict, directory: pathlib.Path) -> None:
         ):
             raise AssertionError("unviable mutant did not have a failed build")
         mutation_log(directory, outcome)
-        return
+        return runners[0]
     if phases[0].get("process_status") != "Success":
         raise AssertionError("mutation build did not succeed")
     log = mutation_log(directory, outcome)
+    nextest = runners[0] == "nextest"
     if outcome["scenario"] == "Baseline":
-        if phases[1].get("process_status") != "Success" or not re.search(
-            r"(?m)^test result: ok\. [1-9]\d* passed; 0 failed;", log
-        ):
+        pattern = (
+            r"(?m)^\s*Summary \[[^\r\n]+\] [1-9]\d* tests? run: [1-9]\d* passed(?:, \d+ skipped)?\s*$"
+            if nextest
+            else r"(?m)^test result: ok\. [1-9]\d* passed; 0 failed;"
+        )
+        if phases[1].get("process_status") != "Success" or not re.search(pattern, log):
             raise AssertionError("mutation baseline did not execute a nonempty passing suite")
     elif (
-        phases[1].get("process_status") != {"Failure": 101}
-        or not re.search(r"(?m)^test result: FAILED\. \d+ passed; [1-9]\d* failed;", log)
-        or not re.search(r"(?m)^test [^\r\n]+ \.\.\. FAILED\r?$", log)
+        phases[1].get("process_status") != {"Failure": 100 if nextest else 101}
+        or not re.search(
+            r"(?m)^\s*Summary \[[^\r\n]+\] [1-9]\d*(?:/\d+)? tests? run: [^\r\n]*\b[1-9]\d* failed\b"
+            if nextest
+            else r"(?m)^test result: FAILED\. \d+ passed; [1-9]\d* failed;",
+            log,
+        )
+        or not re.search(
+            r"(?m)^\s*FAIL \[[^\r\n]+\] (?:\(\s*\d+/\d+\)\s+)?\S+ \S+\s*$"
+            if nextest
+            else r"(?m)^test [^\r\n]+ \.\.\. FAILED\r?$",
+            log,
+        )
     ):
         raise AssertionError("caught mutant lacks executed assertion failure evidence")
+    return runners[0]
 
 
 def validate_mutants(data: dict, inventory: list, directory: pathlib.Path) -> dict:
@@ -611,8 +637,9 @@ def validate_mutants(data: dict, inventory: list, directory: pathlib.Path) -> di
     ]
     if unresolved:
         raise AssertionError(f"unresolved mutation outcomes: {unresolved}")
-    for outcome in outcomes:
-        validate_mutation_phases(outcome, directory)
+    runners = {validate_mutation_phases(outcome, directory) for outcome in outcomes}
+    if len(runners) != 1:
+        raise AssertionError("mutation campaign uses different test runners")
     if not data["caught"]:
         raise AssertionError("mutation campaign detected no executable mutations")
     return {
@@ -630,9 +657,38 @@ def mutants(report: dict) -> None:
     if version != f"cargo-mutants {MUTANTS_VERSION}":
         raise AssertionError(f"unexpected mutation tool: {version}")
     report["tool"] = version
+    nextest = (
+        subprocess.check_output(["cargo", "nextest", "--version"], text=True)
+        .strip()
+        .partition("\n")[0]
+    )
+    if nextest.split()[:2] != ["cargo-nextest", NEXTEST_VERSION]:
+        raise AssertionError(f"unexpected test runner: {nextest}")
+    report["test_tool"] = nextest
+    workers = os.environ.get("GIT_PR_MUTATION_JOBS", "2")
+    if workers not in ("1", "2"):
+        raise ValueError("GIT_PR_MUTATION_JOBS must be 1 or 2")
+    environment = dict(os.environ, CARGO_INCREMENTAL="1")
+    environment.setdefault("NEXTEST_TEST_THREADS", environment.get("RUST_TEST_THREADS", "6"))
+    report["execution"] = {
+        "profile": "mutants",
+        "incremental": True,
+        "workers": int(workers),
+        "test_threads": environment["NEXTEST_TEST_THREADS"],
+    }
     output = EVIDENCE / "mutants"
     output.mkdir(parents=True, exist_ok=True)
-    command = ["cargo", "mutants", "--no-shuffle", "--jobs", "2", "--output", str(output)]
+    command = [
+        "cargo",
+        "mutants",
+        "--no-shuffle",
+        "--caught",
+        "--unviable",
+        "--jobs",
+        workers,
+        "--output",
+        str(output),
+    ]
     resolved = ""
     base = os.environ.get("GIT_PR_MUTATION_BASE", "")
     if base:
@@ -649,20 +705,31 @@ def mutants(report: dict) -> None:
             )
         command.extend(["--in-diff", str(patch)])
         report["diff_base"] = resolved
-    result = execute(command, output / "campaign.log", timeout=5400)
+    result = execute(command, output / "campaign.log", environment=environment, timeout=5400)
     report["commands"].append(result)
     directory = output / "mutants.out"
     inventory_path = directory / "mutants.json"
-    if not inventory_path.is_file():
+    outcomes = directory / "outcomes.json"
+    notice = re.search(
+        r"(?m)^\s*(?:INFO\s+)?(?:No mutants (?:to filter|found under the active filters)|Diff file is empty|Diff changes no Rust source files)\s*$",
+        re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", (output / "campaign.log").read_text()),
+    )
+    if inventory_path.is_file():
+        inventory = json.loads(inventory_path.read_text())
+    elif base and result["status"] == 0 and notice:
+        # The pinned tool can stop before writing an empty inventory for an excluded diff.
+        inventory = []
+    else:
         raise AssertionError(f"mutation campaign produced no inventory: {result}")
-    inventory = json.loads(inventory_path.read_text())
     if not isinstance(inventory, list):
         raise AssertionError("malformed mutation inventory")
     for mutant in inventory:
         mutation_identity(mutant)
     report["scope"] = {
-        "inventory": str(inventory_path.relative_to(ROOT)),
-        "inventory_sha256": hashlib.sha256(inventory_path.read_bytes()).hexdigest(),
+        "inventory": str(inventory_path.relative_to(ROOT)) if inventory_path.is_file() else None,
+        "inventory_sha256": hashlib.sha256(inventory_path.read_bytes()).hexdigest()
+        if inventory_path.is_file()
+        else None,
         "planned_mutations": len(inventory),
         "changed_lines_only": bool(base),
         "files": sorted({mutant["file"] for mutant in inventory}),
@@ -675,15 +742,10 @@ def mutants(report: dict) -> None:
         ),
         "operators": sorted({mutant["genre"] for mutant in inventory}),
     }
-    outcomes = directory / "outcomes.json"
     # The pinned tool writes no outcomes file when an in-diff inventory is empty.
     if base and not inventory:
         require_success(result)
-        if (
-            outcomes.exists()
-            or "No mutants found under the active filters"
-            not in (output / "campaign.log").read_text()
-        ):
+        if outcomes.exists() or not notice:
             raise AssertionError("empty changed scope lacks fresh nonexecution evidence")
         report["mutation"] = {
             "status": "no changed mutations",

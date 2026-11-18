@@ -2,6 +2,52 @@
 
 use crate::tests::unit::support::stack_probe;
 
+#[test]
+fn repeated_configuration_patterns_observe_changes_overrides_and_independent_fixtures() {
+    use crate::commands::CommandRunner as _;
+
+    let query = |world: &World, pattern: &str| {
+        world
+            .execute(
+                "git",
+                &["config", "--null", "--get-regexp", pattern].map(str::to_owned),
+                std::path::Path::new("/unit/repo"),
+                &std::collections::BTreeMap::new(),
+            )
+            .unwrap()
+            .text
+    };
+    let world = World::new(0);
+    world
+        .0
+        .lock()
+        .unwrap()
+        .config
+        .insert("example.Value".into(), "first".into());
+    assert_eq!(query(&world, r"^example\."), "example.value\nfirst\0");
+    world
+        .0
+        .lock()
+        .unwrap()
+        .config
+        .insert("example.Value".into(), "second".into());
+    assert_eq!(query(&world, r"^example\."), "example.value\nsecond\0");
+    world.reply("git config --get example.value", 0, "override");
+    assert_eq!(query(&world, r"^example\."), "example.value\noverride\0");
+    assert_eq!(query(&world, r"^EXAMPLE\."), "");
+    let independent = World::new(0);
+    independent
+        .0
+        .lock()
+        .unwrap()
+        .config
+        .insert("example.Value".into(), "independent".into());
+    assert_eq!(
+        query(&independent, r"^example\."),
+        "example.value\nindependent\0"
+    );
+}
+
 fn observed_author_date(value: &str) -> anyhow::Result<time::OffsetDateTime> {
     let world = World::new(1);
     let base = "0".repeat(40);
