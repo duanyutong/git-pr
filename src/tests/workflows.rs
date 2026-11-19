@@ -91,6 +91,26 @@ fn first_repeat_and_unchanged_submission_preserve_bases_bodies_and_draft_choice(
 }
 
 #[test]
+fn checked_out_stack_tip_wins_over_an_unbound_branch_at_the_same_commit() {
+    let f = Fixture::new(3, false);
+    let alias = "other-work";
+    f.git(&["branch", alias]);
+
+    f.run(&[]).unwrap();
+
+    let prs = f.service.prs.lock().unwrap();
+    assert_eq!(prs.len(), 3);
+    assert_eq!(prs[&103]["head"]["ref"], "topic/3");
+    assert_eq!(prs[&103]["base"]["ref"], "topic/2");
+    drop(prs);
+    assert_eq!(
+        f.git(&["ls-remote", "--heads", "origin", "refs/heads/other-work"]),
+        ""
+    );
+    assert_eq!(f.git(&["rev-parse", alias]), f.hashes[2]);
+}
+
+#[test]
 fn selections_retain_existing_bases_or_fail_before_publication() {
     for selection in [
         vec!["topic/2"],

@@ -17,7 +17,11 @@ fn inspect(
         transport: world.as_ref(),
         template: "",
     };
-    resolve(&github, selected, records, branches, false, true, None)
+    let anchors = Anchors {
+        branches: branches.clone(),
+        current_branch: None,
+    };
+    resolve(&github, selected, records, &anchors, false, true, None)
 }
 
 #[derive(Debug)]

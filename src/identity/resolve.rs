@@ -11,29 +11,52 @@ use crate::{
 use anyhow::{Context, Result, bail};
 use std::collections::{BTreeMap, BTreeSet};
 
+#[derive(Default)]
+struct Anchors {
+    branches: BTreeMap<String, String>,
+    current_branch: Option<String>,
+}
+
 pub(crate) fn inventory(commands: &Commands) -> Result<BTreeMap<String, String>> {
+    Ok(observe_anchors(commands)?.branches)
+}
+
+fn observe_anchors(commands: &Commands) -> Result<Anchors> {
     let output = commands
-        .git(&["branch", "--format=%(refname:strip=2)|%(objectname)"])
+        .git(&[
+            "branch",
+            "--format=%(if)%(HEAD)%(then)*%(end)%(refname:strip=2)|%(objectname)",
+        ])
         .context("failed to observe local branches")?;
-    let mut branches = BTreeMap::new();
+    let mut anchors = Anchors::default();
     for line in output.lines() {
         let (name, oid) = line
             .rsplit_once('|')
             .context("invalid local anchor observation")?;
+        let checked_out = name.strip_prefix('*');
+        let name = checked_out.unwrap_or(name);
         if crate::stack::selection::ignored_branch(name) || name == "(no branch)" {
             continue;
         }
         Git::validate_remote_ref(name)?;
-        if branches.insert(name.into(), oid.into()).is_some() {
+        if anchors.branches.insert(name.into(), oid.into()).is_some() {
             bail!("duplicate local anchor {name:?}");
         }
+        if let Some(name) = checked_out
+            && anchors.current_branch.replace(name.into()).is_some()
+        {
+            bail!("multiple checked-out local branches in anchor observation");
+        }
     }
-    Ok(branches)
+    Ok(anchors)
 }
 
 pub(crate) fn prepare(github: &GitHub<'_>, stack: &mut [Commit], start: usize) -> Result<()> {
     let records = Records::read(github.commands)?;
-    let branches = inventory(github.commands)?;
+    let mut anchors = observe_anchors(github.commands)?;
+    if github.config.repo.jj {
+        anchors.current_branch = None;
+    }
     let preview = github.config.dry_run || github.config.stop_after == Some(Checkpoint::Rewrite);
     let attempts = records.attempts(&github.config.repo)?;
     let mut push_targets = None;
@@ -44,7 +67,7 @@ pub(crate) fn prepare(github: &GitHub<'_>, stack: &mut [Commit], start: usize) -
             if !commit.attr(REMOTE_REF).is_empty() {
                 references.insert(commit.attr(REMOTE_REF).to_owned());
             }
-            if let Some(name) = anchor(commit, &records, &branches)? {
+            if let Some(name) = anchor(commit, &records, &anchors)? {
                 // Include unbound anchors in the same query as established heads.
                 // Exact-commit discovery still runs before choosing an identity.
                 if let Some(head) = records.head(&name, &github.config.repo)? {
@@ -89,7 +112,7 @@ pub(crate) fn prepare(github: &GitHub<'_>, stack: &mut [Commit], start: usize) -
             github,
             commit,
             &records,
-            &branches,
+            &anchors,
             preview,
             selected,
             push_targets.as_ref(),
@@ -120,15 +143,12 @@ pub(crate) fn prepare(github: &GitHub<'_>, stack: &mut [Commit], start: usize) -
             commit.publication = Some(binding);
         }
     }
-    validate_unique(stack, start, &records, &branches)
+    validate_unique(stack, start, &records, &anchors.branches)
 }
 
-fn anchor(
-    commit: &Commit,
-    records: &Records,
-    branches: &BTreeMap<String, String>,
-) -> Result<Option<String>> {
-    let candidates: Vec<_> = branches
+fn anchor(commit: &Commit, records: &Records, anchors: &Anchors) -> Result<Option<String>> {
+    let candidates: Vec<_> = anchors
+        .branches
         .iter()
         .filter(|(_, oid)| *oid == &commit.hash)
         .map(|(name, _)| name.as_str())
@@ -149,7 +169,8 @@ fn anchor(
         &bound
     };
     match eligible.as_slice() {
-        [] => Ok(branches
+        [] => Ok(anchors
+            .branches
             .contains_key(commit.attr(REMOTE_REF))
             .then(|| commit.attr(REMOTE_REF).to_owned())),
         [name] => Ok(Some((*name).into())),
@@ -157,6 +178,14 @@ fn anchor(
             .iter()
             .find(|name| **name == commit.attr(REMOTE_REF))
             .map(|name| (*name).to_string())),
+        _ if bound.is_empty()
+            && anchors
+                .current_branch
+                .as_deref()
+                .is_some_and(|name| candidates.contains(&name)) =>
+        {
+            Ok(anchors.current_branch.clone())
+        }
         _ => bail!(
             "ambiguous local anchors for {}: {}; explicitly bind one anchor",
             commit.short_hash(),
@@ -196,13 +225,14 @@ fn resolve(
     github: &GitHub<'_>,
     commit: &Commit,
     records: &Records,
-    branches: &BTreeMap<String, String>,
+    anchors: &Anchors,
     preview: bool,
     selected: bool,
     push_targets: Option<&BTreeMap<String, String>>,
 ) -> Result<Option<Binding>> {
     let repo = &github.config.repo;
-    let anchor = anchor(commit, records, branches)?;
+    let anchor = anchor(commit, records, anchors)?;
+    let branches = &anchors.branches;
     let previous = match (repo.jj, anchor.as_deref()) {
         (true, Some(name)) => previous_anchor(commit, name, records, branches)?,
         _ => None,

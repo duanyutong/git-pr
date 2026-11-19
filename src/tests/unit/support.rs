@@ -19,6 +19,9 @@ use std::{
     time::Duration,
 };
 
+pub(crate) const ANCHOR_INVENTORY: &str =
+    "git branch --format=%(if)%(HEAD)%(then)*%(end)%(refname:strip=2)|%(objectname)";
+
 thread_local! {
     pub(crate) static MESSAGE_SERIALISATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     pub(crate) static PR_REFRESH_PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -594,11 +597,19 @@ impl CommandRunner for World {
                 "branchless".into()
             }
             ("git", ["branch", "--show-current"]) => m.branch.clone(),
-            ("git", ["branch", _]) => m
+            ("git", ["branch", format]) => m
                 .commits
                 .iter()
                 .enumerate()
-                .map(|(i, c)| format!("topic/{}|{}", i + 1, c.hash))
+                .map(|(i, c)| {
+                    let name = format!("topic/{}", i + 1);
+                    let marker = if name == m.branch && format.contains("%(HEAD)") {
+                        "*"
+                    } else {
+                        ""
+                    };
+                    format!("{marker}{name}|{}", c.hash)
+                })
                 .collect::<Vec<_>>()
                 .join("\n"),
             (

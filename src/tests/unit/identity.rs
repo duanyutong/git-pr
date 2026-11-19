@@ -7,7 +7,7 @@ use super::{
 use crate::{
     github::GitHub,
     model::REMOTE_REF,
-    tests::unit::support::{World, commit},
+    tests::unit::support::{ANCHOR_INVENTORY, World, commit},
 };
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -259,24 +259,40 @@ fn completed_creation_is_adopted_before_clearing_its_attempt() {
 #[test]
 fn aliases_and_copied_bindings_do_not_depend_on_inventory_order() {
     for reverse in [false, true] {
-        let world = clean_stack(1);
-        let mut branches = [
-            format!("a|{}", commit(1).hash),
-            format!("b|{}", commit(1).hash),
-        ];
-        if reverse {
-            branches.reverse();
+        for (checked_out, bound, jujutsu, expected) in [
+            ("", &[][..], false, None),
+            ("*", &[][..], false, Some("a")),
+            ("*", &["b"][..], false, Some("b")),
+            ("*", &["a", "b"][..], false, None),
+            ("*", &[][..], true, None),
+        ] {
+            let world = clean_stack(1);
+            let mut memory = world.0.lock().unwrap();
+            memory.jj = jujutsu;
+            for name in bound {
+                memory.config.insert(
+                    format!("branch.{name}.gitPrHead"),
+                    "github.com/org/repo refs/heads/b".into(),
+                );
+            }
+            drop(memory);
+            let mut branches = [
+                format!("{checked_out}a|{}", commit(1).hash),
+                format!("b|{}", commit(1).hash),
+            ];
+            if reverse {
+                branches.reverse();
+            }
+            world.reply(ANCHOR_INVENTORY, 0, &branches.join("\n"));
+            let result = world.run(&["--no-stack"]);
+            if let Some(head) = expected {
+                result.unwrap();
+                assert_eq!(world.0.lock().unwrap().prs[&101]["head"]["ref"], head);
+            } else {
+                assert!(format!("{:#}", result.unwrap_err()).contains("ambiguous local anchors"));
+                assert_eq!(config_writes(&world), 0);
+            }
         }
-        world.reply(
-            "git branch --format=%(refname:strip=2)|%(objectname)",
-            0,
-            &branches.join("\n"),
-        );
-        assert!(
-            format!("{:#}", world.run(&["--no-stack"]).unwrap_err())
-                .contains("ambiguous local anchors")
-        );
-        assert_eq!(config_writes(&world), 0);
     }
 }
 
@@ -385,11 +401,7 @@ fn lost_anchors_require_explicit_identity_but_legacy_stacks_remain_valid() {
         };
         let config = world.config();
         let commands = world.commands();
-        world.reply(
-            "git branch --format=%(refname:strip=2)|%(objectname)",
-            0,
-            "",
-        );
+        world.reply(ANCHOR_INVENTORY, 0, "");
         let github = GitHub {
             session: crate::github::Session::default(),
             clock: None,
@@ -440,11 +452,7 @@ fn jujutsu_renames_relocate_one_association_without_changing_the_publication() {
     world.0.lock().unwrap().jj = true;
     world.run(&["--no-stack"]).unwrap();
     for name in ["renamed", "renamed-again"] {
-        world.reply(
-            "git branch --format=%(refname:strip=2)|%(objectname)",
-            0,
-            &format!("{name}|{}", commit(1).hash),
-        );
+        world.reply(ANCHOR_INVENTORY, 0, &format!("{name}|{}", commit(1).hash));
         world.run(&["--no-stack"]).unwrap();
         let memory = world.0.lock().unwrap();
         let keys: Vec<_> = memory
@@ -482,11 +490,7 @@ fn discovery_hints_must_identify_one_review_and_one_destination() {
             memory.prs.get_mut(&101).unwrap()["head"]["sha"] = json!(commit(1).hash);
             memory.trace.clear();
         }
-        world.reply(
-            "git branch --format=%(refname:strip=2)|%(objectname)",
-            0,
-            &format!("renamed|{}", commit(1).hash),
-        );
+        world.reply(ANCHOR_INVENTORY, 0, &format!("renamed|{}", commit(1).hash));
         match source {
             "editor" | "foreign-editor" | "malformed-editor" => {
                 world.0.lock().unwrap().config.insert(
@@ -583,11 +587,7 @@ fn migration_requires_unique_stable_identity_and_a_writable_origin() {
             memory.trace.clear();
         }
         if failure != "divergent" {
-            world.reply(
-                "git branch --format=%(refname:strip=2)|%(objectname)",
-                0,
-                &inventory,
-            );
+            world.reply(ANCHOR_INVENTORY, 0, &inventory);
         }
         if failure == "included" {
             let commands = world.commands();
@@ -626,11 +626,7 @@ fn stale_anchor_and_changed_bindings_stop_before_effects() {
     };
     let mut commits = world.0.lock().unwrap().commits.clone();
     resolve::prepare(&github, &mut commits, 0).unwrap();
-    world.reply(
-        "git branch --format=%(refname:strip=2)|%(objectname)",
-        0,
-        &format!("topic/1|{}", commit(2).hash),
-    );
+    world.reply(ANCHOR_INVENTORY, 0, &format!("topic/1|{}", commit(2).hash));
     assert!(resolve::verify_anchors(&commands, &commits).is_err());
     for field in ["gitPrPullRequest", "gitPrHead"] {
         world
@@ -855,17 +851,18 @@ fn interrupted_relocation_never_removes_a_concurrent_different_binding() {
 
 #[test]
 fn inventory_validates_observations_and_legacy_aliases_without_choosing_by_order() {
-    for invalid in ["incomplete", "bad..branch|oid", "a|one\na|two"] {
+    for invalid in [
+        "incomplete",
+        "bad..branch|oid",
+        "a|one\na|two",
+        "*a|one\n*b|two",
+    ] {
         let world = World::new(0);
-        world.reply(
-            "git branch --format=%(refname:strip=2)|%(objectname)",
-            0,
-            invalid,
-        );
+        world.reply(ANCHOR_INVENTORY, 0, invalid);
         assert!(resolve::inventory(&world.commands()).is_err());
     }
     for (names, binding, expected) in [
-        (vec!["other", "topic/1"], None, Some("topic/1")),
+        (vec!["*other", "topic/1"], None, Some("topic/1")),
         (vec!["a", "b"], None, None),
         (vec!["other", "topic/1"], Some("other"), Some("other")),
     ] {
@@ -877,11 +874,7 @@ fn inventory_validates_observations_and_legacy_aliases_without_choosing_by_order
             .map(|name| format!("{name}|{}", commit(1).hash))
             .collect::<Vec<_>>()
             .join("\n");
-        world.reply(
-            "git branch --format=%(refname:strip=2)|%(objectname)",
-            0,
-            &inventory,
-        );
+        world.reply(ANCHOR_INVENTORY, 0, &inventory);
         if let Some(name) = binding {
             world.0.lock().unwrap().config.insert(
                 format!("branch.{name}.gitPrHead"),
@@ -921,11 +914,7 @@ fn missing_context_and_preview_review_only_binding_do_not_invent_identity() {
         .unwrap()
         .config
         .remove("branch.topic/1.gitPrPullRequest");
-    world.reply(
-        "git branch --format=%(refname:strip=2)|%(objectname)",
-        0,
-        "main|trunk\n(no branch)|detached",
-    );
+    world.reply(ANCHOR_INVENTORY, 0, "main|trunk\n(no branch)|detached");
     let config = world.config();
     let commands = world.commands();
     let github = GitHub {
@@ -1111,11 +1100,7 @@ fn interruption_fixture(scenario: &str) -> std::sync::Arc<World> {
         memory.trace.clear();
     }
     if scenario == "renamed" {
-        world.reply(
-            "git branch --format=%(refname:strip=2)|%(objectname)",
-            0,
-            &format!("renamed|{}", commit(1).hash),
-        );
+        world.reply(ANCHOR_INVENTORY, 0, &format!("renamed|{}", commit(1).hash));
     }
     world
 }
@@ -1374,11 +1359,7 @@ fn pending_renamed_heads_require_a_fresh_open_review_observation() {
                 )],
             );
         }
-        world.reply(
-            "git branch --format=%(refname:strip=2)|%(objectname)",
-            0,
-            &format!("renamed|{}", commit(1).hash),
-        );
+        world.reply(ANCHOR_INVENTORY, 0, &format!("renamed|{}", commit(1).hash));
         assert!(world.run(&["--no-stack"]).is_err());
         assert_eq!(config_writes(&world), 0);
     }
@@ -1722,7 +1703,7 @@ fn cleanup_retains_orphans_when_observation_fails_or_an_anchor_reappears() {
             "unavailable" => world.http("POST graphql", vec![Response::Failure("unavailable".into())]),
             "reappeared" => {
                 world.0.lock().unwrap().responses.insert(
-                    "git branch --format=%(refname:strip=2)|%(objectname)".into(),
+                    ANCHOR_INVENTORY.into(),
                     VecDeque::from([
                         Response::Output(0, format!("topic/1|{}", commit(1).hash)),
                         Response::Output(0, format!("topic/1|{}\nretired|{}", commit(1).hash, commit(1).hash)),
@@ -1850,7 +1831,7 @@ fn cleanup_observation_failures_preserve_every_association_without_partial_retir
             "git config --null --show-scope --show-origin --includes --get-regexp {}",
             store::PATTERN
         );
-        let branches_query = "git branch --format=%(refname:strip=2)|%(objectname)";
+        let branches_query = ANCHOR_INVENTORY;
         let failure = Response::Failure(format!("{observation} unavailable"));
         let (query, responses) = match observation {
             "initial-config" => (config_query.clone(), VecDeque::from([failure])),
@@ -1930,7 +1911,7 @@ fn binding_verification_rejects_duplicate_heads_after_observing_the_complete_inv
     let error = resolve::verify_bindings(&world.commands(), &config.repo, &[commit(1), commit(1)])
         .unwrap_err();
     assert!(error.to_string().contains("duplicate publication head"));
-    world.fail("git branch --format=%(refname:strip=2)|%(objectname)");
+    world.fail(ANCHOR_INVENTORY);
     let error =
         resolve::verify_bindings(&world.commands(), &config.repo, &[commit(1)]).unwrap_err();
     assert!(

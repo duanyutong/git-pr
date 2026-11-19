@@ -1,5 +1,8 @@
 use super::candidate;
-use crate::{cli::Flags, tests::unit::support::World};
+use crate::{
+    cli::Flags,
+    tests::unit::support::{ANCHOR_INVENTORY, World},
+};
 
 fn standalone(count: u64) -> std::sync::Arc<World> {
     let world = World::new(count);
@@ -68,11 +71,7 @@ fn managed_branch_metadata_does_not_select_ordinary_publication() {
 #[test]
 fn standalone_multicommit_branch_pushes_once_and_preserves_every_object() {
     let world = standalone(3);
-    world.reply(
-        "git branch --format=%(refname:strip=2)|%(objectname)",
-        0,
-        &format!("topic/3|{:040x}", 3),
-    );
+    world.reply(ANCHOR_INVENTORY, 0, &format!("topic/3|{:040x}", 3));
     let original = world.0.lock().unwrap().commits.clone();
     world.run(&[]).unwrap();
     let memory = world.0.lock().unwrap();
@@ -267,7 +266,7 @@ fn standalone_requires_a_single_checked_out_anchor_and_allows_unrelated_branches
     }
     world.0.lock().unwrap().branch = "topic/2".into();
     world.reply(
-        "git branch --format=%(refname:strip=2)|%(objectname)",
+        ANCHOR_INVENTORY,
         0,
         &format!("topic/2|{:040x}\nmain|{:040x}", 2, 0),
     );
@@ -278,7 +277,7 @@ fn standalone_requires_a_single_checked_out_anchor_and_allows_unrelated_branches
         Some("topic/2")
     );
     world.reply(
-        "git branch --format=%(refname:strip=2)|%(objectname)",
+        ANCHOR_INVENTORY,
         0,
         &format!("topic/2|{:040x}\nalias|{:040x}", 2, 2),
     );
@@ -293,7 +292,7 @@ fn standalone_requires_a_single_checked_out_anchor_and_allows_unrelated_branches
 fn standalone_observation_and_push_failures_retain_diagnostics() {
     for command in [
         "git branch --show-current",
-        "git branch --format=%(refname:strip=2)|%(objectname)",
+        ANCHOR_INVENTORY,
         "git config --null --show-scope --show-origin --includes --get-regexp ^(branch\\..*\\.(gitprhead|gitprpullrequest|gitprchangeid|github-pr-owner-number|remote|merge)|git-pr\\.pendingcreate)$",
     ] {
         let world = standalone(1);

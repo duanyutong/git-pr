@@ -3,7 +3,7 @@
 Submission records publication identity in repository-local Git configuration and preserves stored commit messages, parents, trees, signatures and object identities.
 New changes require a maintained local branch or Jujutsu bookmark.
 Existing `Remote-Ref` trailers remain supported, including legacy commits without a local anchor, but submission never inserts, removes or normalises a trailer.
-Plain Git, git-branchless and Jujutsu use the same identity rules.
+The stored association model applies to plain Git, git-branchless and Jujutsu.
 Retain repository-local Git associations and existing invocation-local observations; additional caching requires new measurements demonstrating a material benefit over simpler alternatives.
 
 ## Stored association
@@ -42,6 +42,7 @@ A reused branch name therefore cannot redirect an adopted review.
 Where an association is missing, verified editor PR metadata, Git publication mappings, maintained branch names and exact PR-head object relationships provide discovery evidence.
 Upstream configuration supplies fallback evidence and cannot override an established binding.
 A pull upstream naming the trunk or an unrelated topic does not establish publication identity.
+When several unbound Git branches point to the same commit and it carries no `Remote-Ref` trailer, the branch checked out in the current worktree is preferred as the local anchor for that commit.
 Multiple credible candidates or competing bound anchors require explicit disambiguation.
 Commit titles, approximate patches and stack positions never determine review identity.
 

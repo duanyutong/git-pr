@@ -1,6 +1,6 @@
 use super::{State, presentation::validate_duplicates};
 use crate::tests::unit::support::stack_probe;
-use crate::tests::unit::support::{World, commit};
+use crate::tests::unit::support::{ANCHOR_INVENTORY, World, commit};
 use crate::{git::Git, github::GitHub, model::Commit};
 
 fn publication_effect(event: &serde_json::Value) -> bool {
@@ -300,11 +300,7 @@ fn unverifiable_reorders_stop_before_rewriting_or_remote_effects_in_both_modes()
                 }
                 (memory.commits.clone(), memory.prs.clone(), branches)
             };
-            w.reply(
-                "git branch --format=%(refname:strip=2)|%(objectname)",
-                0,
-                &branches,
-            );
+            w.reply(ANCHOR_INVENTORY, 0, &branches);
             for _ in 0..2 {
                 w.0.lock().unwrap().trace.clear();
                 let error = format!("{:#}", w.run(&flags).unwrap_err());
@@ -2560,11 +2556,7 @@ fn inferred_trunk_and_duplicate_destinations_stop_before_rewriting() {
         s.stack[1].attrs.clear();
         if trunk {
             config.repo.trunk = "develop".into();
-            w.reply(
-                "git branch --format=%(refname:strip=2)|%(objectname)",
-                0,
-                &format!("develop|{}", commit(2).hash),
-            );
+            w.reply(ANCHOR_INVENTORY, 0, &format!("develop|{}", commit(2).hash));
         }
         let error = w
             .app()
@@ -3188,11 +3180,7 @@ fn unpublished_unanchored_descendants_do_not_enter_pr_footers() {
             .retain(|key, _| !key.starts_with("branch.topic/2."));
         memory.prs.remove(&102);
     }
-    w.reply(
-        "git branch --format=%(refname:strip=2)|%(objectname)",
-        0,
-        &format!("topic/1|{}", commit(1).hash),
-    );
+    w.reply(ANCHOR_INVENTORY, 0, &format!("topic/1|{}", commit(1).hash));
     w.reply(
         "git for-each-ref --contains HEAD --format=%(objectname) refs/heads/",
         0,
@@ -3257,7 +3245,7 @@ fn recovered_descendant_heads_require_observation_before_description_changes() {
         memory.prs.get_mut(&102).unwrap()["head"]["sha"] = serde_json::json!(commit(2).hash);
     }
     w.reply(
-        "git branch --format=%(refname:strip=2)|%(objectname)",
+        ANCHOR_INVENTORY,
         0,
         &format!("topic/1|{}\nrenamed|{}", commit(1).hash, commit(2).hash),
     );

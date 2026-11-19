@@ -1,4 +1,4 @@
-use super::support::{Response, World, commit, log};
+use super::support::{ANCHOR_INVENTORY, Response, World, commit, log};
 use crate::tests::unit::support::stack_probe;
 use crate::{diagnostics::errors, model::REMOTE_REF, stack::description};
 use serde_json::{Value, json};
@@ -202,10 +202,10 @@ fn discovery_and_rewrite_failures_do_not_push_or_create_prs() {
     ] {
         let w = World::new(1);
         w.0.lock().unwrap().commits[0].attrs.clear();
-        w.0.lock().unwrap().responses.insert(
-            "git branch --format=%(refname:strip=2)|%(objectname)".into(),
-            vec![response].into(),
-        );
+        w.0.lock()
+            .unwrap()
+            .responses
+            .insert(ANCHOR_INVENTORY.into(), vec![response].into());
         assert!(format!("{:#}", w.run(&[]).unwrap_err()).contains("local branch"));
         assert_eq!(operation(&w.trace(), "git", "push"), 0);
     }
