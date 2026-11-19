@@ -54,8 +54,8 @@ The branch push uses ordinary fast-forward protection and does not prepare publi
 Repeated invocations retain this behaviour, including when the remote branch is already current.
 
 Automatic branch publication requires a checked-out branch distinct from the configured trunk, with no publication association or `Remote-Ref` trailer and no other local branch anchored within its unpublished history.
-For an otherwise standalone single-commit branch that has been rebased, a preceding local tip matching its remote-tracking tip selects managed recovery.
-Recovery requires an existing open PR for that branch and leases the update against the preceding tip, so a remote change observed after the rebase prevents the update.
+An otherwise standalone single-commit branch with diverging history enters managed recovery when its remote-tracking tip appears as a previous tip in its local reflog.
+Recovery requires an existing open PR for that branch and leases the update against that previous tip, so the update fails if the remote tip differs.
 Existing publication evidence, explicit revision selections and explicitly supplied pull-request options retain the managed workflow.
 Configured stack preferences alone do not prevent standalone branch publication.
 Use an explicit range or commit argument to request a managed pull request for an otherwise standalone branch.

@@ -4,7 +4,9 @@ use crate::{
     tests::unit::support::{ANCHOR_INVENTORY, World, commit},
 };
 
-const TRACKED_TIPS: &str = "git rev-parse --revs-only --end-of-options refs/remotes/origin/topic/1^{commit} refs/heads/topic/1@{1}^{commit}";
+const REMOTE_TIP: &str = "git rev-parse --verify refs/remotes/origin/topic/1^{commit}";
+const RECENT_REFLOG: &str = "git rev-list --walk-reflogs --max-count=3 refs/heads/topic/1 --";
+const BRANCH_REFLOG: &str = "git rev-list --walk-reflogs refs/heads/topic/1 --";
 
 fn tracked_branch() -> std::sync::Arc<World> {
     let world = World::new(1);
@@ -19,7 +21,12 @@ fn tracked_branch() -> std::sync::Arc<World> {
     memory.commits[0].hash = commit(2).hash;
     memory.trace.clear();
     drop(memory);
-    world.reply(TRACKED_TIPS, 0, &format!("{0}\n{0}", commit(1).hash));
+    world.reply(REMOTE_TIP, 0, &commit(1).hash);
+    world.reply(
+        RECENT_REFLOG,
+        0,
+        &format!("{}\n{}", commit(2).hash, commit(1).hash),
+    );
     for (ancestor, descendant) in [(1, 2), (2, 1)] {
         world.reply(
             &format!(
@@ -94,13 +101,16 @@ fn rewritten_branch_requires_an_open_pr_and_the_previous_local_object() {
 fn standalone_branch_requires_rewrite_evidence_before_looking_for_a_pr() {
     let old = commit(1).hash;
     let new = commit(2).hash;
-    for tips in [
-        String::new(),
-        format!("{old}\n{new}"),
-        format!("{new}\n{new}"),
+    for (command, status, output) in [
+        (REMOTE_TIP, 1, String::new()),
+        (REMOTE_TIP, 0, new.clone()),
+        (RECENT_REFLOG, 1, String::new()),
+        (RECENT_REFLOG, 0, String::new()),
+        (RECENT_REFLOG, 0, format!("{}\n{old}", commit(3).hash)),
+        (RECENT_REFLOG, 0, new.clone()),
     ] {
         let world = tracked_branch();
-        world.reply(TRACKED_TIPS, 0, &tips);
+        world.reply(command, status, &output);
         let candidate = candidate(&world.config(), &Flags::default(), &world.commands())
             .unwrap()
             .unwrap();
@@ -118,6 +128,71 @@ fn standalone_branch_requires_rewrite_evidence_before_looking_for_a_pr() {
             .unwrap()
             .unwrap();
         assert!(branch.rewrite.is_none());
+    }
+}
+
+#[test]
+fn recovery_scans_the_full_reflog_only_when_the_recent_entries_are_inconclusive() {
+    let old = commit(1).hash;
+    let new = commit(2).hash;
+    let first = commit(3).hash;
+    let second = commit(4).hash;
+    let no_recent_match = format!("{new}\n{first}\n{second}");
+    for (recent, full_status, full, scanned, recovered) in [
+        (
+            format!("{new}\n{old}\n{first}"),
+            1,
+            String::new(),
+            false,
+            true,
+        ),
+        (
+            format!("{new}\n{first}\n{old}"),
+            1,
+            String::new(),
+            false,
+            true,
+        ),
+        (format!("{new}\n{first}"), 1, String::new(), false, false),
+        (
+            no_recent_match.clone(),
+            0,
+            format!("{no_recent_match}\n{old}"),
+            true,
+            true,
+        ),
+        (
+            no_recent_match.clone(),
+            0,
+            no_recent_match.clone(),
+            true,
+            false,
+        ),
+        (
+            no_recent_match.clone(),
+            0,
+            format!("{second}\n{new}\n{old}"),
+            true,
+            false,
+        ),
+        (no_recent_match, 1, String::new(), true, false),
+    ] {
+        let world = tracked_branch();
+        world.reply(RECENT_REFLOG, 0, &recent);
+        world.reply(BRANCH_REFLOG, full_status, &full);
+
+        let branch = candidate(&world.config(), &Flags::default(), &world.commands())
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(branch.rewrite.is_some(), recovered);
+        assert_eq!(
+            world.trace().iter().any(|event| {
+                event["args"]
+                    == serde_json::json!(["rev-list", "--walk-reflogs", "refs/heads/topic/1", "--"])
+            }),
+            scanned
+        );
     }
 }
 

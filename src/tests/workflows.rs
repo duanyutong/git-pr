@@ -111,7 +111,7 @@ fn checked_out_stack_tip_wins_over_an_unbound_branch_at_the_same_commit() {
 }
 
 #[test]
-fn implicit_submission_adopts_the_open_pr_after_rebasing_its_branch() {
+fn implicit_submission_adopts_the_open_pr_after_successive_rewrites_below_a_local_branch() {
     let f = Fixture::new(1, false);
     f.run(&["HEAD"]).unwrap();
     f.git(&["push", "--set-upstream", "origin", "topic/1"]);
@@ -125,19 +125,37 @@ fn implicit_submission_adopts_the_open_pr_after_rebasing_its_branch() {
     f.git(&["push", "origin", "main"]);
     f.git(&["checkout", "topic/1"]);
     f.git(&["rebase", "main"]);
+    f.git(&["commit", "--amend", "-m", "Amend the rebased commit"]);
     let tip = f.git(&["rev-parse", "HEAD"]);
+    f.git(&["checkout", "-b", "topic/2"]);
+    f.write("descendant.txt", "local change\n");
+    f.git(&["add", "descendant.txt"]);
+    f.git(&["commit", "-m", "Keep the next commit local"]);
+    let descendant = f.git(&["rev-parse", "HEAD"]);
+    f.git(&["checkout", "topic/1"]);
     f.service.trace.lock().unwrap().clear();
 
     f.run(&[]).unwrap();
 
     assert_ne!(tip, f.hashes[0]);
     assert_eq!(f.git(&["rev-parse", "origin/topic/1"]), tip);
+    assert_eq!(f.git(&["rev-parse", "topic/2"]), descendant);
+    assert_eq!(
+        f.git(&["ls-remote", "--heads", "origin", "refs/heads/topic/2"]),
+        ""
+    );
     assert_eq!(
         f.git(&["config", "--get", "branch.topic/1.gitPrPullRequest"]),
         "https://github.com/org/repo/pull/101"
     );
     let trace = f.trace();
     let pushes = commands(&trace, "git", "push");
+    let reflogs: Vec<_> = commands(&trace, "git", "rev-list")
+        .into_iter()
+        .filter(|event| event["args"][1] == "--walk-reflogs")
+        .collect();
+    assert_eq!(reflogs.len(), 1);
+    assert_eq!(reflogs[0]["args"][2], "--max-count=3");
     assert_eq!(pushes.len(), 1);
     assert_eq!(
         pushes[0]["args"][3],

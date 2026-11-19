@@ -105,18 +105,12 @@ fn rewritten_tip(
     {
         return Ok(None);
     }
-    let refs = [
-        format!("refs/remotes/{}/{branch}", git.repo.remote),
-        format!("{tracked}@{{1}}"),
-    ];
-    let Some([previous_tip, prior_local]) = crate::git::resolve_refs(git.commands, &refs)
-        .ok()
-        .and_then(|refs| <[_; 2]>::try_from(refs).ok())
-    else {
+    let remote_ref = format!("refs/remotes/{}/{branch}", git.repo.remote);
+    let Ok(previous_tip) = crate::git::resolve_ref(git.commands, &remote_ref) else {
         return Ok(None);
     };
-    if previous_tip != prior_local
-        || previous_tip == tip
+    if previous_tip == tip
+        || !reflog_contains_previous_tip(git.commands, &tracked, tip, &previous_tip)
         || git.is_ancestor(&previous_tip, tip)?
         || git.is_ancestor(tip, &previous_tip)?
     {
@@ -127,6 +121,35 @@ fn rewritten_tip(
         local_tip: tip.into(),
         previous_tip,
     }))
+}
+
+fn reflog_contains_previous_tip(
+    commands: &Commands,
+    reference: &str,
+    tip: &str,
+    previous_tip: &str,
+) -> bool {
+    const RECENT_ENTRIES: usize = 3;
+    let limit = format!("--max-count={RECENT_ENTRIES}");
+    let Ok(recent) = commands.git(&["rev-list", "--walk-reflogs", &limit, reference, "--"]) else {
+        return false;
+    };
+    let mut local_tips = recent.lines();
+    if local_tips.next() != Some(tip) {
+        return false;
+    }
+    if local_tips.any(|local_tip| local_tip == previous_tip) {
+        return true;
+    }
+    if recent.lines().count() < RECENT_ENTRIES {
+        return false;
+    }
+
+    let Ok(reflog) = commands.git(&["rev-list", "--walk-reflogs", reference, "--"]) else {
+        return false;
+    };
+    let mut local_tips = reflog.lines();
+    local_tips.next() == Some(tip) && local_tips.any(|local_tip| local_tip == previous_tip)
 }
 
 fn associated(records: &Records, branch: &str) -> bool {
