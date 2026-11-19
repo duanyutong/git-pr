@@ -89,9 +89,27 @@ impl Application {
         if self.checkpoint(&config, Checkpoint::Validate) {
             return Ok(());
         }
-        if let Some(branch) = branch::candidate(&config, flags, &self.commands)? {
-            return self.publish_branch(&config, &branch);
-        }
+        let rewrite = match branch::candidate(&config, flags, &self.commands)? {
+            Some(branch::Candidate {
+                name,
+                rewrite: None,
+            }) => {
+                return self.publish_branch(&config, &name);
+            }
+            Some(branch::Candidate { rewrite, .. }) => rewrite,
+            None => None,
+        };
+        self.submit_pull_requests(&mut config, flags, env, rewrite.as_ref())
+    }
+
+    fn submit_pull_requests(
+        &self,
+        config: &mut Config,
+        flags: &Flags,
+        env: &BTreeMap<String, String>,
+        rewrite: Option<&branch::Rewrite>,
+    ) -> Result<()> {
+        let diagnostics = &self.commands.diagnostics;
         config.authenticate(
             flags,
             env,
@@ -101,16 +119,16 @@ impl Application {
         )?;
         self.stage("Reading commits", "Commits read");
         let mut state = diagnostics.phase("commit discovery", || {
-            State::discover(&mut config, &self.commands)
+            State::discover(config, &self.commands)
         })?;
         self.commands.terminal.finish(true);
-        self.present_selection(&config, &mut state);
-        self.record_selection(&config, &state);
-        if self.checkpoint(&config, Checkpoint::GetCommits) {
+        self.present_selection(config, &mut state);
+        self.record_selection(config, &state);
+        if self.checkpoint(config, Checkpoint::GetCommits) {
             return Ok(());
         }
-        self.filter_authors(&config, &mut state);
-        self.record_selection(&config, &state);
+        self.filter_authors(config, &mut state);
+        self.record_selection(config, &state);
         validate_duplicates(state.selected(), &self.commands)?;
         let template = if config.dry_run || config.stop_after == Some(Checkpoint::Rewrite) {
             String::new()
@@ -122,20 +140,20 @@ impl Application {
         let github = GitHub {
             session: crate::github::Session::default(),
             clock: Some(self.clock.as_ref()),
-            config: &config,
+            config,
             commands: &self.commands,
             transport: self.transport.as_ref(),
             template: &template,
         };
-        let _guard = self.lock_repository(&config)?;
+        let _guard = self.lock_repository(config)?;
         let publication = diagnostics
             .phase("commit preparation", || {
-                self.prepare_publication(&github, &mut state)
+                self.prepare_publication(&github, &mut state, rewrite)
             })
             .context(
                 "commit preparation failed; inspect the reported identity evidence before retrying",
             )?;
-        if self.checkpoint(&config, Checkpoint::Rewrite) {
+        if self.checkpoint(config, Checkpoint::Rewrite) {
             return Ok(());
         }
         let git = Git {
@@ -148,9 +166,9 @@ impl Application {
             ("Publishing branches", "Publication reconciled")
         };
         self.stage(active, completed);
-        diagnostics.phase("publication and PR reconciliation", || self.push(&config, git, &github, &mut state, &publication))
+        diagnostics.phase("publication and PR reconciliation", || self.push(config, git, &github, &mut state, &publication))
             .context("publication or PR reconciliation failed; any completed local metadata writes, pushed refs and PR changes are retained. Inspect the reported operation before retrying")?;
-        if self.checkpoint(&config, Checkpoint::Push) {
+        if self.checkpoint(config, Checkpoint::Push) {
             return Ok(());
         }
         if config.dry_run {
@@ -159,7 +177,7 @@ impl Application {
         }
         diagnostics.phase("PR-number recovery", || state.fill_numbers(&github, &publication.bases))
             .context("PR lookup or creation failed after publication; pushed refs and completed PR changes are retained")?;
-        if self.checkpoint(&config, Checkpoint::PrCreate) {
+        if self.checkpoint(config, Checkpoint::PrCreate) {
             return Ok(());
         }
         self.stage("Updating PR descriptions", "Reconciled descriptions");
@@ -168,7 +186,7 @@ impl Application {
             &config.repo,
             state.selected(),
         )?;
-        let numbers = diagnostics.phase("PR descriptions and stack sections", || Self::update_descriptions(&config, git, &github, &state))
+        let numbers = diagnostics.phase("PR descriptions and stack sections", || Self::update_descriptions(config, git, &github, &state))
             .context("PR content reconciliation failed after publication; pushed refs and completed PR changes are retained")?;
         diagnostics.phase("native stack links", || Self::native_stack(&github, &state, &publication.bases, publication.links_native()))
             .context("native stack reconciliation failed after publication; pushed refs and completed PR changes are retained")?;
@@ -277,6 +295,7 @@ impl Application {
         &self,
         github: &GitHub<'_>,
         state: &mut State,
+        rewrite: Option<&branch::Rewrite>,
     ) -> Result<pull_requests::Publication> {
         let config = github.config;
         self.commands.terminal.section(if config.dry_run {
@@ -303,6 +322,9 @@ impl Application {
         crate::identity::resolve::prepare(github, &mut state.stack, state.start)?;
         let publication = self.commands.diagnostics.phase("publication safety preflight", || pull_requests::Publication::observe(github, &state.stack, state.start)).context(Fatal)
             .context("publication safety preflight failed; no local metadata, pushes or PR changes were performed")?;
+        if let Some(rewrite) = rewrite {
+            publication.verify_rewritten_branch(state.selected(), rewrite)?;
+        }
         if !config.dry_run && config.stop_after != Some(Checkpoint::Rewrite) {
             crate::identity::resolve::verify_anchors(&self.commands, state.selected())?;
             crate::identity::resolve::persist(github, state.selected_mut())?;

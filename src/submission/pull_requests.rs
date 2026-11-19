@@ -54,6 +54,29 @@ struct Identity {
 }
 
 impl Publication {
+    pub(super) fn verify_rewritten_branch(
+        &self,
+        selected: &[Commit],
+        rewrite: &super::branch::Rewrite,
+    ) -> Result<()> {
+        anyhow::ensure!(
+            matches!(selected, [commit] if commit.hash == rewrite.local_tip && commit.remote_ref() == rewrite.branch),
+            "the selected publication changed during branch recovery"
+        );
+        anyhow::ensure!(
+            matches!(self.entries.as_slice(), [(_, _, Some(_))]),
+            "a non-fast-forward branch update requires an existing open PR for {:?}",
+            rewrite.branch
+        );
+        anyhow::ensure!(
+            self.leases.get(&rewrite.branch).and_then(Option::as_ref)
+                == Some(&rewrite.previous_tip),
+            "remote branch {:?} changed since its previous local tip; inspect the remote commits before retrying",
+            rewrite.branch
+        );
+        Ok(())
+    }
+
     pub(super) fn observe(github: &GitHub<'_>, stack: &[Commit], start: usize) -> Result<Self> {
         if github.config.dry_run
             || github.config.stop_after == Some(crate::config::checkpoint::Checkpoint::Rewrite)

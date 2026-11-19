@@ -111,6 +111,46 @@ fn checked_out_stack_tip_wins_over_an_unbound_branch_at_the_same_commit() {
 }
 
 #[test]
+fn implicit_submission_adopts_the_open_pr_after_rebasing_its_branch() {
+    let f = Fixture::new(1, false);
+    f.run(&["HEAD"]).unwrap();
+    f.git(&["push", "--set-upstream", "origin", "topic/1"]);
+    for key in ["gitPrHead", "gitPrPullRequest"] {
+        f.git(&["config", "--unset", &format!("branch.topic/1.{key}")]);
+    }
+    f.git(&["checkout", "main"]);
+    f.write("upstream.txt", "upstream change\n");
+    f.git(&["add", "upstream.txt"]);
+    f.git(&["commit", "-m", "Advance main"]);
+    f.git(&["push", "origin", "main"]);
+    f.git(&["checkout", "topic/1"]);
+    f.git(&["rebase", "main"]);
+    let tip = f.git(&["rev-parse", "HEAD"]);
+    f.service.trace.lock().unwrap().clear();
+
+    f.run(&[]).unwrap();
+
+    assert_ne!(tip, f.hashes[0]);
+    assert_eq!(f.git(&["rev-parse", "origin/topic/1"]), tip);
+    assert_eq!(
+        f.git(&["config", "--get", "branch.topic/1.gitPrPullRequest"]),
+        "https://github.com/org/repo/pull/101"
+    );
+    let trace = f.trace();
+    let pushes = commands(&trace, "git", "push");
+    assert_eq!(pushes.len(), 1);
+    assert_eq!(
+        pushes[0]["args"][3],
+        format!("--force-with-lease=refs/heads/topic/1:{}", f.hashes[0])
+    );
+    assert!(
+        !trace
+            .iter()
+            .any(|v| v["method"] == "POST" && v["path"] == "pulls")
+    );
+}
+
+#[test]
 fn selections_retain_existing_bases_or_fail_before_publication() {
     for selection in [
         vec!["topic/2"],

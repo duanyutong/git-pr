@@ -1,8 +1,125 @@
-use super::candidate;
+use super::{Rewrite, candidate};
 use crate::{
     cli::Flags,
-    tests::unit::support::{ANCHOR_INVENTORY, World},
+    tests::unit::support::{ANCHOR_INVENTORY, World, commit},
 };
+
+const TRACKED_TIPS: &str = "git rev-parse --revs-only --end-of-options refs/remotes/origin/topic/1^{commit} refs/heads/topic/1@{1}^{commit}";
+
+fn tracked_branch() -> std::sync::Arc<World> {
+    let world = World::new(1);
+    world.run(&["--no-stack"]).unwrap();
+    let mut memory = world.0.lock().unwrap();
+    memory.config.retain(|key, _| !key.starts_with("branch."));
+    memory.config.extend([
+        ("branch.topic/1.remote".into(), "origin".into()),
+        ("branch.topic/1.merge".into(), "refs/heads/topic/1".into()),
+    ]);
+    memory.commits[0].attrs.clear();
+    memory.commits[0].hash = commit(2).hash;
+    memory.trace.clear();
+    drop(memory);
+    world.reply(TRACKED_TIPS, 0, &format!("{0}\n{0}", commit(1).hash));
+    for (ancestor, descendant) in [(1, 2), (2, 1)] {
+        world.reply(
+            &format!(
+                "git merge-base --is-ancestor {} {}",
+                commit(ancestor).hash,
+                commit(descendant).hash
+            ),
+            1,
+            "",
+        );
+    }
+    world
+}
+
+#[test]
+fn rewritten_branch_requires_an_open_pr_and_the_previous_local_object() {
+    for scenario in ["same PR", "no PR", "moved remote"] {
+        let world = tracked_branch();
+        if scenario == "no PR" {
+            world.0.lock().unwrap().prs.clear();
+        } else if scenario == "moved remote" {
+            world
+                .0
+                .lock()
+                .unwrap()
+                .remote_refs
+                .insert("refs/heads/topic/1".into(), commit(3).hash);
+        }
+        let result = world.run(&[]);
+        let trace = world.trace();
+        assert!(
+            !trace
+                .iter()
+                .any(|event| event["method"] == "POST" && event["path"] == "pulls")
+        );
+        if scenario == "same PR" {
+            result.unwrap();
+            let memory = world.0.lock().unwrap();
+            assert_eq!(memory.remote_refs["refs/heads/topic/1"], commit(2).hash);
+            assert_eq!(
+                memory.config["branch.topic/1.gitPrPullRequest"],
+                "https://github.com/org/repo/pull/101"
+            );
+            drop(memory);
+        } else {
+            let expected = if scenario == "no PR" {
+                "requires an existing open PR"
+            } else {
+                "changed since its previous local tip"
+            };
+            assert!(format!("{:#}", result.unwrap_err()).contains(expected));
+            assert!(
+                !trace
+                    .iter()
+                    .any(|event| matches!(event["args"][0].as_str(), Some("push"))
+                        || event["args"][1] == "--local")
+            );
+        }
+    }
+    let rewrite = Rewrite {
+        branch: "topic/1".into(),
+        local_tip: commit(2).hash,
+        previous_tip: commit(1).hash,
+    };
+    let error = crate::submission::pull_requests::Publication::default()
+        .verify_rewritten_branch(&[commit(1)], &rewrite)
+        .unwrap_err();
+    assert!(error.to_string().contains("selected publication changed"));
+}
+
+#[test]
+fn standalone_branch_requires_rewrite_evidence_before_looking_for_a_pr() {
+    let old = commit(1).hash;
+    let new = commit(2).hash;
+    for tips in [
+        String::new(),
+        format!("{old}\n{new}"),
+        format!("{new}\n{new}"),
+    ] {
+        let world = tracked_branch();
+        world.reply(TRACKED_TIPS, 0, &tips);
+        let candidate = candidate(&world.config(), &Flags::default(), &world.commands())
+            .unwrap()
+            .unwrap();
+        assert!(candidate.rewrite.is_none());
+    }
+    for (ancestor, descendant) in [(&old, &new), (&new, &old)] {
+        let world = tracked_branch();
+        let ancestry = format!("git merge-base --is-ancestor {ancestor} {descendant}");
+        let config = world.config();
+        let commands = world.commands();
+        world.fail(&ancestry);
+        assert!(candidate(&config, &Flags::default(), &commands).is_err());
+        world.reply(&ancestry, 0, "");
+        let branch = candidate(&config, &Flags::default(), &commands)
+            .unwrap()
+            .unwrap();
+        assert!(branch.rewrite.is_none());
+    }
+}
 
 fn standalone(count: u64) -> std::sync::Arc<World> {
     let world = World::new(count);
@@ -273,6 +390,7 @@ fn standalone_requires_a_single_checked_out_anchor_and_allows_unrelated_branches
     assert_eq!(
         candidate(&config, &Flags::default(), &commands)
             .unwrap()
+            .map(|branch| branch.name)
             .as_deref(),
         Some("topic/2")
     );

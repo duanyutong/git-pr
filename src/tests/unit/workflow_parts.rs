@@ -2570,6 +2570,7 @@ fn inferred_trunk_and_duplicate_destinations_stop_before_rewriting() {
                     template: "",
                 },
                 &mut s,
+                None,
             )
             .unwrap_err();
         assert!(
