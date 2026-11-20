@@ -1581,19 +1581,18 @@ fn rewritten_local_stacks_use_current_remote_membership() {
 
 #[test]
 fn insertions_at_every_position_and_permutations_preserve_existing_pr_identities() {
-    for order in [
-        vec![4, 1, 2, 3],
-        vec![1, 4, 2, 3],
-        vec![1, 2, 4, 3],
-        vec![1, 2, 3, 4],
-        vec![2, 1, 3],
-        vec![3, 2, 1],
-        vec![2, 3, 1],
-    ] {
-        for native in [false, true] {
+    let published = [1, 2, 3];
+    let insertions = (0..=published.len()).map(|position| {
+        let mut order = published.to_vec();
+        order.insert(position, 4);
+        order
+    });
+    let permutations = [vec![2, 1, 3], vec![3, 2, 1], vec![2, 3, 1]];
+    for order in insertions.chain(permutations) {
+        for (native, merged_prefix) in [(false, 0), (true, 0), (true, 1), (true, 4)] {
             for backend in ["git", "branchless", "jj"] {
-                let w = transition_world(&order, &[1, 2, 3]);
-                {
+                let w = transition_world(&order, &published);
+                let historical = {
                     let mut m = w.0.lock().unwrap();
                     m.branchless = backend == "branchless";
                     m.jj = backend == "jj";
@@ -1602,15 +1601,39 @@ fn insertions_at_every_position_and_permutations_preserve_existing_pr_identities
                             pr["stack"] = json!({"number":9});
                         }
                     }
-                }
+                    let historical: BTreeMap<_, _> = (90..90 + merged_prefix)
+                        .map(|number| {
+                            let mut merged =
+                                pr(number, &format!("merged/{number}"), number, "main");
+                            merged["state"] = json!("closed");
+                            merged["merged"] = json!(true);
+                            merged["merged_at"] = json!("2026-11-19T21:24:46Z");
+                            merged["stack"] = json!({"number":9});
+                            (number, merged)
+                        })
+                        .collect();
+                    m.prs.extend(historical.clone());
+                    historical
+                };
                 w.run(&[if native {
                     "--github-stack"
                 } else {
                     "--no-stack"
                 }])
-                .unwrap();
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "{order:?}, native={native}, merged={merged_prefix}, {backend}: {error:#}"
+                    )
+                });
                 let m = w.0.lock().unwrap();
-                for number in [1, 2, 3] {
+                let active_stack = m.prs[&101]["stack"]["number"].as_u64();
+                if merged_prefix > 0 {
+                    assert_eq!(active_stack == Some(9), order.starts_with(&published));
+                }
+                for (number, original) in &historical {
+                    assert_eq!(m.prs[number], *original);
+                }
+                for number in published {
                     assert_eq!(
                         m.prs[&(100 + number)]["node_id"],
                         format!("PR_{}", 100 + number)
@@ -1632,6 +1655,7 @@ fn insertions_at_every_position_and_permutations_preserve_existing_pr_identities
                         }
                     );
                     assert_eq!(pr["stack"].is_object(), native);
+                    assert_eq!(pr["stack"]["number"].as_u64(), active_stack);
                 }
                 assert!(
                     !m.remote_refs
@@ -1968,8 +1992,12 @@ fn transitions_resume_after_interruption_at_every_mutation_boundary() {
 fn native_transitions_require_complete_membership_and_confirm_dissolution() {
     for case in [
         "partial-selection",
+        "unselected-closed",
+        "unverified-merge",
+        "selected-reported-merged",
         "multiple",
         "partial-unstack",
+        "retained-unmerged",
         "unconfirmed-unstack",
         "unavailable-topology",
     ] {
@@ -1978,19 +2006,50 @@ fn native_transitions_require_complete_membership_and_confirm_dissolution() {
             pr["stack"] = json!({"number":9});
         }
         match case {
-            "partial-selection" => {
+            "partial-selection" | "unselected-closed" | "unverified-merge" => {
                 w.0.lock().unwrap().prs.insert(104, {
                     let mut extra = pr(104, "other", 13, "main");
                     extra["stack"] = json!({"number":9});
+                    if case != "partial-selection" {
+                        extra["state"] = json!("closed");
+                    }
+                    if case == "unverified-merge" {
+                        extra["merged_at"] = json!("invalid");
+                    }
                     extra
                 });
             }
+            "selected-reported-merged" => w.http(
+                "GET stacks/9",
+                vec![Response::Output(
+                    200,
+                    json!({
+                        "number":9,"base":{"ref":"main"},"pull_requests":[
+                            {"number":101,"state":"closed","merged_at":"2026-11-19T21:24:46Z"},
+                            {"number":102},{"number":103}
+                        ]
+                    })
+                    .to_string(),
+                )],
+            ),
             "multiple" => {
                 w.0.lock().unwrap().prs.get_mut(&103).unwrap()["stack"] = json!({"number":10});
             }
             "partial-unstack" => w.http(
                 "POST stacks/9/unstack",
                 vec![Response::Output(200, "{}".into())],
+            ),
+            "retained-unmerged" => w.http(
+                "POST stacks/9/unstack",
+                vec![Response::Output(
+                    200,
+                    json!({
+                        "number":9,"base":{"ref":"main"},"pull_requests":[
+                            {"number":101,"state":"open","merged_at":null}
+                        ]
+                    })
+                    .to_string(),
+                )],
             ),
             "unconfirmed-unstack" => w.http(
                 "POST stacks/9/unstack",
@@ -2003,8 +2062,15 @@ fn native_transitions_require_complete_membership_and_confirm_dissolution() {
             _ => unreachable!(),
         }
         assert!(w.run(&["--no-stack"]).is_err(), "{case}");
+        let trace = w.trace();
+        if !matches!(
+            case,
+            "partial-unstack" | "retained-unmerged" | "unconfirmed-unstack"
+        ) {
+            assert!(!trace.iter().any(effect), "{case}");
+        }
         assert!(
-            !w.trace()
+            !trace
                 .iter()
                 .any(|e| e["args"][0] == "push" || is_retarget(e)),
             "{case}"

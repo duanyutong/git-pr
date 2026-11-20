@@ -281,15 +281,7 @@ fn bottom_three_updates_preserve_the_sixteen_member_native_stack_and_stale_upper
                 .get_mut(&(100 + index))
                 .unwrap()["head"]["sha"] = json!(f.hashes[usize::try_from(index - 1).unwrap()]);
         }
-        let outside: std::collections::BTreeMap<_, _> = f
-            .service
-            .prs
-            .lock()
-            .unwrap()
-            .range(104..)
-            .map(|(&number, pr)| (number, pr.clone()))
-            .collect();
-        let membership = f.service.prs.lock().unwrap()[&101]["stack"].clone();
+        let before = f.service.prs.lock().unwrap().clone();
         if shallow {
             f.write(".git/shallow", &format!("{}\n", f.trunk));
         }
@@ -337,11 +329,11 @@ fn bottom_three_updates_preserve_the_sixteen_member_native_stack_and_stale_upper
         }
         let prs = f.service.prs.lock().unwrap();
         assert_eq!(prs.len(), 16);
-        for pr in prs.values() {
-            assert_eq!(pr["stack"], membership);
-        }
-        for (number, original) in outside {
-            assert_eq!(prs[&number], original);
+        for (number, original) in before {
+            assert_eq!(prs[&number]["stack"], original["stack"]);
+            if number >= 104 {
+                assert_eq!(prs[&number], original);
+            }
         }
         drop(prs);
         assert_eq!(commands(&f.trace(), "git", "push").len(), 1);

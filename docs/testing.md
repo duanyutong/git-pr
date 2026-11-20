@@ -287,6 +287,8 @@ Independent publication plans and interrupted disposable-repository submissions 
 Cleanup failure and subsequent retries shall preserve PR identities, content and native membership whilst performing only the required leased deletion.
 Required native dissolution shall not imply reconstruction when current options disable linking.
 In-memory permutation cases cover Git, git-branchless and Jujutsu, complete native membership and ordinary PRs.
+The same insertion and permutation assertions span native stacks with zero, one or several retained merged members.
+A disposable-repository insertion into a partially merged native stack verifies that GitHub's retained history and the rebuilt open stack have distinct identities, and that repeated submission preserves both.
 Interruption cases stop execution after each completed mutation and require a subsequent invocation to finish from fresh observations without replacing existing PR identities.
 This fixture is not a claim of complete equivalence with GitHub's asynchronous processing.
 

@@ -147,10 +147,12 @@ Freshness checks and expected-object leases protect the development and temporar
 Only destinations whose live objects differ from the selected local objects are published, using explicit expected-object leases.
 All final selected refs are verified before final bases are restored.
 Unselected incoming dependants prevent the transition.
-Native stack transitions require complete observed membership, and required dissolution is freshly verified before retargeting.
+Native stack transitions require every observed member without confirmed merge evidence to be covered by the transition.
+GitHub retains merged PRs in the original stack when it detaches the remaining members.
+The client verifies any reported remainder as merged history and freshly verifies detachment of the affected PRs before retargeting.
 Native creation follows the current linking option after final bases are established.
 Disabled linking preserves compatible existing membership but does not reconstruct membership removed by a necessary topology transition.
-A partial dissolution stops publication.
+An unmerged or unverified remainder stops publication.
 
 Each invocation derives the desired publication from the current selected local stack and current options.
 Per-branch publication associations retain PR identity; no repository-wide operation journal is read or written.

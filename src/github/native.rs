@@ -24,9 +24,33 @@ struct Topology {
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 struct Member {
     number: u64,
+    state: Option<String>,
+    merged_at: Option<String>,
+}
+
+impl Member {
+    fn is_merged(&self) -> bool {
+        self.state.as_deref() == Some("closed")
+            && self.merged_at.as_deref().is_some_and(|date| {
+                time::OffsetDateTime::parse(date, &time::format_description::well_known::Rfc3339)
+                    .is_ok()
+            })
+    }
 }
 
 impl Topology {
+    fn decode(
+        number: u64,
+        observed: &[Arc<PullRequest>],
+        response: &super::http::Response,
+    ) -> Result<Self> {
+        let mut topology: Self =
+            serde_json::from_slice(&response.body).context("invalid native stack observation")?;
+        topology.acquired = response.acquired;
+        topology.validate(number, observed)?;
+        Ok(topology)
+    }
+
     fn validate(&self, expected: u64, observed: &[Arc<PullRequest>]) -> Result<()> {
         if self.number != expected {
             bail!(
@@ -234,10 +258,13 @@ impl GitHub<'_> {
             || topology
                 .pull_requests
                 .iter()
-                .any(|pr| !selected.contains(&pr.number))
-            || claimed
-                .iter()
-                .any(|number| !topology.pull_requests.iter().any(|pr| pr.number == *number))
+                .any(|pr| !selected.contains(&pr.number) && !pr.is_merged())
+            || claimed.iter().any(|number| {
+                !topology
+                    .pull_requests
+                    .iter()
+                    .any(|pr| pr.number == *number && !pr.is_merged())
+            })
         {
             bail!("native stack transition requires its complete membership");
         }
@@ -263,8 +290,15 @@ impl GitHub<'_> {
         match result {
             Ok(response) => {
                 self.commands.outcomes.confirm(operation);
-                if response.status != 204 {
-                    bail!("native stack transition is incomplete; some PRs remain stacked");
+                if response.status != 204
+                    && !(response.status == 200
+                        && Topology::decode(number, &[], &response).is_ok_and(|remaining| {
+                            remaining.pull_requests.iter().all(Member::is_merged)
+                        }))
+                {
+                    bail!(
+                        "native stack transition is incomplete; remaining membership is not confirmed as merged history"
+                    );
                 }
             }
             Err(error) if super::limits::rejected(&error) => {
@@ -302,11 +336,7 @@ impl GitHub<'_> {
             None,
             started,
         )?;
-        let mut topology: Topology =
-            serde_json::from_slice(&response.body).context("invalid native stack observation")?;
-        topology.acquired = response.acquired;
-        topology.validate(number, observed)?;
-        Ok(topology)
+        Topology::decode(number, observed, &response)
     }
 
     pub(crate) fn manage_stack(&self, commits: &[Commit], base: &str) -> Result<StackOutcome> {

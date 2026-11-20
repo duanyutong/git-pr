@@ -191,14 +191,21 @@ pub(crate) fn respond(
             .split('/')
             .nth(1)
             .and_then(|n| n.parse::<u64>().ok())
-            .unwrap_or(9);
-        if path.ends_with("/unstack") {
-            for pr in prs.values_mut() {
+            .unwrap_or_else(|| {
+                (9..)
+                    .take(prs.len() + 1)
+                    .find(|number| !prs.values().any(|pr| pr["stack"]["number"] == *number))
+                    .unwrap()
+            });
+        let unstack = path.ends_with("/unstack");
+        if unstack {
+            for pr in prs
+                .values_mut()
+                .filter(|pr| pr["stack"]["number"] == number && pr["merged"] != true)
+            {
                 pr["stack"] = Value::Null;
             }
-            return Ok(Value::Null);
-        }
-        if method == "POST" {
+        } else if method == "POST" {
             for number in payload["pull_requests"].as_array().unwrap() {
                 let number = number.as_u64().unwrap();
                 if prs[&number]["auto_merge"].is_object() {
@@ -210,13 +217,37 @@ pub(crate) fn respond(
                     }.into());
                 }
             }
-            for number in payload["pull_requests"].as_array().unwrap() {
-                prs.get_mut(&number.as_u64().unwrap()).unwrap()["stack"] = json!({"number":9});
+            let last_position = prs
+                .values()
+                .filter(|pr| pr["stack"]["number"] == number)
+                .filter_map(|pr| pr["stack"]["position"].as_u64())
+                .max()
+                .unwrap_or(0);
+            for (index, pr) in payload["pull_requests"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .enumerate()
+            {
+                prs.get_mut(&pr.as_u64().unwrap()).unwrap()["stack"] =
+                    json!({"number":number,"position":last_position + index as u64 + 1});
             }
         }
-        return Ok(
-            json!({"number":number,"base":{"ref":"main"},"pull_requests":prs.values().filter(|p| p["stack"]["number"] == number).collect::<Vec<_>>() }),
-        );
+        let mut members: Vec<_> = prs
+            .values()
+            .filter(|pr| pr["stack"]["number"] == number)
+            .collect();
+        if unstack && members.is_empty() {
+            return Ok(Value::Null);
+        }
+        members.sort_by_key(|pr| pr["stack"]["position"].as_u64());
+        let members = members
+            .into_iter()
+            .map(
+                |pr| json!({"number":pr["number"],"state":pr["state"],"merged_at":pr["merged_at"]}),
+            )
+            .collect::<Vec<_>>();
+        return Ok(json!({"number":number,"base":{"ref":"main"},"pull_requests":members}));
     }
     bail!("unexpected fixture request: {method} {path}")
 }

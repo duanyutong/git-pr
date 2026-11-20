@@ -638,6 +638,73 @@ fn insertion_at_every_position_supports_missing_and_published_new_branches() {
     }
 }
 
+#[test]
+fn middle_insertion_preserves_merged_native_history_and_rebuilds_the_open_stack() {
+    let f = Fixture::with_service(
+        4,
+        true,
+        Service {
+            indirect_merges: Some(true),
+            ..Service::default()
+        },
+    );
+    let flags = ["--github-stack", "--yes"];
+    f.run(&flags).unwrap();
+    hydrate_publication_heads(&f);
+
+    f.git(&["checkout", "main"]);
+    f.git(&["merge", "--ff-only", "topic/1"]);
+    f.git(&["push", "origin", "main"]);
+    let before = f.service.prs.lock().unwrap().clone();
+    assert_eq!(before[&101]["state"], "closed");
+    assert_eq!(before[&101]["stack"]["number"], 9);
+    assert_eq!(before[&102]["base"]["ref"], "main");
+
+    f.git(&["checkout", "--detach", "topic/2"]);
+    f.write("inserted.txt", "New layer\n");
+    f.git(&["add", "inserted.txt"]);
+    f.git(&[
+        "commit",
+        "-m",
+        "Inserted layer\n\nRemote-Ref: topic/inserted",
+    ]);
+    f.git(&["cherry-pick", "topic/3", "topic/4"]);
+    f.service.trace.lock().unwrap().clear();
+
+    f.run(&flags).unwrap();
+    let prs = f.service.prs.lock().unwrap().clone();
+    assert_eq!(prs.len(), 5);
+    assert_eq!(prs[&101], before[&101]);
+    let new_stack = &prs[&102]["stack"]["number"];
+    assert!(new_stack.is_u64());
+    assert_ne!(*new_stack, before[&102]["stack"]["number"]);
+    for (number, base) in [
+        (102, "main"),
+        (105, "topic/2"),
+        (103, "topic/inserted"),
+        (104, "topic/3"),
+    ] {
+        assert_eq!(prs[&number]["state"], "open");
+        assert_eq!(prs[&number]["base"]["ref"], base);
+        assert_eq!(prs[&number]["stack"]["number"], *new_stack);
+        if let Some(original) = before.get(&number) {
+            assert_eq!(prs[&number]["node_id"], original["node_id"]);
+        }
+    }
+
+    f.service.trace.lock().unwrap().clear();
+    f.run(&flags).unwrap();
+    assert_eq!(*f.service.prs.lock().unwrap(), prs);
+    assert!(!f.trace().iter().any(|event| {
+        event["args"][0] == "push"
+            || event["method"] == "POST"
+                && (event["path"] == "pulls"
+                    || event["path"]
+                        .as_str()
+                        .is_some_and(|path| path.starts_with("stacks")))
+    }));
+}
+
 #[derive(Debug)]
 struct RestWithoutMembership(Arc<Service>);
 

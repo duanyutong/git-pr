@@ -107,6 +107,7 @@ impl Service {
                 let merged = prs.get_mut(number).unwrap();
                 merged["state"] = json!("closed");
                 merged["merged"] = json!(true);
+                merged["merged_at"] = json!("2026-11-19T21:24:46Z");
                 if delete {
                     for dependent in prs
                         .values_mut()
