@@ -188,20 +188,16 @@ impl Transition {
             .skip(start)
             .filter(|c| !c.skip)
             .map(|c| github.publication_pr(c.remote_ref()))
-            .collect::<Result<Vec<_>>>()?;
-        let observed = github.recovery_prs(
-            &expected
-                .iter()
-                .flatten()
-                .map(|p| p.number)
-                .collect::<Vec<_>>(),
-        )?;
-        if expected.iter().flatten().count() != observed.len() {
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        let observed = github.initial_recovery_prs(&expected)?;
+        if expected.len() != observed.len() {
             bail!("incomplete recovery identity observation");
         }
         expected
             .into_iter()
-            .flatten()
             .zip(observed)
             .map(|(expected, pr)| {
                 policy::require_recovery_open(&pr)?;

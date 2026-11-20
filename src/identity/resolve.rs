@@ -88,7 +88,7 @@ pub(crate) fn prepare(github: &GitHub<'_>, stack: &mut [Commit], start: usize) -
             .commands
             .diagnostics
             .phase("publication identity discovery", || {
-                github.observe(&references.into_iter().collect::<Vec<_>>())
+                github.observe_publication(&references.into_iter().collect::<Vec<_>>())
             })
             .context(crate::diagnostics::errors::Fatal)?;
     }

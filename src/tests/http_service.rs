@@ -80,8 +80,14 @@ pub(crate) fn respond(
                 continue;
             };
             let nodes: Vec<_> = prs.values().filter(|p| p["head"]["ref"] == *reference).map(|p| { let mut node = json!({"number":p["number"],"id":p.get("node_id").cloned().unwrap_or_else(||json!(format!("PR_{}",p["number"]))),"title":p["title"].as_str().unwrap_or(""),"body":p["body"].as_str().unwrap_or(""),"state":p["state"].as_str().unwrap_or("open").to_uppercase(),"merged":p.get("merged").unwrap_or(&json!(false)),"isDraft":p["draft"].as_bool().unwrap_or(false),"headRefName":p["head"]["ref"],"baseRefName":p["base"]["ref"],"headRepository":{"nameWithOwner":"org/repo"},"autoMergeRequest":if p["auto_merge"].is_object() {json!({"enabledAt":"2026-10-27T00:00:00Z"})} else {p["auto_merge"].clone()},"stack":p["stack"],"labels":{"nodes":p["labels"].as_array().into_iter().flatten().map(|l| if l.is_string(){json!({"name":l})} else {l.clone()}).collect::<Vec<_>>(),"pageInfo":{"hasNextPage":false}}});
-                if payload["query"].as_str().unwrap().starts_with("query RecoveryHeads") {
+                let query = payload["query"].as_str().unwrap();
+                if query.starts_with("query RecoveryHeads") {
                     node.as_object_mut().unwrap().extend(recovery_node(p).as_object().unwrap().clone());
+                } else if query.contains("mergeCommit{oid}") {
+                    let mut recovery = recovery_node(p);
+                    for field in ["mergedAt", "mergeCommit", "headRefOid", "baseRefOid", "baseRepository"] {
+                        node[field] = recovery[field].take();
+                    }
                 }
                 node
             }).collect();

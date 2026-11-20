@@ -15,7 +15,7 @@ mod recovery;
 use std::{
     collections::{BTreeMap, HashSet},
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, Weak,
         atomic::{AtomicBool, Ordering},
     },
     time::Instant,
@@ -24,6 +24,7 @@ use std::{
 #[derive(Debug, Default)]
 pub(crate) struct Session {
     discovery: Mutex<discovery::Discovery>,
+    initial_recovery: Mutex<BTreeMap<u64, InitialRecovery>>,
     prs: Mutex<BTreeMap<u64, Arc<PullRequest>>>,
     heads: Mutex<BTreeMap<String, Vec<u64>>>,
     commit_prs: Mutex<BTreeMap<String, (Instant, observation::Associations)>>,
@@ -34,6 +35,13 @@ pub(crate) struct Session {
     head_times: Mutex<BTreeMap<String, Instant>>,
     stack_field_unsupported: AtomicBool,
     unknown_stacks: Mutex<HashSet<u64>>,
+}
+
+#[derive(Debug)]
+struct InitialRecovery {
+    source: Weak<PullRequest>,
+    acquired: Instant,
+    evidence: crate::model::pull_request::RecoveryPullRequest,
 }
 
 impl Session {
@@ -243,9 +251,25 @@ impl GitHub<'_> {
             .or_insert_with(|| self.now());
     }
 
-    fn observed(&self, pr: PullRequest, acquired: Instant) {
+    fn observed(
+        &self,
+        pr: PullRequest,
+        acquired: Instant,
+        initial_recovery: Option<crate::model::pull_request::RecoveryPullRequest>,
+    ) {
         let number = pr.number;
-        self.remember(Arc::new(pr));
+        let pr = Arc::new(pr);
+        if let Some(evidence) = initial_recovery {
+            guard(&self.session.initial_recovery).insert(
+                number,
+                InitialRecovery {
+                    source: Arc::downgrade(&pr),
+                    acquired,
+                    evidence,
+                },
+            );
+        }
+        self.remember(pr);
         guard(&self.session.pr_times).insert(number, acquired);
         guard(&self.session.unknown_stacks).remove(&number);
     }
@@ -415,7 +439,7 @@ impl GitHub<'_> {
             .entry(commit.remote_ref().into())
             .or_default()
             .push(pr.number);
-        self.observed(pr, response.acquired);
+        self.observed(pr, response.acquired, None);
         guard(&self.session.head_times).insert(commit.remote_ref().into(), response.acquired);
         Ok(())
     }

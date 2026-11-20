@@ -189,6 +189,13 @@ struct Observation {
     recovery: Option<crate::model::pull_request::RecoveryPullRequest>,
 }
 
+#[derive(Clone, Copy)]
+enum RecoveryFields<'a> {
+    None,
+    Initial,
+    Required(&'a HashSet<u64>),
+}
+
 #[derive(Debug)]
 struct HeadObservation<'a> {
     acquired: Instant,
@@ -204,7 +211,7 @@ impl HeadObservation<'_> {
         connection: &mut Value,
         repo: &str,
         with_stack: bool,
-        recovery: Option<&HashSet<u64>>,
+        recovery: RecoveryFields<'_>,
         acquired: Instant,
     ) -> Result<()> {
         self.acquired = if self.cursor.after.is_none() {
@@ -527,10 +534,23 @@ impl GitHub<'_> {
     }
 
     pub(crate) fn observe(&self, references: &[String]) -> Result<()> {
+        self.observe_heads(references, RecoveryFields::None)
+    }
+
+    pub(crate) fn observe_publication(&self, references: &[String]) -> Result<()> {
+        let fields = if self.config.repo.host.eq_ignore_ascii_case("github.com") {
+            RecoveryFields::Initial
+        } else {
+            RecoveryFields::None
+        };
+        self.observe_heads(references, fields)
+    }
+
+    fn observe_heads(&self, references: &[String], recovery: RecoveryFields<'_>) -> Result<()> {
         self.commands
             .diagnostics
             .phase("PR identity and content observation", || {
-                self.observe_mode(references, None, None)
+                self.observe_mode(references, recovery, None)
             })
             .map(|_| ())
     }
@@ -540,7 +560,7 @@ impl GitHub<'_> {
         references: &[String],
         started: Instant,
     ) -> Result<()> {
-        self.observe_mode(references, None, Some(started))
+        self.observe_mode(references, RecoveryFields::None, Some(started))
             .map(|_| ())
     }
 
@@ -567,8 +587,11 @@ impl GitHub<'_> {
         let mut attempt = 0;
         loop {
             self.invalidate_heads(references);
-            let (mut recovered, acquired) =
-                self.observe_mode(references, Some(&selected), Some(started))?;
+            let (mut recovered, acquired) = self.observe_mode(
+                references,
+                RecoveryFields::Required(&selected),
+                Some(started),
+            )?;
             let prs = numbers
                 .iter()
                 .map(|number| {
@@ -593,7 +616,7 @@ impl GitHub<'_> {
     fn observe_mode(
         &self,
         references: &[String],
-        recovery: Option<&HashSet<u64>>,
+        recovery: RecoveryFields<'_>,
         recovery_started: Option<Instant>,
     ) -> Result<(
         BTreeMap<u64, crate::model::pull_request::RecoveryPullRequest>,
@@ -637,7 +660,7 @@ impl GitHub<'_> {
                         .collect::<Vec<_>>(),
                     owner,
                     name,
-                    recovery.is_some(),
+                    recovery,
                     recovery_started,
                 )?;
                 for (alias, &index) in pending.iter().enumerate() {
@@ -673,10 +696,15 @@ impl GitHub<'_> {
                 for observation in head.prs {
                     let number = observation.pr.number;
                     numbers.push(number);
-                    if let Some(pr) = observation.recovery {
-                        recovered.insert(number, pr);
-                    }
-                    self.observed(observation.pr, observation.acquired);
+                    let initial_recovery = if matches!(recovery, RecoveryFields::Initial) {
+                        observation.recovery
+                    } else {
+                        if let Some(pr) = observation.recovery {
+                            recovered.insert(number, pr);
+                        }
+                        None
+                    };
+                    self.observed(observation.pr, observation.acquired, initial_recovery);
                     if !observation.stack_known {
                         guard(&self.session.unknown_stacks).insert(number);
                     }
@@ -708,7 +736,7 @@ impl GitHub<'_> {
         chunk: &[&HeadObservation<'_>],
         owner: &str,
         name: &str,
-        recovery: bool,
+        recovery: RecoveryFields<'_>,
         recovery_started: Option<Instant>,
     ) -> Result<(Value, bool, Instant)> {
         let mut with_stack = !self.session.stack_field_unsupported.load(Ordering::Relaxed);
@@ -716,10 +744,10 @@ impl GitHub<'_> {
             let mut declarations = String::from("$owner:String!,$name:String!");
             let mut fields = String::new();
             let mut variables = json!({"owner":owner,"name":name});
-            let recovery_fields = if recovery {
-                super::recovery::HEAD_RECOVERY_FIELDS
-            } else {
+            let recovery_fields = if matches!(recovery, RecoveryFields::None) {
                 ""
+            } else {
+                super::recovery::HEAD_RECOVERY_FIELDS
             };
             let stack = if with_stack { "stack{number}" } else { "" };
             for (i, head) in chunk.iter().enumerate() {
@@ -740,7 +768,8 @@ impl GitHub<'_> {
                 );
                 variables[format!("h{i}")] = json!(head.reference);
             }
-            let probe = if recovery {
+            let required = matches!(recovery, RecoveryFields::Required(_));
+            let probe = if required {
                 None
             } else {
                 self.discovery_probe(chunk.iter().map(|head| head.reference.to_owned()).collect())
@@ -748,7 +777,7 @@ impl GitHub<'_> {
             if let Some(probe) = &probe {
                 probe.append(self, &mut declarations, &mut fields, &mut variables);
             }
-            let operation = if recovery {
+            let operation = if required {
                 "query RecoveryHeads"
             } else {
                 "query"
@@ -970,7 +999,7 @@ fn decode_nodes(
     repo: &str,
     reference: &str,
     stack_known: bool,
-    recovery: Option<&HashSet<u64>>,
+    recovery: RecoveryFields<'_>,
     acquired: Instant,
 ) -> Result<Vec<Observation>> {
     let mut prs = Vec::new();
@@ -985,16 +1014,23 @@ fn decode_nodes(
         {
             bail!("incomplete PR identity or content observation");
         }
-        let recovery = if recovery.is_some_and(|selected| {
-            node["number"]
-                .as_u64()
-                .is_some_and(|number| selected.contains(&number))
-        }) {
+        let decode_recovery = || {
             let pr = super::recovery::decode_recovery(&node)?;
             super::policy::validate_recovery_observation(&pr, pr.number, repo)?;
-            Some(pr)
-        } else {
-            None
+            Ok::<_, anyhow::Error>(pr)
+        };
+        let recovery = match recovery {
+            RecoveryFields::Required(selected)
+                if node["number"]
+                    .as_u64()
+                    .is_some_and(|number| selected.contains(&number)) =>
+            {
+                Some(decode_recovery()?)
+            }
+            RecoveryFields::Initial if stack_known && node["state"] == "OPEN" => {
+                decode_recovery().ok()
+            }
+            _ => None,
         };
         let mut labels = Cursor::default();
         labels.advance(&node["labels"])?;

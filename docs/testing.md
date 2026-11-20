@@ -62,11 +62,11 @@ The following operation counts were obtained from the same deterministic in-memo
 | Disabled | Pushes | 3 | 1 |
 | Disabled | Base mutations | 8 | 2 |
 | Disabled | Remote-ref observations | 7 | 4 |
-| Disabled | HTTP requests | 25 | 14 |
+| Disabled | HTTP requests | 25 | 13 |
 | Enabled | Pushes | 3 | 1 |
 | Enabled | Base mutations | 8 | 2 |
 | Enabled | Remote-ref observations | 8 | 5 |
-| Enabled | HTTP requests | 31 | 20 |
+| Enabled | HTTP requests | 31 | 19 |
 
 The successful-path regression enforces these counts, stable existing PR identities, open lifecycle state, intended final bases and publication before the two necessary retargets.
 Separate interruption, race, shallow-history and selective-staging regressions establish that reduced operation counts do not authorise stale mutations or unsafe intermediate states.

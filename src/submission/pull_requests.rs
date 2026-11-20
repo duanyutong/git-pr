@@ -210,7 +210,7 @@ impl Publication {
                 .iter()
                 .map(|commit| commit.remote_ref().to_owned())
                 .collect();
-            github.observe(&references)?;
+            github.observe_publication(&references)?;
             github.refresh_prs(
                 &references
                     .iter()

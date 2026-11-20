@@ -438,8 +438,12 @@ Their budgets include initial dependant preflight, every mandatory push-boundary
 The partial-selection budgets retain a fresh observation of the affected group before every batch whilst proving each immutable object pair once.
 Consent, pagination, changed head objects and expired observations constitute explicit additional work.
 
-The ten-PR reversal fixture, including native-stack dissolution and restoration and REST responses without membership, requires 41 HTTP requests, compared with 43 before shared post-publication verification, 83 after collective-read batching and the former 256.
-Its five explicit recovery queries comprise three collective observations and the initial precondition for each of two retargeting phases.
+Initial GitHub.com publication discovery requests exact head and base objects and recovery metadata in the existing PR-head batch.
+Initial transition planning reuses complete, fresh recovery evidence only when it came from the same PR observation selected during discovery.
+Missing, incomplete or expired evidence is acquired through the existing bounded recovery query for the affected PR identities.
+The subsequent observations before and after mutation retain their independent freshness requirements.
+The ten-PR reversal fixture, including native-stack dissolution and restoration and REST responses without membership, requires 39 HTTP requests, compared with 40 before recovery evidence was shared with initial discovery, 83 after collective-read batching and the former 256.
+Its four explicit recovery queries comprise two collective observations and the initial precondition for each of two retargeting phases.
 One combined observation supplies ordinary PR content and selected recovery metadata to the post-publication validators, preserving identity, cardinality, lifecycle, object, base and membership checks.
 Expired combined evidence is reacquired together within the existing retry and recovery limits; an ordinary-only refresh cannot replace half of that evidence.
 The remaining transition barriers acquire ordinary content and selected recovery metadata in the same paginated head observation, retaining complete label and membership checks.

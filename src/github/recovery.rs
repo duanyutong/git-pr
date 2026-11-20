@@ -2,10 +2,10 @@
 
 use anyhow::{Context, Result, bail};
 use serde_json::json;
-use std::{collections::HashSet, fmt::Write as _, time::Instant};
+use std::{collections::HashSet, fmt::Write as _, sync::Arc, time::Instant};
 
 use super::{GitHub, guard, policy};
-use crate::model::pull_request::RecoveryPullRequest;
+use crate::model::pull_request::{PullRequest, RecoveryPullRequest};
 
 pub(super) const HEAD_RECOVERY_FIELDS: &str =
     "mergedAt mergeCommit{oid} headRefOid baseRefOid baseRepository{nameWithOwner}";
@@ -19,6 +19,41 @@ struct RetargetAcknowledgement {
 }
 
 impl GitHub<'_> {
+    /// Reuse only evidence attached to the exact, fresh discovery snapshot.
+    pub(crate) fn initial_recovery_prs(
+        &self,
+        expected: &[Arc<PullRequest>],
+    ) -> Result<Vec<RecoveryPullRequest>> {
+        let mut seen = HashSet::new();
+        let mut missing = Vec::new();
+        let cache = guard(&self.session.initial_recovery);
+        let evidence: Vec<_> = expected
+            .iter()
+            .filter(|pr| seen.insert(pr.number))
+            .map(|pr| {
+                let observed = cache.get(&pr.number).filter(|observed| {
+                    std::ptr::eq(observed.source.as_ptr(), Arc::as_ptr(pr))
+                        && self.fresh(&observed.acquired)
+                });
+                if observed.is_none() {
+                    missing.push(pr.number);
+                }
+                observed.map(|observed| observed.evidence.clone())
+            })
+            .collect();
+        drop(cache);
+        let mut refreshed = if missing.is_empty() {
+            Vec::new()
+        } else {
+            self.recovery_prs(&missing)?
+        }
+        .into_iter();
+        Ok(evidence
+            .into_iter()
+            .filter_map(|pr| pr.or_else(|| refreshed.next()))
+            .collect())
+    }
+
     /// Acquire complete recovery evidence in one bounded query per group.
     /// These observations deliberately bypass the ordinary content cache.
     pub(crate) fn recovery_prs(&self, numbers: &[u64]) -> Result<Vec<RecoveryPullRequest>> {

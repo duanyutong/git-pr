@@ -746,7 +746,7 @@ fn label_freshness_checks_scale_with_targets_and_expiry_retains_batching() {
                 .collect::<Vec<_>>()
         };
         for pr in observed {
-            g.observed(pr, g.now());
+            g.observed(pr, g.now(), None);
         }
         let commits: Vec<_> = (1..=100)
             .map(|i| {

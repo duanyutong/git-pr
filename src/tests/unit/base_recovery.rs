@@ -220,6 +220,7 @@ fn recovery_refuses_unproven_or_unsafe_evidence_without_effects() {
         "changed-head",
         "native",
         "malformed-membership",
+        "closed-during-recovery",
         "closed",
         "already-landed",
         "prepared-landed",
@@ -258,7 +259,7 @@ fn recovery_refuses_unproven_or_unsafe_evidence_without_effects() {
                 "native" => m.prs.get_mut(&101).unwrap()["stack"] = json!({"number":9}),
                 "closed" => m.prs.get_mut(&101).unwrap()["state"] = json!("closed"),
                 "bad-repository" => {
-                    m.prs.get_mut(&101).unwrap()["head"]["repo"]["full_name"] = json!("other/repo");
+                    m.prs.get_mut(&101).unwrap()["base"]["repo"]["full_name"] = json!("other/repo");
                 }
                 "dependant" => {
                     m.prs.insert(200, pr(200, "outside", 12, "topic/1"));
@@ -267,9 +268,17 @@ fn recovery_refuses_unproven_or_unsafe_evidence_without_effects() {
             }
         }
         match case {
-            "malformed-membership" => {
-                let mut rest = w.0.lock().unwrap().prs[&101].clone();
-                rest["stack"] = json!("unknown");
+            "malformed-membership" | "closed-during-recovery" => {
+                let mut memory = w.0.lock().unwrap();
+                let discovery = memory.prs.get_mut(&101).unwrap();
+                let mut rest = discovery.clone();
+                discovery["head"]["sha"] = Value::Null;
+                drop(memory);
+                if case == "closed-during-recovery" {
+                    rest["state"] = json!("closed");
+                } else {
+                    rest["stack"] = json!("unknown");
+                }
                 w.http("POST recovery", vec![recovery_reply(&[rest])]);
             }
             "unrelated" => w.reply(
@@ -355,7 +364,7 @@ impl crate::github::http::Transport for ChangeIdentity {
             .unwrap_or_default();
         let recovery = (payload["query"]
             .as_str()
-            .is_some_and(|query| query.starts_with("query RecoveryHeads"))
+            .is_some_and(|query| query.contains("mergeCommit{oid}"))
             && payload["variables"]["h0"] == "topic/1")
             || payload["variables"]["r0"] == 101
             || payload["variables"]["input"]["pullRequestId"] == "PR_101"
@@ -1424,7 +1433,7 @@ fn six_layer_insertion_operation_budget() {
             "six-layer native={native}: {pushes} pushes, {retargets} retargets, {reads} ref reads, {http} HTTP requests"
         );
         assert_eq!((pushes, retargets), (1, 2));
-        assert_eq!((reads, http), if native { (5, 20) } else { (4, 14) });
+        assert_eq!((reads, http), if native { (5, 19) } else { (4, 13) });
         assert!(
             !trace
                 .iter()
@@ -2576,8 +2585,8 @@ fn ten_pr_transition_request_budget() {
         "10-PR transition: {requests} HTTP requests, {reads} REST PR reads, {batches} recovery batches"
     );
     assert_eq!(reads, 0);
-    assert_eq!(batches, 5);
-    assert_eq!(requests, 40);
+    assert_eq!(batches, 4);
+    assert_eq!(requests, 39);
     let memory = w.0.lock().unwrap();
     for (index, number) in (1..=10).rev().enumerate() {
         let pr = &memory.prs[&(100 + number)];
@@ -2678,6 +2687,110 @@ fn combined_recovery_observations_preserve_pr_and_label_pagination() {
                 .count(),
             3
         );
+    });
+}
+
+#[test]
+fn initial_recovery_reuses_only_complete_fresh_discovery_snapshots() {
+    for case in ["complete", "missing", "expired", "replaced"] {
+        let w = world(2);
+        let references = ["topic/1".into(), "topic/2".into()];
+        if case == "missing" {
+            let memory = w.0.lock().unwrap();
+            let mut first = recovery_head_node(&memory.prs[&101]);
+            first.as_object_mut().unwrap().remove("headRefOid");
+            let second = recovery_head_node(&memory.prs[&102]);
+            drop(memory);
+            w.http(
+                "POST graphql",
+                vec![Response::Output(
+                    200,
+                    json!({"data":{"repository":{
+                        "p0":{"nodes":[first],"pageInfo":{"hasNextPage":false}},
+                        "p1":{"nodes":[second],"pageInfo":{"hasNextPage":false}}
+                    }}})
+                    .to_string(),
+                )],
+            );
+        }
+        with_github(&w, |github| {
+            github.observe_publication(&references).unwrap();
+            if case == "missing" {
+                w.0.lock().unwrap().http_responses.remove("POST graphql");
+            }
+            if case == "expired" {
+                w.0.lock().unwrap().clock_elapsed += std::time::Duration::from_secs(31);
+            }
+            if case == "replaced" {
+                w.0.lock().unwrap().prs.get_mut(&101).unwrap()["head"]["sha"] = json!(oid(99));
+                github.invalidate_heads(&references[..1]);
+                github.observe(&references[..1]).unwrap();
+            }
+            let expected = references
+                .iter()
+                .map(|reference| github.publication_pr(reference).unwrap().unwrap())
+                .collect::<Vec<_>>();
+            w.0.lock().unwrap().trace.clear();
+            let recovered = github.initial_recovery_prs(&expected).unwrap();
+            assert_eq!(
+                recovered.iter().map(|pr| pr.number).collect::<Vec<_>>(),
+                [101, 102]
+            );
+            assert_eq!(
+                recovered[0].head.sha,
+                oid(if case == "replaced" { 99 } else { 11 })
+            );
+            let trace = w.trace();
+            let requests: Vec<_> = trace
+                .iter()
+                .filter(|event| event["kind"] == "http")
+                .collect();
+            if case == "complete" {
+                assert_eq!(requests, [] as [&Value; 0]);
+            } else {
+                assert_eq!(requests.len(), 1, "{case}");
+                let variables = &requests[0]["body"]["variables"];
+                assert_eq!(variables["r0"], 101);
+                assert_eq!(
+                    variables["r1"],
+                    if case == "expired" {
+                        json!(102)
+                    } else {
+                        Value::Null
+                    }
+                );
+            }
+        });
+    }
+}
+
+#[test]
+fn non_github_hosts_keep_the_standard_discovery_query() {
+    let w = world(1);
+    with_github(&w, |github| {
+        let mut config = w.config();
+        config.repo.host = "github.example.com".into();
+        let github = GitHub {
+            config: &config,
+            session: crate::github::Session::default(),
+            ..*github
+        };
+        github.observe_publication(&["topic/1".into()]).unwrap();
+        let expected = github.publication_pr("topic/1").unwrap().unwrap();
+        github.initial_recovery_prs(&[expected]).unwrap();
+        let trace = w.trace();
+        let requests: Vec<_> = trace
+            .iter()
+            .filter(|event| event["kind"] == "http")
+            .collect();
+        assert_eq!(requests.len(), 2);
+        assert!(
+            !requests[0]["body"]["query"]
+                .as_str()
+                .unwrap()
+                .contains("headRefOid")
+        );
+        assert_eq!(requests[1]["body"]["variables"]["r0"], 101);
     });
 }
 
