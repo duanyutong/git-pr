@@ -112,6 +112,35 @@ fn waits(world: &World) -> Vec<u64> {
         .collect()
 }
 
+#[test]
+fn serial_mutations_credit_service_and_intervening_read_time() {
+    for (mutation_ms, read_ms, expected_gap, expected_waits) in [
+        (300, 200, 1_000, &[500][..]),
+        (300, 0, 1_000, &[700][..]),
+        (1_400, 0, 1_400, &[][..]),
+    ] {
+        let mut first_reply = Reply::new(201, "{}");
+        first_reply.elapsed = Duration::from_millis(mutation_ms);
+        let mut read_reply = Reply::new(200, "{}");
+        read_reply.elapsed = Duration::from_millis(read_ms);
+        run(
+            vec![first_reply, read_reply, Reply::new(201, "{}")],
+            |github, world, service| {
+                let url = github.repo_url("pulls");
+                let first = github.request_url("POST", &url, None).unwrap();
+                github.request("GET", "pulls/101", None).unwrap();
+                let second = github.request_url("POST", &url, None).unwrap();
+                assert_eq!(
+                    second.acquired.duration_since(first.acquired),
+                    Duration::from_millis(expected_gap)
+                );
+                assert_eq!(waits(world), expected_waits);
+                assert_eq!(*service.calls.lock().unwrap(), 3);
+            },
+        );
+    }
+}
+
 fn recovery_pr() -> serde_json::Value {
     json!({"number":101,"node_id":"PR_101","title":"Feature","body":"Discussion","labels":[],"state":"open","merged":false,"merged_at":null,"merge_commit_sha":null,
         "head":{"ref":"topic/1","sha":format!("{:040x}",1),"repo":{"full_name":"org/repo"}},

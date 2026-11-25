@@ -71,13 +71,13 @@ fn scheduling_separates_primary_resources_and_shares_secondary_cooldown() {
         schedule.ready(now + Duration::from_secs(30), true, 0).0,
         Duration::ZERO
     );
-    schedule.completed(now, 0);
-    schedule.completed(now, 1);
+    schedule.started(now, 0);
+    schedule.started(now, 1);
     assert_eq!(
         schedule.ready(now + Duration::from_secs(30), false, 1).0,
         Duration::ZERO
     );
-    schedule.completed(now + Duration::from_secs(30), 1);
+    schedule.started(now + Duration::from_secs(30), 1);
     assert_eq!(
         schedule
             .ready(now + Duration::from_millis(30_500), false, 1)

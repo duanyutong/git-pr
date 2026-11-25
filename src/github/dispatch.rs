@@ -195,9 +195,8 @@ impl GitHub<'_> {
             ) {
                 break Err(error);
             }
-            schedule.reserve(self.now(), writes);
+            schedule.started(self.now(), writes);
             let response = self.send_request(method, url, body, writes, attempt);
-            schedule.completed(self.now(), writes);
             let quota = self.observe_quota(&mut schedule, &response, graphql);
             let response =
                 response.and_then(|response| graphql_result(response, graphql, &quota, attempt));

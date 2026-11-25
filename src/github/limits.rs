@@ -96,7 +96,7 @@ impl std::fmt::Display for WaitReason {
 
 #[derive(Debug, Default)]
 pub(super) struct Schedule {
-    last_write: Option<Instant>,
+    last_write_started: Option<Instant>,
     quotas: [Option<(Instant, Quota)>; 2],
     writes: VecDeque<(Instant, usize)>,
     cooldown: Option<(Instant, Duration)>,
@@ -144,7 +144,7 @@ impl Schedule {
             );
         }
         if writes != 0 {
-            if let Some(last) = self.last_write {
+            if let Some(last) = self.last_write_started {
                 consider(
                     Duration::from_secs(1).saturating_sub(now.saturating_duration_since(last)),
                     WaitReason::Mutation,
@@ -195,9 +195,10 @@ impl Schedule {
         }
     }
 
-    pub(super) const fn completed(&mut self, now: Instant, writes: usize) {
+    pub(super) fn started(&mut self, now: Instant, writes: usize) {
+        self.reserve(now, writes);
         if writes != 0 {
-            self.last_write = Some(now);
+            self.last_write_started = Some(now);
         }
     }
 }

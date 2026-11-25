@@ -356,7 +356,8 @@ Selected PRs which claim native membership shall appear in that stack's member l
 Duplicate selected PR identities, invalid observed stack identities and inconsistent topology prevent native append, dissolution or recreation.
 Valid selected slices preserve surrounding members under the existing reconciliation rules.
 
-All HTTP dispatch is serialised, with elapsed-time-aware spacing between mutation requests and handling for service-specified retry delays.
+All HTTP dispatch is serialised, with at least one second between mutation starts and handling for service-specified retry delays.
+Waiting for a response and performing intervening local work both count towards that interval.
 This follows GitHub's [REST guidance](https://docs.github.com/en/rest/using-the-rest-api/best-practices-for-using-the-rest-api); removing visibility sleeps does not remove legitimate mutation pacing.
 Unchanged submissions require no pacing because they make no mutations.
 

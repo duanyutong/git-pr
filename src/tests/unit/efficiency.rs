@@ -199,7 +199,9 @@ fn title_only_reconciliation_keeps_the_existing_description_out_of_the_request()
         memory.trace.clear();
         let pr = memory.prs.get_mut(&101).unwrap();
         pr["title"] = json!("External title");
-        pr["body"].clone()
+        let description = pr["body"].clone();
+        drop(memory);
+        description
     };
     world.run(&["--no-stack"]).unwrap();
     let trace = world.trace();
