@@ -156,7 +156,7 @@ fn description_progress_names_each_batch_before_dispatch_and_counts_acknowledged
             .iter()
             .map(|(numbers, progress)| (numbers.len(), progress.done, progress.total))
             .collect::<Vec<_>>(),
-        vec![(5, 0, 12), (5, 5, 12), (2, 10, 12)]
+        vec![(7, 0, 12), (5, 7, 12)]
     );
     assert_eq!(
         recorder.latest(),

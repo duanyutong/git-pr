@@ -207,7 +207,7 @@ impl GitHub<'_> {
         for change in changes.iter() {
             let pr = &change.after;
             let alias = change.alias;
-            let (input, size) = Self::encode_content(&pr.node_id, &pr.title, &pr.body, None);
+            let (input, size) = Self::encode_content(&change.before, &pr.title, &pr.body, None);
             if bytes + size > CONTENT_LIMIT {
                 if variables.is_empty() {
                     return Err(limits::Exhausted(
@@ -307,7 +307,7 @@ impl GitHub<'_> {
                 self.commands
                     .explain(&format!("PR #{number}: updating title or description."));
                 // Reserve bounded query overhead as well as JSON-escaped UTF-8 payload bytes.
-                let (input, size) = Self::encode_content(&pr.node_id, title, &body, prepared);
+                let (input, size) = Self::encode_content(&pr, title, &body, prepared);
                 if payload_bytes + size > CONTENT_LIMIT {
                     if observations.is_empty() {
                         bail!("PR content exceeds the 1 MiB request budget");
@@ -357,7 +357,7 @@ impl GitHub<'_> {
     }
 
     fn encode_content(
-        node_id: &str,
+        before: &PullRequest,
         title: &str,
         body: &str,
         prepared: Option<PreparedContent>,
@@ -366,9 +366,9 @@ impl GitHub<'_> {
             || {
                 #[cfg(test)]
                 crate::tests::unit::support::CONTENT_ENCODINGS.update(|n| n + 1);
-                let input = json!({"pullRequestId":node_id,"title":title,"body":body})
-                    .to_string()
-                    .into_bytes();
+                let mut fields = content_fields(before, title, body);
+                fields.insert("pullRequestId".into(), json!(before.node_id));
+                let input = Value::Object(fields).to_string().into_bytes();
                 let size = input.len() + 256;
                 (input, size)
             },
@@ -402,7 +402,7 @@ impl GitHub<'_> {
         body: Arc<str>,
         render: &mut dyn FnMut(&Commit, &PullRequest) -> Result<Option<String>>,
     ) -> Result<()> {
-        let encoded = json!({"title":commit.title,"body":body.as_ref()})
+        let encoded = Value::Object(content_fields(&before, &commit.title, &body))
             .to_string()
             .into_bytes();
         #[cfg(test)]
@@ -543,6 +543,17 @@ impl GitHub<'_> {
         }
         incomplete
     }
+}
+
+fn content_fields(before: &PullRequest, title: &str, body: &str) -> serde_json::Map<String, Value> {
+    let mut fields = serde_json::Map::new();
+    if before.title != title {
+        fields.insert("title".into(), json!(title));
+    }
+    if before.body.as_ref() != body {
+        fields.insert("body".into(), json!(body));
+    }
+    fields
 }
 
 #[cfg(test)]

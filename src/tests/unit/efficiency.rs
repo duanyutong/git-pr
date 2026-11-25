@@ -143,35 +143,78 @@ fn assert_unchanged_submission(size: u64) {
 
 #[test]
 fn first_submission_uses_one_publication_and_bounded_content_mutations() {
-    let world = World::new(5);
+    for (count_prs, expected_batches) in [(7, &[7][..]), (8, &[7, 1][..])] {
+        let world = World::new(count_prs);
+        world.run(&["--no-stack"]).unwrap();
+        let trace = world.trace();
+        assert_eq!(
+            count(&trace, |event| event["path"] == "pulls"
+                && event["method"] == "POST"),
+            usize::try_from(count_prs).unwrap()
+        );
+        let batches: Vec<_> = trace
+            .iter()
+            .filter(|event| {
+                event["body"]["query"]
+                    .as_str()
+                    .is_some_and(|query| query.contains("updatePullRequest"))
+            })
+            .map(|event| {
+                let inputs = event["body"]["variables"].as_object().unwrap();
+                assert!(
+                    inputs
+                        .values()
+                        .all(|input| input["body"].is_string() && input.get("title").is_none())
+                );
+                inputs.len()
+            })
+            .collect();
+        assert_eq!(batches, expected_batches);
+        assert_eq!(
+            count(&trace, |event| event["program"] == "git"
+                && event["args"][0] == "push"),
+            1
+        );
+        let prs = world.0.lock().unwrap().prs.clone();
+        for (i, pr) in prs.values().enumerate() {
+            assert_eq!(
+                pr["base"]["ref"],
+                if i == 0 {
+                    "main".to_owned()
+                } else {
+                    format!("topic/{i}")
+                }
+            );
+            assert!(pr["body"].as_str().unwrap().contains("This PR"));
+        }
+    }
+}
+
+#[test]
+fn title_only_reconciliation_keeps_the_existing_description_out_of_the_request() {
+    let world = World::new(1);
+    world.run(&["--no-stack"]).unwrap();
+    let description = {
+        let mut memory = world.0.lock().unwrap();
+        memory.trace.clear();
+        let pr = memory.prs.get_mut(&101).unwrap();
+        pr["title"] = json!("External title");
+        pr["body"].clone()
+    };
     world.run(&["--no-stack"]).unwrap();
     let trace = world.trace();
-    assert_eq!(
-        count(&trace, |v| v["path"] == "pulls" && v["method"] == "POST"),
-        5
-    );
-    assert_eq!(
-        count(&trace, |v| v["body"]["query"]
-            .as_str()
-            .is_some_and(|q| q.starts_with("mutation"))),
-        1
-    );
-    assert_eq!(
-        count(&trace, |v| v["program"] == "git" && v["args"][0] == "push"),
-        1
-    );
-    let prs = world.0.lock().unwrap().prs.clone();
-    for (i, pr) in prs.values().enumerate() {
-        assert_eq!(
-            pr["base"]["ref"],
-            if i == 0 {
-                "main".to_owned()
-            } else {
-                format!("topic/{i}")
-            }
-        );
-        assert!(pr["body"].as_str().unwrap().contains("This PR"));
-    }
+    let mutation = trace
+        .iter()
+        .find(|event| {
+            event["body"]["query"]
+                .as_str()
+                .is_some_and(|query| query.contains("updatePullRequest"))
+        })
+        .unwrap();
+    let input = &mutation["body"]["variables"]["p0"];
+    assert_eq!(input["title"], "Feature 1");
+    assert!(input.get("body").is_none());
+    assert_eq!(world.0.lock().unwrap().prs[&101]["body"], description);
 }
 
 #[test]

@@ -137,7 +137,7 @@ fn new_native_stack_combines_preflight_discovery_and_preserves_create_order() {
         assert_eq!(event["body"]["head"], format!("topic/{}", index + 1));
         assert_eq!(event["body"]["draft"], true);
     }
-    assert_eq!(trace.iter().filter(|e| e["kind"] == "http").count(), 12);
+    assert_eq!(trace.iter().filter(|e| e["kind"] == "http").count(), 11);
 
     world.0.lock().unwrap().trace.clear();
     world.run(&["--github-stack", "--draft"]).unwrap();

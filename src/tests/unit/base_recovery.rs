@@ -1433,7 +1433,7 @@ fn six_layer_insertion_operation_budget() {
             "six-layer native={native}: {pushes} pushes, {retargets} retargets, {reads} ref reads, {http} HTTP requests"
         );
         assert_eq!((pushes, retargets), (1, 2));
-        assert_eq!((reads, http), if native { (5, 19) } else { (4, 13) });
+        assert_eq!((reads, http), if native { (5, 18) } else { (4, 12) });
         assert!(
             !trace
                 .iter()

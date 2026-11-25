@@ -217,7 +217,7 @@ Redirected standard error, CI and terminals declaring `TERM=dumb` use durable wa
 The existing `-v` and `-vv` diagnostics remain available alongside progress.
 Control-C retains the existing cancellation behaviour and exit status 130.
 
-Requests are serialised, mutations are spaced by at least one second after the preceding mutation completes, and content writes use at most five PRs per request.
+Requests are serialised, mutations are spaced by at least one second after the preceding mutation completes, and content writes use at most seven PRs per request.
 A conservative session-local budget also limits content operations to sixty per minute and 450 per hour, counting each batched PR separately.
 These local estimates cannot account for other applications using the same GitHub identity or undisclosed service limits.
 

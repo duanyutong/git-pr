@@ -77,8 +77,11 @@ impl Transport for Fault {
             let mut memory = self.world.0.lock().unwrap();
             for ((alias, input), number) in inputs.iter().zip(&numbers).take(count) {
                 let pr = memory.prs.get_mut(number).unwrap();
-                pr["title"] = input["title"].clone();
-                pr["body"] = input["body"].clone();
+                for field in ["title", "body"] {
+                    if let Some(value) = input.get(field) {
+                        pr[field] = value.clone();
+                    }
+                }
                 data[*alias] = json!({"pullRequest":{"number":number}});
                 self.applied.lock().unwrap().push(*number);
             }
@@ -335,7 +338,7 @@ fn description_progress_counts_recovered_batches_once_and_never_completes_reject
 
 #[test]
 fn every_partial_prefix_recovers_without_repeating_completed_writes_or_publication() {
-    for prefix in 0..=5 {
+    for prefix in 0..=7 {
         for mode in [
             "502",
             "504",
@@ -369,7 +372,7 @@ fn every_partial_prefix_recovers_without_repeating_completed_writes_or_publicati
                         .lock()
                         .unwrap()
                         .iter()
-                        .all(|batch| batch.len() <= 5)
+                        .all(|batch| batch.len() <= 7)
                 );
                 assert!(
                     !service.world.trace().iter().any(|v| v["args"][0] == "push"
@@ -426,7 +429,7 @@ fn recovery_preserves_fresh_unmanaged_text_and_rejects_identity_lifecycle_and_ti
 
 #[test]
 fn later_batch_failures_recover_twelve_and_twenty_completed_updates_without_duplicates() {
-    for (skip, prefix) in [(2, 2), (3, 5)] {
+    for (skip, prefix) in [(1, 5), (2, 6)] {
         fixture(20, prefix, 1, "502", None, |g, service, commits| {
             *service.skip_batches.lock().unwrap() = skip;
             update(g, commits).unwrap();
@@ -786,17 +789,17 @@ fn unsent_description_failures_preserve_confirmed_work_without_claiming_uncertai
 
 #[test]
 fn fully_acknowledged_rate_limited_descriptions_preserve_the_next_request_deadline() {
-    for count in [5, 20] {
-        fixture(count, 5, 1, "throttle", None, |github, service, commits| {
+    for count in [7, 21] {
+        fixture(count, 7, 1, "throttle", None, |github, service, commits| {
             update(github, commits).unwrap();
             assert_eq!(
                 service.attempted.lock().unwrap().len(),
-                usize::try_from(count).unwrap() / 5
+                usize::try_from(count).unwrap() / 7
             );
             let mut applied = service.applied.lock().unwrap().clone();
             applied.sort_unstable();
             assert_eq!(applied, (101..101 + count).collect::<Vec<_>>());
-            if count == 5 {
+            if count == 7 {
                 assert!(
                     !service
                         .world
@@ -812,7 +815,7 @@ fn fully_acknowledged_rate_limited_descriptions_preserve_the_next_request_deadli
                         .iter()
                         .filter(|event| event["kind"] == "http")
                         .count(),
-                    5
+                    7
                 );
                 github.request("GET", "pulls/101", None).unwrap();
             }

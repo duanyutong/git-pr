@@ -62,11 +62,11 @@ The following operation counts were obtained from the same deterministic in-memo
 | Disabled | Pushes | 3 | 1 |
 | Disabled | Base mutations | 8 | 2 |
 | Disabled | Remote-ref observations | 7 | 4 |
-| Disabled | HTTP requests | 25 | 13 |
+| Disabled | HTTP requests | 25 | 12 |
 | Enabled | Pushes | 3 | 1 |
 | Enabled | Base mutations | 8 | 2 |
 | Enabled | Remote-ref observations | 8 | 5 |
-| Enabled | HTTP requests | 31 | 19 |
+| Enabled | HTTP requests | 31 | 18 |
 
 The successful-path regression enforces these counts, stable existing PR identities, open lifecycle state, intended final bases and publication before the two necessary retargets.
 Separate interruption, race, shallow-history and selective-staging regressions establish that reduced operation counts do not authorise stale mutations or unsafe intermediate states.
@@ -77,7 +77,7 @@ The remaining observations acquire initial lease expectations, renew evidence be
 Native dissolution requires a further observation because dissolution invalidates membership evidence.
 These distinct mutation boundaries shall not be collapsed into an invocation-wide mutable-state cache.
 
-The fixture still requires two PR creations, six description updates in two bounded requests and, when native management is enabled, dissolution followed by reconstruction of membership.
+The fixture still requires two PR creations, six description updates in one bounded request and, when native management is enabled, dissolution followed by reconstruction of membership.
 New PR numbers are unavailable before creation, so complete managed descriptions cannot be predicted at that boundary.
 Base changes require the existing native membership transition, whilst human text, request limits, quota accounting and mutation spacing remain protected by their independent contracts.
 Local publication records retain their write verification and pending-create journal; compatible reads are shared, whilst conflicting or concurrently changed associations remain errors.
@@ -109,7 +109,7 @@ HTTP date cases require consistent weekdays, correct positive and negative zero-
 Invocation-log timestamps retain their UTC suffix and exactly three decimal places, with fractional seconds truncated to milliseconds.
 
 Operation budgets require exclusive Git publication ownership, no production `gh` subprocesses, at most 128 refspecs and 64 KiB of refspec arguments per push, and at most 25 PR aliases per GraphQL request.
-Content mutations additionally respect a five-alias maximum and a 1 MiB encoded request budget.
+Content mutations additionally respect a seven-alias maximum and a 1 MiB encoded request budget.
 Request-boundary regressions require exactly 25 renders for 25 large descriptions, including renewal of an expired observation whose content remains unchanged.
 A changed observation instead participates in a fresh render, preserving newly observed human text within the same request budget.
 An unchanged submission performs no push, description update, label mutation, native-topology mutation, local ref synchronisation or unconditional wait.

@@ -38,7 +38,7 @@ pub(crate) fn check_window(
     Ok(())
 }
 
-pub(super) const CONTENT_BATCH: usize = 5;
+pub(super) const CONTENT_BATCH: usize = 7;
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Quota {

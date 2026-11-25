@@ -1926,7 +1926,7 @@ fn expired_content_observations_refresh_in_bounded_batches() {
     assert_eq!(queries.iter().filter(|q| q.starts_with("query")).count(), 3);
     assert_eq!(
         queries.iter().filter(|q| q.starts_with("mutation")).count(),
-        11
+        9
     );
     assert!(!trace.iter().any(|e| e["method"] == "GET"));
     for request in trace.iter().filter(|e| e["path"] == "graphql") {

@@ -259,7 +259,8 @@ Unused messages and templates do not constrain adoption of an existing human des
 Description bodies are rendered from the PR observation obtained when preparing each mutation batch, including any content refreshed after cache expiry.
 A refreshed human edit therefore participates in rendering instead of being replaced by a previously prepared body.
 The resulting title and body are compared again before dispatch, so a refresh which establishes the desired state requires no mutation.
-Content mutations contain at most five aliases and fit within a 1 MiB encoded request budget, including conservative query overhead.
+Content mutations contain at most seven aliases and fit within a 1 MiB encoded request budget, including conservative query overhead.
+Each mutation sends only the title or body fields that differ from the observation used to prepare it.
 JSON escaping and UTF-8 bytes contribute to that budget; an individually oversized update fails explicitly.
 A content update deferred at the byte limit retains its rendered body, encoded input and calculated size for the following request.
 Preparation is reused only when the complete refreshed PR observation equals the original observation; changed observations require rendering again before any mutation.
