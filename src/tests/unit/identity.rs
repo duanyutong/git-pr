@@ -1834,10 +1834,10 @@ fn cleanup_observation_failures_preserve_every_association_without_partial_retir
         let branches_query = ANCHOR_INVENTORY;
         let failure = Response::Failure(format!("{observation} unavailable"));
         let (query, responses) = match observation {
-            "initial-config" => (config_query.clone(), VecDeque::from([failure])),
+            "initial-config" => (config_query, VecDeque::from([failure])),
             "initial-branches" => (branches_query.into(), VecDeque::from([failure])),
             "initial-attempts" => (
-                config_query.clone(),
+                config_query,
                 VecDeque::from([Response::Output(
                     0,
                     publication_records_output(&invalid_attempts),
@@ -1851,14 +1851,14 @@ fn cleanup_observation_failures_preserve_every_association_without_partial_retir
                 ]),
             ),
             "final-config" => (
-                config_query.clone(),
+                config_query,
                 VecDeque::from([
                     Response::Output(0, publication_records_output(&records)),
                     failure,
                 ]),
             ),
             "final-attempts" => (
-                config_query.clone(),
+                config_query,
                 VecDeque::from([
                     Response::Output(0, publication_records_output(&records)),
                     Response::Output(0, publication_records_output(&invalid_attempts)),

@@ -20,8 +20,8 @@ Each batch logs the exact input path before execution, so an assertion failure i
 Retained corpus files under `seeds/` are byte-exact fixtures, including intentionally incomplete framing and trailing carriage returns.
 They shall not be normalised by text-formatting hooks.
 
-Coverage-guided campaigns require cargo-fuzz `0.13.2`, the pinned `nightly-2026-10-14` toolchain and a supported C++ compiler.
-Install them with `cargo install cargo-fuzz --version 0.13.2 --locked` and `rustup toolchain install nightly-2026-10-14 --profile minimal`.
+Coverage-guided campaigns require cargo-fuzz `0.13.2`, the pinned `nightly-2026-11-25` toolchain and a supported C++ compiler.
+Install them with `cargo install cargo-fuzz --version 0.13.2 --locked` and `rustup toolchain install nightly-2026-11-25 --profile minimal`.
 The [Rust Fuzz Book](https://rust-fuzz.github.io/book/cargo-fuzz/setup.html) specifies the nightly requirement and supported platforms.
 Run `uv run scripts/fuzzing.py campaign --seconds 60 --seed 20261015` to execute the three instrumented targets with AddressSanitizer and coverage guidance.
 `GIT_PR_FUZZ_SECONDS` and `GIT_PR_FUZZ_SEED` set the corresponding defaults for scheduled execution.

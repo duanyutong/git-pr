@@ -1,10 +1,10 @@
 [project]
 name = "git-pr-dev-tools"
 version = "0.0.0"
-requires-python = "==3.15.0"
+requires-python = "==3.15.2"
 dependencies = [
-  "semver>=3.1.0",
-  "tomlkit>=0.15.2",
+  "semver>=3.1.2",
+  "tomlkit>=0.15.3",
 ]
 
 [tool.uv]
@@ -37,6 +37,6 @@ show_missing = true
 
 [dependency-groups]
 dev = [
-  "coverage>=7.16.2",
-  "pyyaml>=6.0.3",
+  "coverage>=7.17.5",
+  "pyyaml>=6.0.4",
 ]

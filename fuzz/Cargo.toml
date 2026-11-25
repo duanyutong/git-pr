@@ -52,7 +52,7 @@ required-features = ["fuzzing"]
 fuzzing = ["dep:libfuzzer-sys"]
 
 [dependencies]
-anyhow = "1.0.104"
+anyhow = "1.0.105"
 libfuzzer-sys = { version = "=0.4.13", optional = true }
 serde = { version = "1.0.229", features = ["derive", "rc"] }
 serde_json = "1.0.154"

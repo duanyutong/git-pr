@@ -857,7 +857,7 @@ fn repository_roots_preserve_significant_trailing_path_whitespace() {
         let error = config::load(
             &Flags::default(),
             &BTreeMap::new(),
-            &mut fixture.app.commands.clone(),
+            &mut fixture.app.commands,
             &FakeCredentials,
             &crate::config::files::NativeFiles,
             false,

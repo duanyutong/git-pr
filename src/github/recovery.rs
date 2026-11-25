@@ -259,7 +259,7 @@ impl GitHub<'_> {
             self.commands.outcomes.start(effect.clone());
             let response = self.send_retarget(expected, base, next, acquired, started);
             if response.as_ref().is_err_and(super::limits::rejected) {
-                self.commands.outcomes.reject(effect.clone());
+                self.commands.outcomes.reject(effect);
             }
             self.invalidate_heads(std::slice::from_ref(&expected.head.name));
             match response {
@@ -346,8 +346,7 @@ impl GitHub<'_> {
                 let partial = value.get("errors").is_some();
                 let data = value
                     .get_mut("data")
-                    .map(serde_json::Value::take)
-                    .unwrap_or_default();
+                    .map_or_default(serde_json::Value::take);
                 self.decode_retarget(data, expected, base, next, partial)
                     .map(|next| RetargetAcknowledgement {
                         next,

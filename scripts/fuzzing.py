@@ -17,7 +17,7 @@ import time
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 TARGETS = ("trailers", "snapshots", "descriptions")
 MAX_INPUT = 4096
-NIGHTLY = "nightly-2026-10-14"
+NIGHTLY = "nightly-2026-11-25"
 FUZZ_VERSION = "0.13.2"
 
 

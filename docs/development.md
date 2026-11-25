@@ -1,6 +1,6 @@
 # Development
 
-Rust 1.99.1 and Edition 2024 are specified by `rust-toolchain.toml` and `Cargo.toml`.
+Rust 1.100.0 and Edition 2024 are specified by `rust-toolchain.toml` and `Cargo.toml`.
 Development requires Git, rustup, uv, just, prek and `man`; command-runner versions are declared in `scripts/dev-tools.env`.
 Linux requires a C compiler, pkg-config and the D-Bus development headers; credential acceptance additionally requires `dbus-run-session` and `gnome-keyring-daemon`.
 The corresponding Debian and Ubuntu packages are `build-essential pkg-config libdbus-1-dev libssl-dev dbus-x11 gnome-keyring man-db`.
@@ -8,7 +8,7 @@ macOS requires the Xcode command-line tools.
 
 The command `sh setup.sh` verifies the command-runner versions, synchronises the Python environment from `uv.lock`, provisions hook environments, fetches locked Rust dependencies and registers hooks.
 prek owns additional development-tool installations in its standard cache; setup creates no repository-local executable directory.
-The non-package project in `pyproject.toml` pins Python to 3.15.0 for development and versioning scripts.
+The non-package project in `pyproject.toml` pins Python to 3.15.2 for development and versioning scripts.
 uv selects or downloads a compatible interpreter using its standard storage and maintains the repository environment in `.venv`.
 Run development scripts as `uv run scripts/<name>.py`; executable scripts also provide `#!/usr/bin/env -S uv run` shebangs.
 Run these commands from the repository so uv discovers its Python requirement.

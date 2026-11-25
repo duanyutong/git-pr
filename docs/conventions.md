@@ -5,13 +5,13 @@ The checkout provisions its own development tools.
 
 | Area | Convention |
 | --- | --- |
-| Compiler | Rust 1.99.1, Edition 2024, minimal toolchain with rustfmt, Clippy, LLVM tools and rust-analyzer. |
+| Compiler | Rust 1.100.0, Edition 2024, minimal toolchain with rustfmt, Clippy, LLVM tools and rust-analyzer. |
 | Rust policy | Workspace-wide compiler metadata and lints, inherited by the application; unsafe code is forbidden. |
 | Module layout | Production modules with children use `name/mod.rs`; leaf modules retain descriptive filenames, and ordinary production declarations use no custom source paths. |
 | Release profile | Optimisation level 3, fat LTO, one code-generation unit, aborting panics and stripped symbols. |
 | Build identity | Version output records the package version, commit, dirty state, target, compiler and build timestamp. |
 | Dependencies | Committed Cargo lockfile; locked builds and tests; current advisory, licence, source and duplicate-version checks. |
-| Setup | `sh setup.sh` or `just setup`; prek-managed hook environments and the uv-managed Python 3.15.0 project environment. |
+| Setup | `sh setup.sh` or `just setup`; prek-managed hook environments and the uv-managed Python 3.15.2 project environment. |
 | Formatting | Rustfmt, cargo-sort, offline Tombi, Ruff, spelling and repository hygiene. |
 | Hooks | Pre-commit formatting and hygiene, Conventional Commit and version validation at commit time, version-history verification and lightweight, read-only built-in file checks before push. |
 | Validation | `just lint`, `just typecheck`, `just test`, `just coverage` and `just build-release`; `just check` combines lint, tests, doctests and release compilation. |

@@ -1,7 +1,7 @@
 
 [package]
 name = "git-pr"
-version = "0.10.27"
+version = "0.10.28"
 edition.workspace = true
 rust-version.workspace = true
 description = "Submit Git and Jujutsu commits as stacked GitHub pull requests"
@@ -38,28 +38,28 @@ unimplemented = "deny"
 unwrap_used = "warn"
 
 [dependencies]
-anyhow = "1.0.104"
+anyhow = "1.0.105"
 base64 = "0.23.1"
-ctrlc = { version = "3.5.2", features = ["termination"] }
+ctrlc = { version = "3.5.3", features = ["termination"] }
 getrandom = "0.4.3"
-jiff = { version = "1.0.0", default-features = false, features = ["std"] }
+jiff = { version = "1.0.3", default-features = false, features = ["std"] }
 percent-encoding = "2.3.2"
-regex = "1.13.1"
+regex = "1.13.2"
 reqwest = { version = "0.13.5", default-features = false, features = ["blocking", "rustls"] }
 rustix = { version = "1.1.6", features = ["process", "termios"] }
 serde = { version = "1.0.229", features = ["derive", "rc"] }
-serde-saphyr = "2.0.0"
+serde-saphyr = "2.2.0"
 serde_json = "1.0.154"
 tempfile = "3.27.0"
 time = { version = "0.3.55", default-features = false, features = ["std", "formatting", "macros", "parsing", "large-dates"] }
 unicode-segmentation = "1.13.3"
-unicode-width = "0.2.2"
+unicode-width = "0.2.3"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-dbus-secret-service = "4.1.0"
+dbus-secret-service = "4.2.0"
 
 [build-dependencies]
-vergen-gitcl = { version = "10.0.3", features = ["build", "cargo", "rustc"] }
+vergen-gitcl = { version = "10.0.4", features = ["build", "cargo", "rustc"] }
 
 [dev-dependencies]
 proptest = { version = "1.12.0", default-features = false, features = ["std"] }

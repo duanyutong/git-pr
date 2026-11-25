@@ -1,6 +1,6 @@
-minimum_prek_version = "0.5.6"
+minimum_prek_version = "0.5.11"
 default_stages = ["pre-commit"]
-default_language_version = { python = "3.15.0", rust = { request = "1.99.1", preference = "only-system" } }
+default_language_version = { python = "3.15.2", rust = { request = "1.100.0", preference = "only-system" } }
 exclude = "^(LICENSE|THIRD_PARTY_NOTICES.md|fuzz/seeds/)"
 
 [[repos]]
@@ -19,7 +19,7 @@ hooks = [
 
 [[repos]]
 repo = "https://github.com/astral-sh/ruff-pre-commit"
-rev = "v0.17.1"
+rev = "v0.17.6"
 
 [[repos.hooks]]
 id = "ruff-format"
@@ -45,7 +45,7 @@ priority = 5
 
 [[repos]]
 repo = "https://github.com/crate-ci/typos"
-rev = "v1.51.1"
+rev = "v1.52.2"
 
 [[repos.hooks]]
 id = "typos"
@@ -70,7 +70,7 @@ priority = 3
 id = "cargo-sort"
 name = "Cargo manifest ordering"
 language = "rust"
-additional_dependencies = ["cli:cargo-sort:2.1.4"]
+additional_dependencies = ["cli:cargo-sort:2.1.5"]
 # This release's prebuilt assets report a different version; compile the declared crate.
 env = { PREK_USE_CARGO_BINSTALL = "0" }
 entry = "cargo sort --workspace --grouped"
@@ -82,7 +82,7 @@ priority = 3
 id = "tombi-format"
 name = "TOML formatting"
 language = "python"
-additional_dependencies = ["tombi==1.8.9"]
+additional_dependencies = ["tombi==1.11.3"]
 entry = "tombi format --offline"
 types = ["toml"]
 exclude = "(^|/)(Cargo\\.toml|Cargo\\.lock|uv\\.lock)$"
@@ -92,7 +92,7 @@ priority = 4
 id = "tombi-lint"
 name = "TOML validation"
 language = "python"
-additional_dependencies = ["tombi==1.8.9"]
+additional_dependencies = ["tombi==1.11.3"]
 entry = "tombi lint --offline"
 types = ["toml"]
 exclude = "(^|/)(Cargo\\.toml|Cargo\\.lock|uv\\.lock)$"
@@ -122,7 +122,7 @@ always_run = true
 id = "cargo-deny"
 name = "Dependency policy"
 language = "rust"
-additional_dependencies = ["cli:cargo-deny:0.20.2"]
+additional_dependencies = ["cli:cargo-deny:0.22.1"]
 entry = "cargo deny --all-features check advisories bans licenses sources"
 stages = ["manual"]
 pass_filenames = false
@@ -132,7 +132,7 @@ always_run = true
 id = "cargo-deny-fuzz"
 name = "Fuzz dependency advisories"
 language = "rust"
-additional_dependencies = ["cli:cargo-deny:0.20.2"]
+additional_dependencies = ["cli:cargo-deny:0.22.1"]
 entry = "cargo deny --manifest-path fuzz/Cargo.toml --all-features --config deny.toml check advisories"
 stages = ["manual"]
 pass_filenames = false
@@ -142,7 +142,7 @@ always_run = true
 id = "cargo-machete"
 name = "Unused dependencies"
 language = "rust"
-additional_dependencies = ["cli:cargo-machete:0.9.2"]
+additional_dependencies = ["cli:cargo-machete:0.10.1"]
 entry = "cargo machete"
 stages = ["manual"]
 pass_filenames = false
@@ -152,7 +152,7 @@ always_run = true
 id = "acceptance-tests"
 name = "Workspace acceptance tests"
 language = "rust"
-additional_dependencies = ["cli:git-branchless:0.11.1", "cli:jj-cli:0.46.0"]
+additional_dependencies = ["cli:git-branchless:0.11.1", "cli:jj-cli:0.47.1"]
 entry = "uv run scripts/measure.py tests cargo test --workspace --all-targets --all-features --locked"
 stages = ["manual"]
 pass_filenames = false
@@ -162,7 +162,7 @@ always_run = true
 id = "assurance"
 name = "Generated behavioural contracts"
 language = "rust"
-additional_dependencies = ["cli:git-branchless:0.11.1", "cli:jj-cli:0.46.0"]
+additional_dependencies = ["cli:git-branchless:0.11.1", "cli:jj-cli:0.47.1"]
 entry = "uv run scripts/assurance.py properties"
 stages = ["manual"]
 pass_filenames = false
@@ -172,7 +172,7 @@ always_run = true
 id = "regression-sensitivity"
 name = "Known defect detection"
 language = "rust"
-additional_dependencies = ["cli:git-branchless:0.11.1", "cli:jj-cli:0.46.0"]
+additional_dependencies = ["cli:git-branchless:0.11.1", "cli:jj-cli:0.47.1"]
 entry = "uv run scripts/assurance.py sensitivity"
 stages = ["manual"]
 pass_filenames = false
@@ -211,7 +211,7 @@ always_run = true
 id = "coverage-unit"
 name = "Unit coverage"
 language = "rust"
-additional_dependencies = ["cli:cargo-llvm-cov:0.9.1"]
+additional_dependencies = ["cli:cargo-llvm-cov:0.9.2"]
 entry = "uv run scripts/measure.py unit-coverage uv run scripts/unit_coverage.py"
 stages = ["manual"]
 pass_filenames = false
@@ -248,7 +248,7 @@ priority = 0
 id = "backends"
 name = "Real VCS backend acceptance"
 language = "rust"
-additional_dependencies = ["cli:git-branchless:0.11.1", "cli:jj-cli:0.46.0"]
+additional_dependencies = ["cli:git-branchless:0.11.1", "cli:jj-cli:0.47.1"]
 entry = "uv run scripts/measure.py backends uv run scripts/backends.py"
 stages = ["manual"]
 pass_filenames = false

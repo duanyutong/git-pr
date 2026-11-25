@@ -11,7 +11,7 @@ Run commands from the repository root after the normal [development setup](devel
 The declared `prek` hooks provision cargo-mutants `27.1.0`, cargo-nextest `0.9.152` and cargo-fuzz `0.13.2` in their managed environments; no additional repository-specific executable path is required.
 The property-testing dependency and its transitive graph are resolved by the root `Cargo.lock`, while the independent fuzz workspace has its own `fuzz/Cargo.lock`.
 Ordinary property tests and retained fuzz replay use the supported stable compiler.
-Coverage-guided fuzzing requires `nightly-2026-10-14` and a supported C++ compiler, as specified by the [Rust Fuzz Book](https://rust-fuzz.github.io/book/cargo-fuzz/setup.html).
+Coverage-guided fuzzing requires `nightly-2026-11-25` and a supported C++ compiler, as specified by the [Rust Fuzz Book](https://rust-fuzz.github.io/book/cargo-fuzz/setup.html).
 
 ```sh
 just assurance
