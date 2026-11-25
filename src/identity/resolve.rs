@@ -63,7 +63,8 @@ pub(crate) fn prepare(github: &GitHub<'_>, stack: &mut [Commit], start: usize) -
     if !preview {
         let mut references = BTreeSet::new();
         let mut unresolved = BTreeSet::new();
-        for commit in stack.iter() {
+        let mut dependant_candidates = BTreeSet::new();
+        for (index, commit) in stack.iter().enumerate() {
             if !commit.attr(REMOTE_REF).is_empty() {
                 references.insert(commit.attr(REMOTE_REF).to_owned());
             }
@@ -75,6 +76,9 @@ pub(crate) fn prepare(github: &GitHub<'_>, stack: &mut [Commit], start: usize) -
                 } else if commit.attr(REMOTE_REF).is_empty() {
                     if records.review(&name, &github.config.repo)?.is_none() {
                         unresolved.insert(commit.hash.clone());
+                        if index >= start && !commit.skip {
+                            dependant_candidates.insert(name.clone());
+                        }
                     }
                     references.insert(name);
                 }
@@ -83,7 +87,7 @@ pub(crate) fn prepare(github: &GitHub<'_>, stack: &mut [Commit], start: usize) -
         if !unresolved.is_empty() {
             push_targets = Some(push_inventory(github.commands)?);
         }
-        github.prepare_discovery(unresolved.into_iter().collect());
+        github.prepare_discovery(unresolved.into_iter().collect(), dependant_candidates);
         github
             .commands
             .diagnostics

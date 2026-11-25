@@ -112,7 +112,9 @@ The 51-PR expiry regressions require three refresh requests, whilst fresh repeat
 Publication preflight refreshes selected branch observations in groups of at most 25.
 A single open identity may be selected notwithstanding older closed history; multiple open identities or exclusively closed or merged history prevent publication.
 The planner pins PR numbers and node identities, and constructs a verified transition whenever published bases differ from the intended predecessors.
-A separate paginated query observes the identities and head objects of open PRs targeting each publication destination whose object would change.
+Initial discovery also asks whether an open PR targets each selected, unassociated candidate branch.
+A changing destination group can reuse discovery when each branch has a fresh, complete empty result.
+Otherwise, a separate paginated query observes the identities and head objects of open PRs targeting the changing destinations.
 Ordinary publication proves whether unselected heads are reachable from their proposed base objects, permits conclusive non-merges and requires consent for identified indirect-merge risks.
 Confirmation reacquires the observation and binds consent to the exact affected PR and proposed publication objects; inconclusive ancestry or repeated changes stop publication.
 Conclusive stored-parent ancestry proofs are retained within the invocation by their exact head and proposed base object identities.
@@ -133,6 +135,7 @@ Refusal of a later batch preserves the confirmed results of earlier batches and 
 Slow acquisition of a later group does not renew the earlier groups, and failed reacquisition prevents publication without renewing the affected observation.
 These queries use GitHub's documented [`baseRefName` filter](https://docs.github.com/en/graphql/reference/repos#repository).
 After publication, affected head and PR observations are invalidated regardless of their age; the same pinned identities and bases must be confirmed before any creation or update.
+The ordinary post-push read requests PR data without repeating the exact ref and object fields used for discovery.
 The publication transition establishes intended bases before ordinary post-publication reconciliation verifies them.
 Branch publication explicitly disables automatic annotation following, so `push.followTags=true` cannot add unrelated annotated tags to the selected destination refs.
 These observations constrain intermediate publication states; they do not constitute an atomic transaction or a proof covering arbitrary concurrent remote operations.

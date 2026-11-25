@@ -1026,6 +1026,17 @@ impl Transport for World {
                         } else {
                             Value::Null
                         };
+                    } else if key.starts_with("candidateDependant") {
+                        let mut matches = m
+                            .prs
+                            .values()
+                            .filter(|pr| pr["state"] == "open" && pr["base"]["ref"] == *requested);
+                        let nodes = matches
+                            .next()
+                            .map(|pr| json!({"number":pr["number"]}))
+                            .into_iter()
+                            .collect::<Vec<_>>();
+                        repository[key] = json!({"nodes":nodes,"pageInfo":{"hasNextPage":matches.next().is_some()}});
                     }
                 }
             }

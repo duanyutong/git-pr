@@ -1,6 +1,10 @@
 //! Invocation-scoped branch tips and negative commit evidence, independent of PR content.
 
-use std::{collections::BTreeMap, fmt::Write as _, time::Instant};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt::Write as _,
+    time::Instant,
+};
 
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
@@ -15,24 +19,45 @@ pub(super) struct Discovery {
     disabled: bool,
     pending: Vec<String>,
     tips: BTreeMap<String, (Instant, Option<String>)>,
+    dependant_candidates: BTreeSet<String>,
+    empty_dependants: BTreeMap<String, Instant>,
 }
 
 #[derive(Debug)]
 pub(super) struct Probe {
     references: Vec<String>,
     objects: Vec<String>,
+    dependants: Vec<String>,
 }
 
 impl GitHub<'_> {
-    pub(crate) fn prepare_discovery(&self, hashes: Vec<String>) {
+    pub(crate) fn prepare_discovery(
+        &self,
+        hashes: Vec<String>,
+        dependant_candidates: BTreeSet<String>,
+    ) {
         let mut discovery = guard(&self.session.discovery);
         discovery.active = self.config.repo.host.eq_ignore_ascii_case("github.com");
         discovery.pending = hashes;
+        discovery.dependant_candidates = dependant_candidates;
     }
 
-    pub(super) fn discovery_probe(&self, references: Vec<String>) -> Option<Probe> {
+    pub(super) fn discovery_probe(
+        &self,
+        references: Vec<String>,
+        prefetch_dependants: bool,
+    ) -> Option<Probe> {
         let discovery = guard(&self.session.discovery);
         (discovery.active && !discovery.disabled).then(|| Probe {
+            dependants: if prefetch_dependants {
+                references
+                    .iter()
+                    .filter(|reference| discovery.dependant_candidates.contains(*reference))
+                    .cloned()
+                    .collect()
+            } else {
+                Vec::new()
+            },
             references,
             objects: discovery.pending.iter().take(25).cloned().collect(),
         })
@@ -43,9 +68,20 @@ impl GitHub<'_> {
         discovery.disabled = true;
         discovery.tips.clear();
         discovery.pending.clear();
+        discovery.empty_dependants.clear();
         drop(discovery);
         self.commands
             .explain("Publication discovery unavailable; checking remote branches through Git.");
+    }
+
+    pub(crate) fn take_empty_dependants(&self, references: &[String]) -> Option<Instant> {
+        let mut discovery = guard(&self.session.discovery);
+        references
+            .iter()
+            .try_fold(self.now(), |oldest, reference| {
+                Some(oldest.min(discovery.empty_dependants.remove(reference)?))
+            })
+            .filter(|acquired| self.fresh(acquired))
     }
 
     pub(crate) fn publication_refs(&self, references: &[String]) -> Result<Option<Tips>> {
@@ -84,6 +120,7 @@ impl GitHub<'_> {
             let probe = Probe {
                 references: chunk.to_vec(),
                 objects: Vec::new(),
+                dependants: Vec::new(),
             };
             let mut declarations = String::from("$owner:String!,$name:String!");
             let mut fields = String::new();
@@ -166,6 +203,15 @@ impl Probe {
             );
             variables[format!("publicationRef{index}")] = json!(format!("refs/heads/{reference}"));
         }
+        for (index, reference) in self.dependants.iter().enumerate() {
+            let alias = format!("candidateDependant{index}");
+            let _ = write!(declarations, ",${alias}:String!");
+            let _ = write!(
+                fields,
+                "{alias}:pullRequests(baseRefName:${alias},states:[OPEN],first:1){{nodes{{number}} pageInfo{{hasNextPage}}}} "
+            );
+            variables[alias] = json!(reference);
+        }
         if !self.objects.is_empty() {
             declarations.push_str(",$publicationControl:String!");
             variables["publicationControl"] =
@@ -182,6 +228,16 @@ impl Probe {
                 variables[format!("publicationObject{index}")] = json!(hash);
             }
         }
+    }
+
+    pub(super) fn dependant_error(&self, response: &Value) -> bool {
+        response["errors"].as_array().is_some_and(|errors| {
+            errors.iter().any(|error| {
+                error["path"][0] == "repository"
+                    && (0..self.dependants.len())
+                        .any(|index| error["path"][1] == format!("candidateDependant{index}"))
+            })
+        })
     }
 
     pub(super) fn unsupported(&self, value: &Value) -> bool {
@@ -272,6 +328,16 @@ impl Probe {
         let mut discovery = guard(&github.session.discovery);
         for (reference, tip) in tips {
             discovery.tips.insert(reference, (acquired, tip));
+        }
+        for (index, reference) in self.dependants.iter().enumerate() {
+            let connection = &repository[format!("candidateDependant{index}")];
+            if connection["nodes"].as_array().is_some_and(Vec::is_empty)
+                && connection["pageInfo"]["hasNextPage"] == false
+            {
+                discovery
+                    .empty_dependants
+                    .insert(reference.clone(), acquired);
+            }
         }
         discovery
             .pending

@@ -169,6 +169,9 @@ impl Publication {
                 .dependant_refs
                 .chunks(25)
                 .map(|chunk| {
+                    if let Some(acquired) = github.take_empty_dependants(chunk) {
+                        return Ok(Cell::new(acquired));
+                    }
                     let acquired = plan
                         .dependant_approvals
                         .verify(github, chunk, &selected, &proposed)?;
@@ -438,7 +441,11 @@ impl Publication {
                     .iter()
                     .map(|(_, reference, _)| reference.clone())
                     .collect::<Vec<_>>();
-                github.observe(&references)?;
+                if published {
+                    github.observe_after_push(&references)?;
+                } else {
+                    github.observe(&references)?;
+                }
                 github.refresh_prs(
                     &chunk
                         .iter()

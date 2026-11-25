@@ -192,6 +192,7 @@ struct Observation {
 #[derive(Clone, Copy)]
 enum RecoveryFields<'a> {
     None,
+    AfterPush,
     Initial,
     Required(&'a HashSet<u64>),
 }
@@ -537,6 +538,10 @@ impl GitHub<'_> {
         self.observe_heads(references, RecoveryFields::None)
     }
 
+    pub(crate) fn observe_after_push(&self, references: &[String]) -> Result<()> {
+        self.observe_heads(references, RecoveryFields::AfterPush)
+    }
+
     pub(crate) fn observe_publication(&self, references: &[String]) -> Result<()> {
         let fields = if self.config.repo.host.eq_ignore_ascii_case("github.com") {
             RecoveryFields::Initial
@@ -740,14 +745,19 @@ impl GitHub<'_> {
         recovery_started: Option<Instant>,
     ) -> Result<(Value, bool, Instant)> {
         let mut with_stack = !self.session.stack_field_unsupported.load(Ordering::Relaxed);
+        let mut prefetch_dependants = matches!(recovery, RecoveryFields::Initial)
+            && chunk.iter().all(|head| head.cursor.after.is_none());
         loop {
             let mut declarations = String::from("$owner:String!,$name:String!");
             let mut fields = String::new();
             let mut variables = json!({"owner":owner,"name":name});
-            let recovery_fields = if matches!(recovery, RecoveryFields::None) {
-                ""
-            } else {
+            let recovery_fields = if matches!(
+                recovery,
+                RecoveryFields::Initial | RecoveryFields::Required(_)
+            ) {
                 super::recovery::HEAD_RECOVERY_FIELDS
+            } else {
+                ""
             };
             let stack = if with_stack { "stack{number}" } else { "" };
             for (i, head) in chunk.iter().enumerate() {
@@ -769,10 +779,16 @@ impl GitHub<'_> {
                 variables[format!("h{i}")] = json!(head.reference);
             }
             let required = matches!(recovery, RecoveryFields::Required(_));
-            let probe = if required {
+            let probe = if matches!(
+                recovery,
+                RecoveryFields::AfterPush | RecoveryFields::Required(_)
+            ) {
                 None
             } else {
-                self.discovery_probe(chunk.iter().map(|head| head.reference.to_owned()).collect())
+                self.discovery_probe(
+                    chunk.iter().map(|head| head.reference.to_owned()).collect(),
+                    prefetch_dependants,
+                )
             };
             if let Some(probe) = &probe {
                 probe.append(self, &mut declarations, &mut fields, &mut variables);
@@ -796,6 +812,10 @@ impl GitHub<'_> {
             let response: Value = serde_json::from_slice(&response.body)
                 .context("invalid GitHub GraphQL observation response")?;
             if let Some(probe) = &probe {
+                if probe.dependant_error(&response) {
+                    prefetch_dependants = false;
+                    continue;
+                }
                 if probe.unsupported(&response) {
                     self.disable_discovery();
                     continue;
@@ -807,18 +827,7 @@ impl GitHub<'_> {
             let Some(errors) = response.get("errors") else {
                 return Ok((response, with_stack, acquired));
             };
-            let unsupported = errors.as_array().is_some_and(|errors| {
-                !errors.is_empty()
-                    && errors.iter().all(|error| {
-                        error["message"].as_str().is_some_and(|message| {
-                            message.contains("stack")
-                                && (message.contains("doesn’t exist")
-                                    || message.contains("doesn't exist")
-                                    || message.contains("Cannot query field"))
-                        })
-                    })
-            });
-            if !with_stack || !unsupported {
+            if !with_stack || !unsupported_stack_field(errors) {
                 bail!("failed to observe pull requests: {errors}");
             }
             self.session
@@ -992,6 +1001,20 @@ impl GitHub<'_> {
             page += 1;
         }
     }
+}
+
+fn unsupported_stack_field(errors: &Value) -> bool {
+    errors.as_array().is_some_and(|errors| {
+        !errors.is_empty()
+            && errors.iter().all(|error| {
+                error["message"].as_str().is_some_and(|message| {
+                    message.contains("stack")
+                        && (message.contains("doesn’t exist")
+                            || message.contains("doesn't exist")
+                            || message.contains("Cannot query field"))
+                })
+            })
+    })
 }
 
 fn decode_nodes(

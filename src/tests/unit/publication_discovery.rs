@@ -77,7 +77,7 @@ fn ten_layers_reuse_api_refs_and_negative_objects_without_changing_creation_orde
                 .all(|pr| pr["state"] == "open")
         );
         let http = trace.iter().filter(|e| e["kind"] == "http").count();
-        assert_eq!(http, if enabled { 15 } else { 23 } + usize::from(native));
+        assert_eq!(http, if enabled { 14 } else { 23 } + usize::from(native));
         assert_eq!(
             trace
                 .iter()
@@ -93,13 +93,198 @@ fn ten_layers_reuse_api_refs_and_negative_objects_without_changing_creation_orde
 }
 
 #[test]
+fn new_native_stack_combines_preflight_discovery_and_preserves_create_order() {
+    let world = World::new(7);
+    {
+        let mut memory = world.0.lock().unwrap();
+        memory.discovery_api = DiscoveryApi::Supported;
+        for commit in &mut memory.commits {
+            commit.attrs.clear();
+        }
+    }
+    world.run(&["--github-stack", "--draft"]).unwrap();
+    let trace = world.trace();
+    let push = trace.iter().position(|e| e["args"][0] == "push").unwrap();
+    let before_push: Vec<_> = trace[..push]
+        .iter()
+        .filter(|e| e["kind"] == "http")
+        .collect();
+    assert_eq!(before_push.len(), 1);
+    let variables = &before_push[0]["body"]["variables"];
+    for index in 0..7 {
+        assert_eq!(
+            variables[format!("candidateDependant{index}")],
+            format!("topic/{}", index + 1)
+        );
+        assert!(variables.get(format!("publicationRef{index}")).is_some());
+    }
+    let published = trace[push + 1..]
+        .iter()
+        .find(|event| event["kind"] == "http")
+        .unwrap();
+    assert_eq!(published["path"], "graphql");
+    let variables = &published["body"]["variables"];
+    assert_eq!(variables["h0"], "topic/1");
+    assert_eq!(variables["h6"], "topic/7");
+    assert!(variables.get("publicationRef0").is_none());
+    assert!(variables.get("candidateDependant0").is_none());
+    let writes = trace[push + 1..]
+        .iter()
+        .filter(|e| e["path"] == "pulls" && e["method"] == "POST")
+        .collect::<Vec<_>>();
+    assert_eq!(writes.len(), 7);
+    for (index, event) in writes.into_iter().enumerate() {
+        assert_eq!(event["body"]["head"], format!("topic/{}", index + 1));
+        assert_eq!(event["body"]["draft"], true);
+    }
+    assert_eq!(trace.iter().filter(|e| e["kind"] == "http").count(), 12);
+
+    world.0.lock().unwrap().trace.clear();
+    world.run(&["--github-stack", "--draft"]).unwrap();
+    assert!(world.trace().iter().all(|e| {
+        e["args"][0] != "push"
+            && e["body"]["variables"].get("candidateDependant0").is_none()
+            && e["body"]["variables"].get("b0").is_none()
+    }));
+}
+
+#[test]
+fn possible_dependant_still_requires_live_preflight_before_push() {
+    let world = World::new(1);
+    {
+        let mut memory = world.0.lock().unwrap();
+        memory.discovery_api = DiscoveryApi::Supported;
+        memory.commits[0].attrs.clear();
+        memory.prs.insert(
+            201,
+            json!({
+                "number": 201, "state": "open",
+                "head": {"ref": "outside", "sha": commit(1).hash},
+                "base": {"ref": "topic/1"}
+            }),
+        );
+        drop(memory);
+    }
+    let error = world.run(&["--no-stack"]).unwrap_err();
+    assert!(format!("{error:#}").contains("publication declined"));
+    let trace = world.trace();
+    assert!(
+        trace
+            .iter()
+            .any(|e| e["body"]["variables"]["candidateDependant0"] == "topic/1")
+    );
+    assert!(
+        trace
+            .iter()
+            .any(|e| e["body"]["variables"]["b0"] == "topic/1")
+    );
+    assert!(!trace.iter().any(|e| e["args"][0] == "push"));
+}
+
+#[test]
+fn only_fresh_complete_empty_dependant_connections_can_skip_preflight() {
+    let world = World::new(1);
+    with_github(&world, |github| {
+        let references = vec!["topic/1".into()];
+        github.prepare_discovery(Vec::new(), BTreeSet::from(["topic/1".into()]));
+        let probe = github.discovery_probe(references.clone(), true).unwrap();
+        for (connection, expires, reusable) in [
+            (Value::Null, false, false),
+            (
+                json!({"nodes":[],"pageInfo":{"hasNextPage":true}}),
+                false,
+                false,
+            ),
+            (
+                json!({"nodes":[{"number":201}],"pageInfo":{"hasNextPage":false}}),
+                false,
+                false,
+            ),
+            (json!({"nodes":[],"pageInfo":{}}), false, false),
+            (
+                json!({"nodes":[],"pageInfo":{"hasNextPage":false}}),
+                false,
+                true,
+            ),
+            (
+                json!({"nodes":[],"pageInfo":{"hasNextPage":false}}),
+                true,
+                false,
+            ),
+        ] {
+            let acquired = github.now();
+            let response = json!({"data":{"repository":{
+                "nameWithOwner":"org/repo","publicationRef0":null,
+                "candidateDependant0":connection
+            }}});
+            probe.remember(github, &response, acquired).unwrap();
+            if expires {
+                world.0.lock().unwrap().clock_elapsed += Duration::from_secs(31);
+            }
+            assert_eq!(
+                github.take_empty_dependants(&references),
+                reusable.then_some(acquired)
+            );
+        }
+    });
+}
+
+#[test]
+fn a_dependant_field_error_retries_discovery_without_the_optional_fields() {
+    use crate::tests::unit::support::Response;
+
+    let world = World::new(1);
+    world.http(
+        "POST graphql",
+        vec![
+            Response::Output(
+                200,
+                json!({"errors":[{
+                    "message": "optional dependant lookup failed",
+                    "path": ["repository", "candidateDependant0"]
+                }]})
+                .to_string(),
+            ),
+            Response::Output(
+                200,
+                json!({"data":{"repository":{
+                    "nameWithOwner":"org/repo",
+                    "publicationRef0":null,
+                    "p0":{"nodes":[],"pageInfo":{"hasNextPage":false}}
+                }}})
+                .to_string(),
+            ),
+        ],
+    );
+    with_github(&world, |github| {
+        let references = vec!["topic/1".into()];
+        github.prepare_discovery(Vec::new(), BTreeSet::from(["topic/1".into()]));
+        let result = github.observe_publication(&references);
+        assert!(result.is_ok(), "{result:#?}; trace: {:?}", world.trace());
+        assert!(github.take_empty_dependants(&references).is_none());
+    });
+    let trace = world.trace();
+    let observations: Vec<_> = trace.iter().filter(|e| e["kind"] == "http").collect();
+    assert_eq!(observations.len(), 2);
+    assert_eq!(
+        observations[0]["body"]["variables"]["candidateDependant0"],
+        "topic/1"
+    );
+    assert!(
+        observations[1]["body"]["variables"]
+            .get("candidateDependant0")
+            .is_none()
+    );
+}
+
+#[test]
 fn ref_cache_expires_and_preserves_expected_absence_and_exact_object_identity() {
     let world = World::new(1);
     world.0.lock().unwrap().discovery_api = DiscoveryApi::Supported;
     let references = vec!["topic/1".into()];
     with_github(&world, |github| {
         assert!(github.publication_refs(&references).unwrap().is_none());
-        github.prepare_discovery(Vec::new());
+        github.prepare_discovery(Vec::new(), BTreeSet::new());
         assert_eq!(
             github.publication_refs(&references).unwrap().unwrap()["topic/1"],
             None
@@ -126,8 +311,10 @@ fn ref_cache_expires_and_preserves_expected_absence_and_exact_object_identity() 
 fn discovery_decodes_transactionally_and_requires_exact_names_and_complete_aliases() {
     let world = World::new(1);
     with_github(&world, |github| {
-        github.prepare_discovery(vec!["a".repeat(40)]);
-        let probe = github.discovery_probe(vec!["topic/1".into()]).unwrap();
+        github.prepare_discovery(vec!["a".repeat(40)], BTreeSet::new());
+        let probe = github
+            .discovery_probe(vec!["topic/1".into()], false)
+            .unwrap();
         let valid = json!({"data":{"repository":{"nameWithOwner":"org/repo","publicationRef0":null,"publicationControl":{"__typename":"Commit","oid":"0".repeat(40)},"publicationObject0":null}}});
         for broken in [
             json!({"errors":[{"message":"unavailable"}]}),
@@ -173,8 +360,8 @@ fn discovery_decodes_transactionally_and_requires_exact_names_and_complete_alias
 fn absent_objects_require_visibility_and_present_objects_keep_the_rest_reader() {
     let world = World::new(1);
     with_github(&world, |github| {
-        github.prepare_discovery(vec!["a".repeat(40)]);
-        let probe = github.discovery_probe(Vec::new()).unwrap();
+        github.prepare_discovery(vec!["a".repeat(40)], BTreeSet::new());
+        let probe = github.discovery_probe(Vec::new(), false).unwrap();
         probe.remember(github,&json!({"data":{"repository":{"nameWithOwner":"org/repo","publicationControl":null,"publicationObject0":null}}}),github.now()).unwrap();
         assert!(guard(&github.session.commit_prs).is_empty());
         let value = json!({"data":{"repository":{"nameWithOwner":"org/repo","publicationControl":{"__typename":"Commit","oid":"0".repeat(40)},"publicationObject0":{"__typename":"Commit","oid":"a".repeat(40)}}}});
@@ -187,8 +374,10 @@ fn absent_objects_require_visibility_and_present_objects_keep_the_rest_reader() 
 fn optional_discovery_falls_back_without_turning_unsupported_or_denied_fields_into_absence() {
     let world = World::new(1);
     with_github(&world, |github| {
-        github.prepare_discovery(Vec::new());
-        let probe = github.discovery_probe(vec!["topic/1".into()]).unwrap();
+        github.prepare_discovery(Vec::new(), BTreeSet::new());
+        let probe = github
+            .discovery_probe(vec!["topic/1".into()], false)
+            .unwrap();
         assert!(probe.unsupported(
             &json!({"errors":[{"type":"FORBIDDEN","path":["repository","publicationRef0"]}]})
         ));
@@ -208,7 +397,7 @@ fn optional_discovery_falls_back_without_turning_unsupported_or_denied_fields_in
                 .unwrap()
                 .is_none()
         );
-        assert!(github.discovery_probe(Vec::new()).is_none());
+        assert!(github.discovery_probe(Vec::new(), false).is_none());
     });
     let mut config = world.config();
     config.repo.host = "enterprise.example".into();
@@ -221,8 +410,8 @@ fn optional_discovery_falls_back_without_turning_unsupported_or_denied_fields_in
         transport: world.as_ref(),
         template: "",
     };
-    github.prepare_discovery(Vec::new());
-    assert!(github.discovery_probe(Vec::new()).is_none());
+    github.prepare_discovery(Vec::new(), BTreeSet::new());
+    assert!(github.discovery_probe(Vec::new(), false).is_none());
 }
 
 #[test]
@@ -244,7 +433,7 @@ fn unsupported_fields_retry_only_the_read_and_malformed_ref_reads_stop() {
         ],
     );
     with_github(&world, |github| {
-        github.prepare_discovery(Vec::new());
+        github.prepare_discovery(Vec::new(), BTreeSet::new());
         github.observe(&["topic/1".into()]).unwrap();
         assert!(
             github
@@ -264,7 +453,7 @@ fn unsupported_fields_retry_only_the_read_and_malformed_ref_reads_stop() {
         let world = World::new(1);
         world.http("POST graphql", vec![Response::Output(200, response)]);
         with_github(&world, |github| {
-            github.prepare_discovery(Vec::new());
+            github.prepare_discovery(Vec::new(), BTreeSet::new());
             assert!(github.publication_refs(&["topic/1".into()]).is_err());
         });
     }
@@ -278,7 +467,7 @@ fn unsupported_fields_retry_only_the_read_and_malformed_ref_reads_stop() {
         )],
     );
     with_github(&world, |github| {
-        github.prepare_discovery(Vec::new());
+        github.prepare_discovery(Vec::new(), BTreeSet::new());
         assert!(
             github
                 .publication_refs(&["topic/1".into()])
@@ -293,7 +482,7 @@ fn recovery_only_ref_queries_have_no_selected_branch_total_and_missing_control_i
     let world = World::new(1);
     world.0.lock().unwrap().discovery_api = DiscoveryApi::Supported;
     with_github(&world, |github| {
-        github.prepare_discovery(Vec::new());
+        github.prepare_discovery(Vec::new(), BTreeSet::new());
         assert_eq!(github.publication_refs(&[]).unwrap(), Some(BTreeMap::new()));
         assert_eq!(
             github
@@ -302,8 +491,8 @@ fn recovery_only_ref_queries_have_no_selected_branch_total_and_missing_control_i
                 .unwrap()["git-pr/transition/101"],
             None
         );
-        github.prepare_discovery(vec!["a".repeat(40)]);
-        let probe = github.discovery_probe(Vec::new()).unwrap();
+        github.prepare_discovery(vec!["a".repeat(40)], BTreeSet::new());
+        let probe = github.discovery_probe(Vec::new(), false).unwrap();
         assert!(probe.remember(github,&json!({"data":{"repository":{"nameWithOwner":"org/repo","publicationControl":{"__typename":"Blob","oid":"a".repeat(40)},"publicationObject0":null}}}),github.now()).is_err());
     });
 }
@@ -383,7 +572,7 @@ fn ref_queries_are_bounded_and_metadata_omission_selects_git_fallback() {
     let world = World::new(1);
     world.0.lock().unwrap().discovery_api = DiscoveryApi::Supported;
     with_github(&world, |github| {
-        github.prepare_discovery(Vec::new());
+        github.prepare_discovery(Vec::new(), BTreeSet::new());
         let references = (1..=51).map(|i| format!("topic/{i}")).collect::<Vec<_>>();
         assert_eq!(
             github.publication_refs(&references).unwrap().unwrap().len(),
@@ -406,7 +595,7 @@ fn ref_queries_are_bounded_and_metadata_omission_selects_git_fallback() {
     });
     let world = World::new(1);
     with_github(&world, |github| {
-        github.prepare_discovery(Vec::new());
+        github.prepare_discovery(Vec::new(), BTreeSet::new());
         assert!(
             github
                 .publication_refs(&["topic/1".into()])
@@ -442,7 +631,7 @@ fn evidence_that_expires_during_acquisition_cannot_be_used_for_publication() {
         transport: &transport,
         template: "",
     };
-    github.prepare_discovery(Vec::new());
+    github.prepare_discovery(Vec::new(), BTreeSet::new());
     assert!(
         github
             .publication_refs(&["topic/1".into()])
@@ -471,7 +660,7 @@ fn discovery_refuses_unreadable_queries_and_invalid_repository_configuration() {
         vec![Response::Failure("unavailable".into())],
     );
     with_github(&world, |github| {
-        github.prepare_discovery(Vec::new());
+        github.prepare_discovery(Vec::new(), BTreeSet::new());
         assert!(github.publication_refs(&["topic/1".into()]).is_err());
     });
     let commands = world.commands();
@@ -485,7 +674,7 @@ fn discovery_refuses_unreadable_queries_and_invalid_repository_configuration() {
         transport: world.as_ref(),
         template: "",
     };
-    github.prepare_discovery(Vec::new());
+    github.prepare_discovery(Vec::new(), BTreeSet::new());
     assert!(github.publication_refs(&["topic/1".into()]).is_err());
 }
 
@@ -493,8 +682,10 @@ fn discovery_refuses_unreadable_queries_and_invalid_repository_configuration() {
 fn incomplete_ref_fields_and_malformed_object_types_never_become_evidence() {
     let world = World::new(1);
     with_github(&world, |github| {
-        github.prepare_discovery(vec!["a".repeat(40)]);
-        let probe = github.discovery_probe(vec!["topic/1".into()]).unwrap();
+        github.prepare_discovery(vec!["a".repeat(40)], BTreeSet::new());
+        let probe = github
+            .discovery_probe(vec!["topic/1".into()], false)
+            .unwrap();
         assert!(probe.unsupported(&json!({"errors":[{"message":"Cannot query field object"}]})));
         for node in [
             json!({"name":"topic/1"}),
@@ -514,7 +705,7 @@ fn incomplete_ref_fields_and_malformed_object_types_never_become_evidence() {
         )],
     );
     with_github(&world, |github| {
-        github.prepare_discovery(Vec::new());
+        github.prepare_discovery(Vec::new(), BTreeSet::new());
         assert!(github.observe(&["topic/1".into()]).is_err());
     });
 }
@@ -627,7 +818,7 @@ fn partial_graphql_errors_cannot_establish_publication_absence() {
         json!({"errors":[{"type":"NOT_FOUND","message":"repository unavailable"}],"data":{"repository":{"nameWithOwner":"org/repo","publicationRef0":null}}}).to_string(),
     )]);
     with_github(&world, |github| {
-        github.prepare_discovery(Vec::new());
+        github.prepare_discovery(Vec::new(), BTreeSet::new());
         assert!(github.observe(&["topic/1".into()]).is_err());
         assert!(guard(&github.session.discovery).tips.is_empty());
         assert!(guard(&github.session.commit_prs).is_empty());

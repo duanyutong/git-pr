@@ -119,7 +119,8 @@ Completion barriers remain explicit between publication, creation, base changes,
 
 A ten-layer fixture starts with one published PR and adds nine unpublished commits, comparing Git observation with combined API discovery under both native-stack settings.
 The supported API path requires no `ls-remote` command and no negative REST commit-association requests, retaining one push and nine sequential creations.
-The controlled HTTP request count falls from 23 to 15 with native management disabled and from 24 to 16 with it enabled; these fixture counts exclude external latency and do not predict wall-clock savings.
+The controlled HTTP request count falls from 23 to 14 with native management disabled and from 24 to 15 with it enabled.
+These fixture counts exclude external latency.
 Independent remote-ref storage prevents PR metadata from serving as branch-tip evidence in the fixture.
 Discovery regressions require exact repository and ref identities, complete aliases, commit object types, bounded groups of 25 refs, independent acquisition timestamps and conservative fallback for unsupported capabilities.
 Negative object evidence additionally requires a readable known-present repository object and expires through the existing commit-association freshness policy.
