@@ -180,7 +180,8 @@ impl Application {
         if self.checkpoint(config, Checkpoint::PrCreate) {
             return Ok(());
         }
-        self.stage("Updating PR descriptions", "Reconciled descriptions");
+        let showed_created = self.show_created_results(&github, state.selected());
+        self.stage("Updating stack sections…", "Reconciled descriptions");
         let associations = crate::identity::resolve::verify_bindings(
             &self.commands,
             &config.repo,
@@ -190,7 +191,14 @@ impl Application {
             .context("PR content reconciliation failed after publication; pushed refs and completed PR changes are retained")?;
         diagnostics.phase("native stack links", || Self::native_stack(&github, &state, &publication.bases, publication.links_native()))
             .context("native stack reconciliation failed after publication; pushed refs and completed PR changes are retained")?;
-        self.finish_submission(&github, &mut state, &publication, &associations, &numbers)
+        self.finish_submission(
+            &github,
+            &mut state,
+            &publication,
+            &associations,
+            &numbers,
+            showed_created,
+        )
     }
 
     fn record_selection(&self, config: &Config, state: &State) {
@@ -231,6 +239,7 @@ impl Application {
         publication: &pull_requests::Publication,
         associations: &crate::identity::store::Records,
         numbers: &[u64],
+        showed_created: bool,
     ) -> Result<()> {
         self.stage(
             "Verifying final state and cleaning up",
@@ -256,11 +265,26 @@ impl Application {
         }
         self.commands.terminal.finish(true);
         let summaries = if github.config.output == "{url} {title}" {
-            github.summaries(numbers)
+            if showed_created {
+                let created: std::collections::HashSet<_> = state
+                    .selected()
+                    .iter()
+                    .filter(|commit| !commit.skip && commit.newly_created)
+                    .map(|commit| commit.pr_number)
+                    .collect();
+                let remaining: Vec<_> = numbers
+                    .iter()
+                    .copied()
+                    .filter(|number| !created.contains(number))
+                    .collect();
+                github.summaries(&remaining)
+            } else {
+                github.summaries(numbers)
+            }
         } else {
             Vec::new()
         };
-        self.print_results(github.config, state.selected(), &summaries);
+        self.print_results(github.config, state.selected(), &summaries, showed_created);
         Ok(())
     }
 

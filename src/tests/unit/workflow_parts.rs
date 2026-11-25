@@ -1840,6 +1840,106 @@ fn native_reconciliation_propagates_not_found_at_every_request_boundary() {
 }
 
 #[test]
+fn interactive_creations_are_listed_once_before_stack_sections_even_on_later_failure() {
+    use crate::tests::unit::support::Response;
+
+    for fail_link in [false, true] {
+        let world = World::new(2);
+        world.0.lock().unwrap().rich_output = true;
+        if fail_link {
+            world.http(
+                "POST stacks",
+                vec![Response::Output(404, "not found".into())],
+            );
+        }
+        let orientation = if fail_link {
+            "--stack-up=false"
+        } else {
+            "--stack-up=true"
+        };
+        assert_eq!(
+            world
+                .run(&["--github-stack", "--draft", orientation])
+                .is_err(),
+            fail_link
+        );
+        let trace = world.trace();
+        let results: Vec<_> = trace
+            .iter()
+            .enumerate()
+            .filter(|(_, event)| event["kind"] == "results")
+            .collect();
+        assert_eq!(results.len(), 1);
+        let (shown, event) = results[0];
+        assert_eq!(event["drafts"], 2);
+        assert_eq!(
+            event["numbers"],
+            serde_json::json!(if fail_link { [101, 102] } else { [102, 101] })
+        );
+        let last_create = trace
+            .iter()
+            .rposition(|event| event["path"] == "pulls" && event["method"] == "POST")
+            .unwrap();
+        let sections = trace
+            .iter()
+            .position(|event| {
+                event["body"]["query"]
+                    .as_str()
+                    .is_some_and(|query| query.contains("updatePullRequest"))
+            })
+            .unwrap();
+        assert!(last_create < shown && shown < sections);
+    }
+}
+
+#[test]
+fn mixed_interactive_results_defer_existing_prs_and_custom_output_has_one_listing() {
+    let world = World::new(1);
+    world.run(&["--no-stack"]).unwrap();
+    {
+        let mut memory = world.0.lock().unwrap();
+        memory.commits.push(commit(2));
+        "topic/2".clone_into(&mut memory.branch);
+        memory.rich_output = true;
+        memory.trace.clear();
+    }
+    world.run(&["--no-stack"]).unwrap();
+    let trace = world.trace();
+    let results: Vec<_> = trace
+        .iter()
+        .filter(|event| event["kind"] == "results")
+        .collect();
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0]["numbers"], serde_json::json!([102]));
+    assert_eq!(results[1]["numbers"], serde_json::json!([101]));
+    assert_eq!(results[1]["summaries"], serde_json::json!([101]));
+
+    world.0.lock().unwrap().trace.clear();
+    world.run(&["--no-stack"]).unwrap();
+    let trace = world.trace();
+    let results: Vec<_> = trace
+        .iter()
+        .filter(|event| event["kind"] == "results")
+        .collect();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["numbers"], serde_json::json!([102, 101]));
+
+    let custom = World::new(1);
+    custom.0.lock().unwrap().rich_output = true;
+    custom.run(&["--no-stack", "--output", "{url}"]).unwrap();
+    assert!(
+        !custom
+            .trace()
+            .iter()
+            .any(|event| event["kind"] == "results")
+    );
+    assert_eq!(
+        custom.0.lock().unwrap().stdout.matches("/pull/101").count(),
+        1
+    );
+}
+
+#[test]
 fn presentation_handles_unknown_authors_and_each_pr_status_without_io() {
     let w = World::new(0);
     let mut config = w.config();
@@ -1866,6 +1966,7 @@ fn presentation_handles_unknown_authors_and_each_pr_status_without_io() {
             },
         ],
         &[],
+        false,
     );
     assert!(w.0.lock().unwrap().stdout.contains("(created)"));
     assert!(w.0.lock().unwrap().stdout.contains("(updated)"));
@@ -2943,7 +3044,9 @@ fn rich_presentations_replace_only_default_lists_and_preserve_workflow_effects()
     let rich = World::new(3);
     rich.0.lock().unwrap().rich_output = true;
     rich.run(&["--no-stack"]).unwrap();
-    assert_eq!(plain.trace(), rich.trace());
+    let mut rich_trace = rich.trace();
+    rich_trace.retain(|event| event["kind"] != "results");
+    assert_eq!(plain.trace(), rich_trace);
     assert_eq!(plain.0.lock().unwrap().prs, rich.0.lock().unwrap().prs);
     let output = rich.0.lock().unwrap().stdout.clone();
     assert!(!output.contains("Stack of") && !output.contains(&commit(1).to_string()));
@@ -3021,7 +3124,7 @@ fn stack_orientation_controls_preview_and_results_without_reordering_submission(
             original.iter().map(|c| &c.hash).collect::<Vec<_>>()
         );
         w.0.lock().unwrap().stdout.clear();
-        w.app().print_results(&config, &original, &[]);
+        w.app().print_results(&config, &original, &[], false);
         let results = w.0.lock().unwrap().stdout.clone();
         assert_eq!(
             results.find("Feature 3") < results.find("Feature 1"),

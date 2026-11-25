@@ -195,8 +195,15 @@ impl Application {
         config: &Config,
         commits: &[Commit],
         summaries: &[crate::model::pull_request::PullRequestSummary],
+        showed_created: bool,
     ) {
-        let mut visible: Vec<_> = commits.iter().filter(|c| !c.skip).collect();
+        let mut visible: Vec<_> = commits
+            .iter()
+            .filter(|c| !(c.skip || (showed_created && c.newly_created)))
+            .collect();
+        if showed_created && visible.is_empty() && summaries.is_empty() {
+            return;
+        }
         if config.stack_up {
             visible.reverse();
         }
@@ -254,6 +261,50 @@ impl Application {
                 template.render(commit, &config.repo.host, &config.repo.name)
             ));
         }
+    }
+
+    pub(super) fn show_created_results(
+        &self,
+        github: &crate::github::GitHub<'_>,
+        commits: &[Commit],
+    ) -> bool {
+        let config = github.config;
+        if config.output != "{url} {title}" || !self.commands.terminal.has_rich_results() {
+            return false;
+        }
+        let mut created: Vec<_> = commits
+            .iter()
+            .filter(|commit| !commit.skip && commit.newly_created)
+            .collect();
+        if created.is_empty() {
+            return false;
+        }
+        let numbers: Vec<_> = created.iter().map(|commit| commit.pr_number).collect();
+        let mut cached = github.cached_summaries(&numbers);
+        let summaries: Vec<_> = numbers
+            .iter()
+            .map(|number| {
+                cached
+                    .remove(number)
+                    .unwrap_or(crate::model::pull_request::PullRequestSummary {
+                        number: *number,
+                        title: None,
+                        lifecycle: crate::model::pull_request::Lifecycle::Unknown,
+                    })
+            })
+            .collect();
+        if config.stack_up {
+            created.reverse();
+        }
+        self.commands.terminal.finish(true);
+        self.commands.terminal.results(
+            &created,
+            &config.repo,
+            config.stack_up,
+            config.hyperlinks,
+            &summaries,
+            config.use_icon_font,
+        )
     }
 }
 

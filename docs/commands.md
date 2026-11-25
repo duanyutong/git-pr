@@ -173,14 +173,17 @@ Routine push, creation and native-link announcements occupy the live line rather
 Warnings, dry-run previews, checkpoint messages and recovery instructions remain durable.
 
 The selected-stack preview abbreviates stacks exceeding eight commits, showing the first and last four commits and the omitted count.
-The final default listing presents every selected, unskipped PR as an aligned number and complete title, with non-zero outcome counts and repository context above the list.
+The default listing presents every selected, unskipped PR as an aligned number and complete title, with non-zero outcome counts and repository context above the list.
+On interactive terminals, confirmed creations appear before the **Updating stack sections…** stage and remain visible if a later operation fails.
+Other PRs appear at completion, when their final outcomes are known.
+Redirected and custom output emit a single result listing at completion.
 Every PR row begins with an outcome glyph before its number: green `+` for created, yellow `~` for updated and subdued `=` for unchanged.
 The glyphs remain visible without colour, including when all outcomes match; the heading retains ordinary created, updated and unchanged counts without additional glyphs.
 Outcome markers do not change stack order.
 Hyperlink-capable output uses clickable PR numbers; otherwise, complete URLs appear beneath the titles.
 Titles wrap at word boundaries and preserve Unicode grapheme clusters; exceptionally long words split only between grapheme clusters.
 An updated status includes confirmed title, description and label changes in the current invocation.
-The preview and final listing follow `git-pr.stackUp`, labelled `tip first` by default and `tip last` when inverted.
+The preview and each results group follow `git-pr.stackUp`, labelled `tip first` by default and `tip last` when inverted.
 Use `--stack-up=false` to invert both displays; custom output templates retain their existing representation.
 Titles wrap beneath their starting column, or beneath the PR identity when a narrow pane leaves insufficient title space.
 Interactive title and visible-address truncation respects grapheme boundaries and terminal display-cell widths.

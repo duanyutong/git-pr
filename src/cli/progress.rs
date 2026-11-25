@@ -405,6 +405,10 @@ impl Terminal for ProgressTerminal {
         true
     }
 
+    fn has_rich_results(&self) -> bool {
+        self.shared.rich
+    }
+
     fn results(
         &self,
         commits: &[&Commit],

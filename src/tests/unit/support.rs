@@ -926,16 +926,30 @@ impl Terminal for World {
     fn selection(&self, _: &[&Commit], _: bool, _: usize) -> bool {
         self.0.lock().unwrap().rich_output
     }
+    fn has_rich_results(&self) -> bool {
+        self.0.lock().unwrap().rich_output
+    }
     fn results(
         &self,
-        _: &[&Commit],
+        commits: &[&Commit],
         _: &crate::model::Repository,
         _: bool,
         _: crate::cli::hyperlinks::Mode,
-        _: &[crate::model::pull_request::PullRequestSummary],
+        summaries: &[crate::model::pull_request::PullRequestSummary],
         _: bool,
     ) -> bool {
-        self.0.lock().unwrap().rich_output
+        let mut memory = self.0.lock().unwrap();
+        let rich = memory.rich_output;
+        if rich {
+            memory.trace.push(json!({
+                "kind":"results",
+                "numbers":commits.iter().map(|c| c.pr_number).collect::<Vec<_>>(),
+                "summaries":summaries.iter().map(|pr| pr.number).collect::<Vec<_>>(),
+                "drafts":summaries.iter().filter(|pr| pr.lifecycle == crate::model::pull_request::Lifecycle::Draft).count(),
+            }));
+        }
+        drop(memory);
+        rich
     }
 
     fn out(&self, text: &str) {

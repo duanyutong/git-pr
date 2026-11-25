@@ -249,18 +249,7 @@ impl GitHub<'_> {
             .copied()
             .filter(|n| *n != 0 && seen.insert(*n))
             .collect();
-        let mut summaries = std::collections::BTreeMap::new();
-        {
-            let prs = self.session.prs();
-            let times = guard(&self.session.pr_times);
-            for number in &numbers {
-                if let Some(pr) = prs.get(number)
-                    && times.get(number).is_some_and(|time| self.fresh(time))
-                {
-                    summaries.insert(*number, pr.summary());
-                }
-            }
-        }
+        let mut summaries = self.cached_summaries(&numbers);
         let missing: Vec<_> = numbers
             .iter()
             .copied()
@@ -282,6 +271,24 @@ impl GitHub<'_> {
                     title: None,
                     lifecycle: Lifecycle::Unknown,
                 })
+            })
+            .collect()
+    }
+
+    pub(crate) fn cached_summaries(
+        &self,
+        numbers: &[u64],
+    ) -> BTreeMap<u64, crate::model::pull_request::PullRequestSummary> {
+        let prs = self.session.prs();
+        let times = guard(&self.session.pr_times);
+        numbers
+            .iter()
+            .filter_map(|number| {
+                let pr = prs.get(number)?;
+                times
+                    .get(number)
+                    .is_some_and(|time| self.fresh(time))
+                    .then(|| (*number, pr.summary()))
             })
             .collect()
     }

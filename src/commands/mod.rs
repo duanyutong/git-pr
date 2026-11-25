@@ -133,6 +133,9 @@ pub(crate) trait Terminal: Debug + Send + Sync {
     ) -> bool {
         false
     }
+    fn has_rich_results(&self) -> bool {
+        false
+    }
     fn results(
         &self,
         _commits: &[&crate::model::Commit],
